@@ -1,19 +1,36 @@
-// report_runtime.ts
-//
-// The only file that knows which runtime it is running on.
-//
-// Deno, Node and Bun all implement the node: builtins used here, so they share
-// one implementation rather than getting three. The builtins are imported
-// lazily, because a browser has neither a filesystem nor a way to spawn a
-// process and would fail on a static import of node:fs.
-//
-// What a browser can and cannot do:
-//   CAN     bake reports into one printable document (report_core.ts is pure)
-//   CAN     print that document -- it is already inside a browser engine
-//   CANNOT  read a folder, launch a second browser, or repack a PDF on disk
-//
-// So the browser path is "bake, then hand the HTML to the page", which
-// browserBake() below exists to make explicit rather than leaving it implied.
+/**
+ * @module
+ *
+ * Host adapter — the only module that knows which runtime it is running on.
+ * Filesystem access, process control, and browser discovery.
+ *
+ * Deno, Node and Bun all implement the `node:` builtins used here, so they
+ * share one implementation rather than getting three. Those builtins are
+ * imported **lazily**, because a browser has neither a filesystem nor a way to
+ * spawn a process and would fail on a static `import "node:fs"`.
+ *
+ * ⚠️ **Not usable in a browser.** Every function here throws a descriptive
+ * error rather than failing obscurely. What a browser can and cannot do:
+ *
+ * | | Browser |
+ * |---|---|
+ * | Bake reports into one printable document | ✅ — use the package's default export, which is pure |
+ * | Print that document | ✅ — the browser *is* the engine; `window.print()` |
+ * | Read a folder, launch a browser, repack a PDF on disk | ❌ |
+ *
+ * So the browser path is *bake, then hand the HTML to the page*.
+ *
+ * @example Locate a browser and render
+ * ```ts
+ * import * as rt from "@jrmarcum/s3d-reportcompiler/runtime";
+ *
+ * const chrome = await rt.findChrome();
+ * if (!chrome) throw new Error("Install Chrome or Edge, or set CHROME_PATH.");
+ *
+ * const reports = (await rt.listFiles(rt.joinPath(rt.cwd(), "HTMLFilesToBeCompiled")))
+ *   .filter((n) => n.toLowerCase().endsWith(".html"));
+ * ```
+ */
 
 /** The host this module is running on. */
 export type Runtime = "deno" | "bun" | "node" | "browser";

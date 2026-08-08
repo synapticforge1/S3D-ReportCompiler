@@ -1,13 +1,60 @@
 /**
  * @module
  *
- * Everything that turns SkyCiv report HTML into one printable document, with no
- * I/O of any kind: strings in, strings out. That is what makes it portable --
- * this module runs unchanged on Deno, Node, Bun and in a browser, because it
- * never touches a filesystem, a process or a runtime global.
+ * Every transform that turns SkyCiv structural design reports into one
+ * printable, self-contained document — with **no I/O of any kind**. Strings in,
+ * strings out.
  *
- * The parts that cannot be portable -- reading files, launching a browser to
- * print -- live in `./runtime`.
+ * That constraint is what makes this module portable: it runs unchanged on
+ * Deno, Node, Bun and in a browser, because it never touches a filesystem, a
+ * process or a runtime global. The parts that cannot be portable — reading a
+ * folder, launching a browser to print, repacking a PDF — live in `./runtime`.
+ *
+ * ## What it does
+ *
+ * - **Bake** — {@link bakeBody} and {@link bakeStyle} pre-render each report's
+ *   LaTeX to CHTML using that report's *own* delimiters ({@link parseDelimiters}),
+ *   strip its scripts, namespace its ids and scope its stylesheet, so many
+ *   reports can share one page without colliding.
+ * - **Assemble** — {@link assembleDocument} joins them into one hermetic
+ *   document that makes no network requests.
+ * - **Guard** — {@link findLeftoverMath} refuses anything with surviving LaTeX.
+ *   An unrecognised delimiter raises no error of its own; it simply never
+ *   matches, and the maths is typeset as prose. This is the only thing that
+ *   catches it.
+ * - **Verify** — {@link extractSourceTokens} and {@link compareAgainstPdf} prove
+ *   every word, number and graphic in the sources survived into the finished
+ *   PDF.
+ *
+ * ⚠️ These are certified engineering calculations. A dropped value is worse than
+ * a broken layout, because a dropped value still looks right — which is why the
+ * guard and the verification exist, and why every removal is counted in
+ * {@link audit}.
+ *
+ * @example Bake two reports into one printable document
+ * ```ts
+ * import {
+ *   assembleDocument,
+ *   bakeBody,
+ *   bakeStyle,
+ *   findLeftoverMath,
+ *   mathStyleSheet,
+ * } from "@jrmarcum/s3d-reportcompiler";
+ *
+ * // The raw HTML of each report. How you obtained it is up to the caller —
+ * // this module never reads anything itself.
+ * declare const sources: string[];
+ *
+ * // Each report gets its own scope class and id namespace.
+ * const styles = sources.map((src, i) => bakeStyle(src, `.rs${i}`, `r${i}-`));
+ * const bodies = sources.map((src, i) => bakeBody(src, `r${i}-`));
+ *
+ * // Never skip this: "0 failed" is not the same as "nothing went wrong".
+ * const leftovers = findLeftoverMath(bodies.join(""));
+ * if (leftovers.length > 0) throw new Error(`unrendered maths: ${leftovers.join(", ")}`);
+ *
+ * const html = assembleDocument(bodies, styles, mathStyleSheet());
+ * ```
  */
 
 import { mathjax } from "mathjax-full/js/mathjax.js";
