@@ -18,6 +18,21 @@ cd local && node       ../main.ts        # same, on Node
 cd local && bun run    ../main.ts        # same, on Bun
 ```
 
+### ⚠️ A dry run in your working tree is not a rehearsal for CI
+
+`deno publish --dry-run` passes locally because `node_modules` is already there from development. CI
+starts from a bare checkout. To actually rehearse the release, clone into a temp directory and run it
+with nothing installed:
+
+```bash
+git clone <repo> /tmp/cirepro && cd /tmp/cirepro
+deno publish --dry-run          # must fail without deps — that IS the CI condition
+npm ci && deno publish --dry-run  # must succeed
+```
+
+This is how bug #23 was found, one failed release too late: the workflow had no `npm ci`, so
+`deno publish` could not resolve `mathjax-full` under `"nodeModulesDir": "manual"`.
+
 Expected on the 13-report sample set (`tests/`):
 
 ```

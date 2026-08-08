@@ -13,8 +13,10 @@ jobs:
       id-token: write
 
     steps:
+      # v5 targets Node 24. v4 targets Node 20, which the runners now force onto Node 24 anyway and
+      # warn about — noise that would eventually hide a warning worth reading.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # DO NOT pin this to chase a missing JSR provenance attestation. That experiment was already
       # run on the sibling `wasmtk` project on 2026-07-30 and RULED OUT: its provenance history
@@ -29,6 +31,21 @@ jobs:
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+
+      # REQUIRED, and easy to leave out: deno.json sets "nodeModulesDir": "manual", so Deno resolves
+      # the npm dependencies from an on-disk node_modules that something else has to create. Without
+      # this step `deno publish` cannot resolve `mathjax-full` and fails before publishing anything:
+      #
+      #   error: Could not find "mathjax-full" in a node_modules folder.
+      #
+      # `npm ci` rather than `npm install`: it installs the committed lockfile exactly, and it honours
+      # .npmrc's `omit=optional`, so CI gets the same 16-package, 0-vulnerability tree the build was
+      # verified against locally. `deno install` would not apply that npm-side flag.
+      #
+      # "manual" is deliberate — see cmem/architecture.md. It is what keeps Deno reading the same
+      # node_modules as Node and Bun, which is what makes the three runtimes produce identical output.
+      - name: Install npm dependencies
+        run: npm ci
 
       # Provenance requires a GitHub OIDC token. The `id-token: write` permission above is what
       # injects ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN into the runner. If they are absent despite the

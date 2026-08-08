@@ -114,6 +114,17 @@ Kept because the *pattern* matters more than the individual bugs.
 | # | Bug | Silent? |
 |---|---|---|
 | 22 | **A relative output path given on the command line produced no PDF.** Chrome does not resolve a relative `--print-to-pdf` against the calling process's working directory; it prints `Failed to write file <path>: The system cannot find the path specified` to stderr and **still exits 0**. Fixed by resolving both positional paths to absolute via `rt.resolvePath()` before use | **yes** — only the existing stale-PDF guard turned it into a visible failure |
+| 23 | **The first release workflow failed: `deno publish` could not resolve `mathjax-full`.** `deno.json` sets `"nodeModulesDir": "manual"`, so Deno reads npm dependencies from an on-disk `node_modules` — and the workflow never created one. Fixed by adding an `npm ci` step before publish | no — failed loudly, and before publishing anything |
+
+⚠️ **Bug 23 is a gap between two decisions that were each right.** `nodeModulesDir: "manual"` was
+chosen so Deno reads the same `node_modules` as Node and Bun, which is what preserves `.npmrc`'s
+`omit=optional` and the identical-output property. The workflow was copied from a sibling project that
+has **no npm dependencies at all** (`nodeModulesDir: "none"`), so it had nothing to install and no
+install step to copy. Neither decision was wrong; the seam between them was never tested.
+
+⚠️ **Why local checks could not have caught it:** `deno publish --dry-run` passed on a working tree
+that already had `node_modules` from development. Reproducing it took a **clean clone with no
+`npm install`** — which is what CI actually is. A dry run in a dirty tree is not a rehearsal.
 
 ⚠️ **Bug 22 is worth more than its size.** The defaults were never exposed to it, because they are
 built from an absolute `rt.cwd()` — so every build anyone had ever run was immune, and the CLI's
