@@ -170,3 +170,52 @@ debugging a non-bug — and, worse, might have "fixed" it by reverting a correct
 *absent*. A hash that changes for a reason unrelated to your variable cannot prove anything about
 your variable — in either direction. When a metric moves right after your change, measure the
 baseline again before assuming you caused it.
+
+---
+
+## 11. Rehearse in the environment that will run it, not the one you built it in
+
+The first release failed at `deno publish` with `Could not find "mathjax-full" in a node_modules
+folder`. Every local check had passed — including `deno publish --dry-run`, repeatedly.
+
+It passed **because the working tree already had `node_modules` from development.** CI starts from a
+bare checkout. Reproducing the failure took thirty seconds once the right environment was used:
+
+```bash
+git clone <repo> /tmp/repro && cd /tmp/repro   # no npm install — this IS ci
+deno publish --dry-run                          # fails, exactly as the runner did
+```
+
+⚠️ **The defect lived in the seam between two correct decisions.** `"nodeModulesDir": "manual"` was
+right — it keeps Deno reading the same `node_modules` as Node and Bun, which is what preserves the
+identical-output property. Copying the release workflow from a sibling project was right too. But
+that project has **no npm dependencies at all**, so it had no install step to copy, and neither
+decision was individually wrong enough to notice.
+
+⚠️ **Two smaller versions of the same lesson, from the same afternoon:**
+
+- `deno doc --lint` passes on an example that does not compile. It checks that documentation
+  *exists*; `deno check --doc` checks that the code in it *works*. The first module-doc example
+  shipped was broken.
+- Moving `cmem/controls/` to `tests/controls/` silently broke all eight scripts — their `../../`
+  paths were correct one directory deeper. Nothing failed at move time because nothing ran them.
+
+**Rule:** a check run in a privileged environment proves less than it appears to. Ask what your local
+setup *provides* that the target does not — installed dependencies, a warm cache, a file that happens
+to be there — then reproduce without it. And for anything moved, run it, do not read it.
+
+---
+
+## 12. Spend the analysis where the risk is, not where the story is
+
+Extensive effort went into an inherited provenance quirk: comments, roadmap sections, a polling
+verification step, a decision about warn-versus-fail. The release then failed for an entirely
+different reason — a missing three-word install step — and the provenance concern **turned out not to
+apply to this package at all**, which published attested at score 100 on the first successful run.
+
+The quirk was interesting, documented in a sibling project, and had a satisfying narrative. The real
+defect was boring, undocumented, and in a file copied without reading closely.
+
+**Rule:** an inherited concern is a hypothesis about *your* system, not a finding. Check whether it
+reproduces before building around it — and give at least equal attention to the parts that were
+copied rather than reasoned about, because those are the parts nobody has examined.

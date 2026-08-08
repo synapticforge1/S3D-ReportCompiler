@@ -26,7 +26,7 @@ combined, verified PDF. Runs on Deno, Node, Bun and in a browser. See [overview.
 | Maths | 8,286 expressions typeset, **0 failed** |
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML**; browser bakes and prints |
-| Packaging | JSR `@jrmarcum/s3d-reportcompiler`, published from GitHub Actions with OIDC provenance |
+| Published | **JSR `@jrmarcum/s3d-reportcompiler` v1.0.0, score 100, attested** (Rekor entry present) |
 
 ⚠️ **Correction (2026-08-08): the PDF is not byte-reproducible, and an earlier note here saying the
 three runtimes produce "byte-identical output" was measured on the wrong artifact.** Chrome stamps its
@@ -46,15 +46,16 @@ step and removes it.
 ## ⏭️ Open work — [roadmap.md](roadmap.md)
 
 **Task 7** is the one real capability gap: conservation is a set union across reports, not per report.
-**Task 8** is the deferred MathJax 3 → 4 decision, with an acceptance baseline. **Task 5** is the first
-commit and the first JSR release.
+**Task 8** is the deferred MathJax 3 → 4 decision, with an acceptance baseline.
 
-Settled since: licence (MIT — task 6 ✅), cwd-relative defaults (task 2 ✅), the repository-contents
-decision (task 3 ✅ — sanitized samples only, the client set lives in the git-ignored `local/`), and
-the transcript, which is no longer tracked at all (tasks 1 and 4 ✅ by that decision).
+Settled: licence (MIT — task 6 ✅), cwd-relative defaults (task 2 ✅), the repository-contents decision
+(task 3 ✅ — sanitized samples only, the client set lives in the git-ignored `local/`), the transcript,
+which is no longer tracked (tasks 1 and 4 ✅ by that decision), and the first commit and release
+(task 5 ✅).
 
-This is a clone of `github.com/jrmarcum/S3D-ReportCompiler` on `main`. Git needs `safe.directory` set
-for the D: drive before it will run at all — see [roadmap.md](roadmap.md) task 5.
+Published at `github.com/jrmarcum/S3D-ReportCompiler` and `jsr.io/@jrmarcum/s3d-reportcompiler`. Git
+needs `safe.directory` set for the D: drive before it will run at all — see
+[roadmap.md](roadmap.md) task 5.
 
 ## Read in this order
 
@@ -68,7 +69,8 @@ for the D: drive before it will run at all — see [roadmap.md](roadmap.md) task
 7. **[licensing.md](licensing.md)** — verified dependency licences
 8. **[roadmap.md](roadmap.md)** — open tasks and repository decisions
 9. **[practices.md](practices.md)** — ⭐ the working rules this project paid for, each with the evidence.
-   General enough to outlive this codebase; read before starting anything similar
+   General enough to outlive this codebase; read before starting anything similar. §11 and §12 came
+   from the first release failing, and are the two most likely to save someone else a bad afternoon
 
 ### The record of how it was built
 

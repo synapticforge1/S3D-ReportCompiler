@@ -220,13 +220,47 @@ assume a single file covers everything.
 
 ---
 
-## 🟡 5. First commit, and the first JSR release
+## ✅ 5. First commit, and the first JSR release — DONE (2026-08-08)
 
-The repository exists and is cloned here — `main`, tracking
-`https://github.com/jrmarcum/S3D-ReportCompiler.git`, one commit (`Initial commit`) holding only
-`LICENSE` and `README.md`. Task 3 is now decided, so the commit is unblocked.
+**`@jrmarcum/s3d-reportcompiler@1.0.0` is live**: score **100**, all four runtimes declared
+(`browser`, `deno`, `node`, `bun`), and the version **is attested** — a Rekor entry is present.
 
-Release path, once committed:
+### ⚠️ Two predictions in this file were wrong. Both are corrected below.
+
+**1. The release was expected to publish and merely lack an attestation. It got one.** The sibling
+`wasmtk` project's missing `rekorLogId` did **not** follow this package. Whatever the JSR-side cause
+is there, it is not general, and nothing about this repository's setup needed to differ. The warning
+written into `publish.yml` about expecting an unattested release does not describe this project — the
+step is still `continue-on-error` on purpose, but for this package it passes.
+
+**2. The failure that actually happened was not predicted at all**, and it was in the one place
+nobody looked: the workflow could not install its dependencies. See bug #23 in
+[known-issues.md](known-issues.md). `deno publish` failed with `Could not find "mathjax-full" in a
+node_modules folder`, because `deno.json` sets `"nodeModulesDir": "manual"` and the workflow had no
+install step. Fixed with `npm ci`.
+
+The general shape, worth keeping: **the risk was reasoned about at length in the wrong place.** Pages
+of analysis went into an attestation quirk inherited from another project, which turned out not to
+apply — while the real defect was a missing three-word step, created by copying a workflow from a
+project that has no npm dependencies at all.
+
+### What that cost, and the check that would have caught it
+
+Nothing, as it happens — `deno publish` fails *before* publishing, so no version was burned and the
+tag could be reused. But two things had to be fixed before a retry was even possible:
+
+- `npm ci` in the workflow.
+- **The retry path itself was broken.** `scripts/publish.ts` force-updated the tag locally but pushed
+  it without `--force`, so the remote tag stayed on the failing commit and re-running the workflow
+  rebuilt the same failure. Now forced, with a warning that it is only safe while a version is
+  unpublished — JSR versions are immutable.
+
+⚠️ **`deno publish --dry-run` in a working tree is not a rehearsal.** It passed throughout, because
+the tree already had `node_modules` from development. Reproducing the failure took a clean clone with
+nothing installed, which is what CI actually is. That procedure is now in
+[testing.md](testing.md) and belongs in the pre-flight below.
+
+### Release path
 
 ```bash
 deno task bump          # or edit "version" in deno.json
@@ -237,42 +271,56 @@ deno task publish       # syncs version, commits, tags, pushes → triggers publ
 publish arriving through its native GitHub Actions OIDC integration. A local publish succeeds and
 produces an *unattested* release, which cannot be undone for that version number.
 
-### 📌 On the missing provenance attestation — decided, not outstanding
+⚠️ **`deno task publish` force-pushes the tag.** That is what makes a failed release retryable, and it
+is only safe while the version is unpublished. Once a version exists on JSR it is immutable — moving
+its tag would leave the GitHub release pointing somewhere the published code does not. **Bump instead
+of retrying.**
 
-The sibling `wasmtk` project publishes with **no `rekorLogId` recorded on JSR** while its
-OIDC-prerequisite check passes every time. **This is a JSR-side issue, not a defect in the workflow's
-provenance setup.** JSR reports that package at a **100% score while still flagging provenance**,
-which is what identifies it as a reporting problem on their end. Nothing in `publish.yml` needs
-changing, and the Deno version was ruled out by experiment (see task 8's sibling note and the comment
-in the workflow).
+### 📌 Provenance — resolved for this package
 
-📌 **Owner decision (2026-08-08): ignore it.** Expect the same here, and do not go looking for a
-cause in this repository.
+**This package is attested.** `1.0.0` has a Rekor entry, at score 100. The sibling `wasmtk` project's
+missing `rekorLogId` is a JSR-side issue **specific to that package**, and it did not carry over.
+There is nothing to configure here and nothing outstanding.
 
-The final workflow step therefore **warns and exits 0** rather than failing the job. That is a
-deliberate reversal of how it was first written:
+The final workflow step still **warns and exits 0** rather than failing the job, and that stays:
 
-⚠️ **A gate that fails on every release for a known upstream quirk is worse than no gate.** It makes
-a red job the normal state, and the next genuine failure gets waved through with it. The step still
-prints the outcome — the information is worth having, and if JSR fixes the reporting it will simply
-start printing a Rekor log ID — but it no longer pretends to be a pass/fail signal about this
-repository.
+⚠️ **A gate that fails for a known upstream quirk is worse than no gate.** It makes a red job the
+normal state, and the next genuine failure gets waved through with it. The step reports the score and
+the attestation either way — worth knowing, not worth failing a good release over.
 
-The check is still worth running at all because of what that episode showed: the *prerequisite*
-passed for ten releases while the *outcome* was absent, and only asking JSR directly could tell those
-two apart.
+The check is worth running at all because of what the `wasmtk` episode showed: its OIDC *prerequisite*
+step passed for ten consecutive releases while the *outcome* was absent, and only asking JSR directly
+could tell those two apart.
 
 Pre-flight, all currently green:
 
 ```bash
-deno task check                       # types
-deno fmt --check                      # main.ts, src/, scripts/
-deno publish --dry-run --allow-dirty  # JSR validation incl. slow types
-cd tests && deno run -A ../main.ts    # samples build + verify
-cd local && deno run -A ../main.ts    # full set: 380 pages, 3.35 MB, PASS
+deno task check                          # types
+deno fmt --check                         # main.ts, src/, scripts/
+deno doc --lint src/report_core.ts src/report_runtime.ts    # docs coverage — a scored criterion
+deno check --doc src/report_core.ts src/report_runtime.ts   # the JSDoc EXAMPLES compile
+deno publish --dry-run --allow-dirty     # JSR validation incl. slow types
+cd tests && deno run -A ../main.ts       # samples: 100 pages, PASS
+cd local && deno run -A ../main.ts       # full set: 380 pages, 3.35 MB, PASS
 ```
 
-`npm install` is required after any clone for Node and Bun; Deno needs no install step.
+⚠️ **And the one that actually matters — rehearse CI in a clean clone**, because every command above
+passes in a tree that already has `node_modules`, which CI does not:
+
+```bash
+git clone <repo> /tmp/cirepro && cd /tmp/cirepro
+npm ci && deno publish --dry-run
+```
+
+Two traps the ordinary checks do not cover, both hit for real:
+
+- `deno doc --lint` only verifies that documentation *exists*. `deno check --doc` verifies the
+  examples inside it **compile** — the first module-doc example shipped did not.
+- `deno publish --dry-run` in the working tree cannot see a missing dependency-install step. See
+  bug #23.
+
+`npm install` (or `npm ci`) is required after any clone, for Deno as well as Node and Bun —
+`"nodeModulesDir": "manual"` means Deno reads the same `node_modules` rather than its own cache.
 
 ⚠️ **Git refuses to operate on this drive until it is trusted.** D: does not record ownership, so every
 command fails with *"detected dubious ownership"* until:
