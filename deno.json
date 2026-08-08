@@ -1,0 +1,44 @@
+{
+  "name": "@jrmarcum/s3d-reportcompiler",
+  "version": "1.0.0",
+  "description": "Compile a folder of SkyCiv structural design reports into one combined PDF, and prove nothing was lost.",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/report_core.ts",
+    "./runtime": "./src/report_runtime.ts"
+  },
+  "bin": {
+    "s3d-reportcompiler": "./main.ts"
+  },
+  "publish": {
+    "include": [
+      "LICENSE",
+      "README.md",
+      "main.ts",
+      "src/*.ts",
+      "deno.json"
+    ]
+  },
+  "imports": {
+    "mathjax-full/": "npm:mathjax-full@3.2.2/",
+    "pdf-lib": "npm:pdf-lib@1.17.1",
+    "pdfjs-dist/": "npm:pdfjs-dist@4.6.82/"
+  },
+  "nodeModulesDir": "manual",
+  "tasks": {
+    "build": "deno run -A main.ts",
+    "build:sample": "cd tests && deno run -A ../main.ts",
+    "check": "deno check main.ts src/report_core.ts src/report_runtime.ts",
+    "bundle:browser": "bun build ./src/report_core.ts --target=browser --outfile=tests/report_core.browser.js",
+    "update-version": "deno run --allow-read --allow-write scripts/sync-version.ts",
+    "bump": "deno run --allow-read --allow-write scripts/bump.ts",
+    "publish": "deno run --allow-read --allow-write --allow-run --allow-env scripts/publish.ts"
+  },
+  "fmt": {
+    "useTabs": false,
+    "lineWidth": 100,
+    "indentWidth": 2,
+    "semiColons": true,
+    "include": ["main.ts", "src/", "scripts/"]
+  }
+}

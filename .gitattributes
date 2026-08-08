@@ -1,0 +1,12 @@
+# `deno fmt` emits LF and reports a CRLF file as "Text differed by line endings", while this
+# machine's git runs with core.autocrlf=true, which hands out CRLF on every checkout. Those two
+# fight each other: formatting the tree fixes `deno fmt --check` only until the next checkout
+# re-introduces CRLF.
+#
+# Pinning eol=lf for TypeScript settles it — the blobs are stored as LF either way, so this only
+# stops the checkout filter from converting them back to CRLF.
+*.ts text eol=lf
+
+# The sample reports are fixtures that the conservation check reads back byte for byte. Leave
+# their line endings exactly as SkyCiv emitted them rather than letting a checkout rewrite them.
+tests/HTMLFilesToBeCompiled/*.html -text

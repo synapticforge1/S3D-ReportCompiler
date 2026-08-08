@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+	<title>SkyCiv Design Report</title>
+	<meta charset="utf-8">
+
+	<link rel="shortcut icon" href="https://platform.skyciv.com/storage/images/favicon.ico">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+	<style>
+		/*
+@page {
+	size: 21cm 29.7cm;
+	margin: 30mm 45mm 30mm 45mm;
+}
+*/
+@media print {
+	table, .unbreakable {
+		page-break-inside: avoid;
+	}
+}
+
+html, body {
+	height: 100%;
+	padding: 0;
+	margin: 0;
+}
+
+body {
+	width: 100%;
+	font-family: Lato,'Helvetica Neue',Arial,Helvetica,sans-serif;
+	font-size: 13px;
+	line-height: 130%;
+	color: rgba(0,0,0,0.87);
+}
+
+h1, h2, h3, h4, h5 {
+	margin-top: 10px;
+	margin-bottom: 10px;
+}
+
+.page-break-before {
+	page-break-before:always;
+}
+
+.page-break-after {
+	page-break-after:always;
+}
+
+#loading {
+	position: absolute;
+	top: 30%;
+	left: 50%;
+	margin: 0 auto;
+}
+
+#loading img {
+	height: 50px;
+	width: 50px;
+}
+
+#report {
+	width: 100%;
+	height: 100%;
+	visibility: hidden;
+}
+
+/* CALCULATIONS TABLE */
+
+#calculations>table {
+	width: 100%;
+	/* table-layout: fixed; */
+	table-layout: auto;
+	border-collapse: collapse;
+	border: 1px solid black;
+}
+
+#calculations>table>tbody>tr>th {
+	text-align: center;
+	padding: 10px;
+	border: 1px solid black;
+}
+
+#calculations>table>tbody>tr>td {
+	text-align: left;
+	vertical-align: top;
+	padding: 10px;
+	border-left: 1px solid black;
+	border-right: 1px solid black;
+}
+
+#calculations>table>tbody>tr.section-divider {
+	border-bottom: 1px solid black;
+}
+
+#calculations>table>tbody>tr.section-divider:not(.page-break-after), #calculations>table>tbody>tr.section-divider:not(.page-break-after)>td {
+	height: 0px;
+	padding: 0px !important;
+}
+
+#calculations>table>tbody>tr.section-divider>td {
+	text-align: center;
+}
+
+#calculations>table>tbody>tr>td.align-left {
+	text-align: left;
+}
+
+#calculations>table>tbody>tr>td.align-right {
+	text-align: right;
+	font-style: italic;
+}
+
+#calculations>table>tbody>tr>td.align-center {
+	text-align: center;
+}
+
+#calculations>table>tbody>tr>td:nth-child(1) {
+	width: 15%;
+}
+
+#calculations>table>tbody>tr>td:nth-child(3) {
+	vertical-align: bottom;
+	width: 15%;
+}
+
+/* START FIX FOR MISSING TABLE BORDERS ON PDF */
+#calculations table td[rowspan], #calculations table th[rowspan] {
+	position: relative;
+}
+
+#calculations table td[rowspan]:before, #calculations table th[rowspan]:before {
+	position: absolute;
+	content: "";
+	top: -1px;
+	left: -1px;
+	background-color: transparent;
+	border: 1px solid black;
+	width: 100%;
+	height: 100%;
+}
+/* END FIX FOR MISSING TABLE BORDERS ON PDF */
+
+.summary-table {
+	border-collapse: collapse;
+}
+.summary-table * td, .summary-table * th {
+	border: 1px solid black;
+	padding-left: 5px !important;
+	padding-top: 5px !important;
+	padding-bottom: 5px !important;
+	padding-right: 5px !important;
+	text-align: center !important;
+	width: 70px;
+}
+
+.row {
+	padding-top: 3px !important;
+	padding-bottom: 3px !important;
+	vertical-align: middle !important;
+}
+
+table.results {
+	table-layout: fixed;
+	border-collapse: collapse;
+	border: none;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+table.results th {
+	min-width: 50px;
+	vertical-align: top;
+	white-space: nowrap;
+	padding: 5px;
+	text-align: center;
+	background-color: #f1f1c1;
+	border: 1px solid black;
+}
+
+table.results tr:nth-child(odd):not(tr:last-child) {
+	background-color: #ffffff;
+}
+
+table.results tr:nth-child(even):not(tr:last-child) {
+	background-color: #f9f9f9;
+}
+
+table.results td {
+	padding: 5px;
+	text-align: right;
+	border: 1px solid black;
+}
+
+table.results td.column-header {
+	background-color: #f1f1d8;
+	font-weight: bold;
+}
+
+table.results td.sum {
+	background-color: #f1f1f1;
+}
+
+table.results td.no-sum {
+	border: none;
+}
+
+div.message {
+	font-size: 1em;
+	min-height: 1em;
+	padding: 1em 1.5em;
+	line-height: 1.4285em;
+	border-radius: .28571429rem;
+	border-style: solid;
+	border-width: 1px;
+}
+
+div.warning.message {
+	background-color: #fffaf3;
+	color: #573a08;
+	border-color: #c9ba9b;
+}
+
+div.info.message {
+	background-color: #f8ffff;
+	color: #276f86;
+	border-color: #a9d5de;
+}
+
+body {font-family:Lato,"Helvetica Neue",Arial,Helvetica,sans-serif !important; font-size:13px !important};
+	</style>
+	<style>
+		.fa-angle-down {
+			color: #3543ff;
+			font-size: 24px;
+			font-weight: bold;
+			width: 25px;
+		}
+
+		.fa-angle-right {
+			color: #3543ff;
+			font-size: 24px;
+			font-weight: bold;
+			width: 25px;
+		}
+	</style>
+
+	<script type="text/javascript" src="https://skyciv.com/assets/res/jquery-1.9.1.min.js"></script>
+	<script type="text/javascript" src="https://platform.skyciv.com/assets/res/section-svg/section-svg.min.js"></script>
+
+	<script type="text/x-mathjax-config">
+		MathJax.Hub.Config({
+			"HTML-CSS": {
+				preferredFont: "TeX",
+				availableFonts: ["TeX"],
+				linebreaks: { automatic:false },
+			},
+			tex2jax: {
+				inlineMath: [
+					['$','$'], 
+					['\\(','\\)'], 
+					['[mathin]', '[mathin]']
+				],
+				displayMath: [
+					['$$','$$'], 
+					['\[','\]'], 
+					['[math]', '[math]']
+				],
+			},
+			//TeX: { equationNumbers: { autoNumber: "AMS" } },
+			messageStyle: "none",
+			showMathMenu: false,
+			showMathMenuMSIE: false,
+		});
+
+		</script>
+	<!--<script type="text/javascript" src="https://cdn.mathjax.org/mathjax/2.6-latest/MathJax.js?config=TeX-AMS_HTML-full"></script>-->
+	<script type="text/javascript"
+		src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.6.1/MathJax.js?config=TeX-AMS_HTML-full"></script>
+</head>
+
+
+<body>
+	<div id="loading"><img src="https://skyciv.com/media/loaders/loader-5.gif" alt="Loading"></div>
+
+	<div id="report">
+		
+		
+		<div id="calculations">	<table><tr><th>REFERENCES</th><th>CALCULATIONS</th><th>RESULTS</th></tr><tr><td class='align-right'><h3>&nbsp;</h3>Code: AISC 360-16 LRFD<br></td><td><h2>MEMBER #4 DESIGN REPORT</h2></td><td><h3>&nbsp;</h3></td></tr><tr><td class='align-right'><h3>&nbsp;</h3></td><td><h3>Project details</h3>Date:  [mathin]\text{  }[mathin]Fri 07 Aug 2026, 05:48PM (GMT-04:00)<br>Project Name:  [mathin]\text{  }[mathin]Example Structure<br>Project ID:    [mathin]\text{  }[mathin]<br>Company:       [mathin]\text{  }[mathin]<br>Designer:      [mathin]\text{  }[mathin]Example Engineer<br>Client:        [mathin]\text{  }[mathin]<br>Project Notes: [mathin]\text{  }[mathin]Sample report — synthetic project metadata<br>Project Units: [mathin]\text{  }[mathin]imperial<br></td><td><h3>&nbsp;</h3></td></tr><tr><td class='align-right'><h3>&nbsp;</h3><div style="margin-top:440px"></div>Section<br></td><td><h3>General member design information</h3><span style="color:blue">Section Name:</span>[mathin]\text{  }[mathin]HSS6x6x3/16<br><span style="color:blue">Shape:</span>[mathin]\text{  }[mathin]Hollow Rectangular[mathin]\text{  }[mathin]  (Library)<br><img height="266.6667px" width="246.6667px" src="data:image/png;base64,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/EGs8EW534r1jVfEhljhD2KFL17kvzt+kBj9rekOscIfxApfECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzGw2zk16kascAWxokK8xsBu59SoG7HCFcSKCvEaA7udU6NuxApXECsqxGsM7HZOjboRK1xBrKgQrzHQ6Zxms7mmpiY6Orq6utrJuhErXEGsqBCvMdDpnCQU5AWnfzpihS+IFRXiNQbEiv4QKz0hVlSI1xgQK/pDrPSEWFEhXmNArOgPsdITYkWFeI0BsaI/xEpPPMZKWpqUm9vno0lJ0sGDak9HrLj9pyJWhGtJ6niMlbg46Ysv+nx04kSptFTt6YgVQzQ3N+/Zsyc7O7usrIx8Gx0dPX/+/N/+9reBgYGIFfFakjoeY+XDD6Uvv7RdefjwP7ImNVXKyVF7OmJFfxUVFU899VRNTY3NepPJVFRUNHbsWPlbxIqH4DFWempokEaPlq5evb187Jj00ENqGyNWdEbGKY888oicKSRH0tLSIiIi6urqcnJyWltbyRryVd4SseIhxIiVBQukd9+9vbB0qbRli8bGiBWdbdq0acWKFdKPY5MxY8bI60ncPPfcc4WFhcqW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"><br><br><span style="color:blue">Dimensions:</span><br>Height [mathin]d=6.000 \text{ in}[mathin]<br>Width [mathin]b=6.000 \text{ in}[mathin]<br>Web Thick [mathin]t_{w}=0.174 \text{ in}[mathin]<br>Flange Thick [mathin]t_{b}=0.174 \text{ in}[mathin]<br>Fillet [mathin]r=0.174 \text{ in}[mathin]<br><br><span style="color:blue">Properties:</span><br>Area [mathin]A=3.980 \text{ in}^2[mathin]<br>Moment of Inertia about the z-axis [mathin]I_{z}=22.300 \text{ in}^4[mathin]<br>Moment of Inertia about the y-axis [mathin]I_{y}=22.300 \text{ in}^4[mathin]<br>Plastic Section Modulus about the z-axis [mathin]Z_{z}=8.630 \text{ in}^3[mathin]<br>Plastic Section Modulus about the y-axis [mathin]Z_{y}=8.630 \text{ in}^3[mathin]<br>Elastic Section Modulus about the z-axis [mathin]S_{z}=7.420 \text{ in}^3[mathin]<br>Elastic Section Modulus about the y-axis [mathin]S_{y}=7.420 \text{ in}^3[mathin]<br>Torsion Constant [mathin]J=35.000 \text{ in}^4[mathin]<br>Warping Constant [mathin]I_{w}=0 \text{ in}^6[mathin]<br><br><span style="color:blue">Material properties:</span><br>Material Name:   American Standard (ASTM) - ASTM A500 - Shaped Structural Tubing - Grade C<br>Modulus of Elasticity [mathin]E=29000 \text{ ksi }[mathin]<br>Yield Strength [mathin]F_{y}=50 \text{ ksi }[mathin]<br>Ultimate Tensile Strength [mathin]F_{u}=61.6 \text{ ksi }[mathin]<br><br><span style="color:blue">Design parameters:</span><br>Member length [mathin]L=17.771 \text{ ft}[mathin]<br>Unbraced length for Lateral-Torsional buckling [mathin]L_{LT}=17.771 \text{ ft}[mathin]<br>Unbraced length for buckling about weak axis (determined by braces in y-dir.) [mathin]L_y=17.771 \text{ ft}[mathin]<br>Unbraced length for buckling about strong axis (determined by braces in z-dir.) [mathin]L_z=17.771 \text{ ft}[mathin]<br>Effective Length factor for flexural buckling about y-axis [mathin]K_y=1.000[mathin]<br>Effective Length factor for flexural buckling about z-axis [mathin]K_z=1.000[mathin]<br></td><td><h3>&nbsp;</h3></td></tr><tr><td class='align-right'><h3>&nbsp;</h3></td><td><h3>Design Internal Forces</h3><br><span style="color:blue">For check axial strength:</span><br>Absolute Maximum Axial Force [mathin]P=0.554 \text{ kip}[mathin]<br><br><span style="color:blue">For check flexural strength about the major axis:</span><br>Absolute Maximum Major Bending Moment [mathin]M_{z}=0.021 \text{ kip-ft}[mathin]<br><br><span style="color:blue">For check flexural strength about the minor axis:</span><br>Absolute Maximum Minor Bending Moment [mathin]M_{y}=1.332 \text{ kip-ft}[mathin]<br><br><span style="color:blue">For check shear strength y-axis:</span><br>Absolute Maximum Shear Force [mathin]V_{z}=0.289 \text{ kip}[mathin]<br><br><span style="color:blue">For check shear strength z-axis:</span><br>Absolute Maximum Shear Force [mathin]V_{y}=0.001 \text{ kip}[mathin]<br> <br><br><span style="color:blue">For check interaction of combined strength:</span><br>Axial Force [mathin]P=0.386 \text{ kip}[mathin]<br>Major Bending Moment [mathin]M_{z}=0.011 \text{ kip-ft}[mathin]<br>Minor Bending Moment [mathin]M_{y}=1.332 \text{ kip-ft}[mathin]<br></td><td><h3>&nbsp;</h3></td></tr><tr class="section-divider"><td></td><td></td><td></td></tr><tr><td class='align-right'><h3>&nbsp;</h3><div style="margin-top:0px"></div>CHAPTER E<br></td><td><h3>CHECK AXIAL STRENGTH (axial compression member)</h3><span style="color:blue;"><b>POSITION OF CHECKING SECTION </b> [mathin]→ 0.000\text{ ft}[mathin]<b> - from the beginning of the element</b></span><br><span style="color:blue;"><b>CRITICAL LOAD COMBINATION </b> [mathin]→[mathin] <b>1: 1.40LL + 1.40SW1 + 1.40WL</b></span><br><br>Check slenderness ratio of axial compression member (AISC E2)<br>Slenderness ratio z-axis<br>[math]\lambda_{z} = \dfrac{K_{z}L}{r_{z}}=\dfrac{17.771}{0.197}=90.092[math]<br>Slenderness ratio y-axis<br>[math]\lambda_{y} = \dfrac{K_{y}L}{r_{y}}=\dfrac{17.771}{0.197}=90.092[math]<br>Maximum slenderness ratio<br>[math]\lambda = \max(\lambda_{y},\lambda_{z})=\max(90.092,90.092)=90.092[math]<br>[math]\lambda =90.092<200[math]<br></td><td><h3>&nbsp;</h3><span style="color:blue;font-weight: bold;">STATUS PASS</span><br></td></tr><tr><td class='align-right'></td><td>Check width-thickness ratio of flange (B4. Table B4.1a)<br>[math]\lambda_{f} = \dfrac{b-2·tw - 2·r}{tw}=\dfrac{6.000-2·0.174-2·0.174}{0.174}=30.483[math]<br>[math]\lambda_{rf} =1.40\sqrt{\frac{E_{s}}{F_{y}}}=1.40\sqrt{\frac{29000.000}{50.000}}=33.716[math]<br>[math]\lambda_{f} = 30.483<\lambda_{rf} = 33.716\rightarrow\text{ non-slender section }[math]<br>[math]\lambda_{w} = \dfrac{d-2·tw - 2·r}{tw}=\dfrac{6.000-2·0.174-2·0.174}{0.174}=30.483[math]<br>[math]\lambda_{rw} =1.40\sqrt{\frac{E_{s}}{F_{y}}}=1.49\sqrt{\frac{29000.000}{50.000}}=33.716[math]<br>[math]\lambda_{w} = 30.483<\lambda_{rw} = 33.716\rightarrow\text{ non-slender section }[math]<br></br><br><span ><b>Calculate Flexural Buckling Stress</b></span><br> <br>Calculate the elastic critical buckling stress [mathin]F_{e}[mathin].<br>[math]F_{e}=\frac{\pi^{2}E}{\lambda^{2}}=\frac{\pi^{2}·29000.000}{90.091^{2}}=35.264 \text{ ksi}[math]<br>Calculate the flexural buckling stress [mathin]F_{cr}[mathin].<br>[math]4.71\sqrt{\frac{E}{F_{y}}}=4.71\sqrt{\frac{29000.000}{50.000}}=113.432[math]<br>Because:[math]\lambda=90.091<113.432[math]<br>[math]F_{cr}=[0.658^{\frac{F_{y}}{F_{e}}}]F_{y}=[0.658^{\frac{50.000}{35.264}}]·50.000=27.621 \text{ ksi}[math]<br>Nominal Compressive Strength [mathin]P_{n1}[mathin].<br>[math]P_{n1}=F_{cr}A_{e}=27.621·3.980=109.931 \text{ kip}[math]<br>Calculate the flexural buckling stress [mathin]F_{cr}[mathin].<br>[math]4.71\sqrt{\frac{E}{F_{y}}}=4.71\sqrt{\frac{29000.000}{50.000}}=113.432[math]<br>Because:[math]\lambda=90.091<113.432[math]<br>[math]F_{cr}=[0.658^{\frac{F_{y}}{F_{e}}}]F_{y}=[0.658^{\frac{50.000}{35.264}}]·50.000=27.621 \text{ ksi}[math]<br><br><span style="font-size: 13pt;">Flexural Buckling (slender member) </span><span style="font-size: 13pt;">(AISC E7)</span><br><br><span style="font-size: 10pt;">Summation of the effective areas of the cross section based on reduced effective widths </span>[mathin]A_{e}[mathin]<br>[math]A_{e}=3.980\text{ in}^2[math]<br>Nominal Compressive Strength [mathin]P_{n2}[mathin].<br>[math]P_{n2}=F_{cr}A_{e}=27.621·3.980=109.931 \text{ kip}[math]<br>[math]P_{n}= P_{n1}=109.931 \text{ kip}[math]<br>Nominal Compressive Strength [mathin]P_{n}[mathin].<br>Calculate axial compressive strength.<br>[math]\text{Resistance factor for compression: }\phi_{c}=0.900[math]<br>[math]\phi_{c}P_{n}=0.900·109.931=98.938 \text{ kip}[math]<br></br><br><span style="font-size: 12pt;">Check ratio of axial strength</span>[mathin]\text{ }\frac{P}{\phi_{c}P_{n}}[mathin]<br>[math]\frac{P}{\phi_{c}P_{n}}=\frac{0.554}{98.938}=0.006<1.0[math]<br></td><td><span style="color:blue;font-weight: bold;">STATUS PASS</span><br></td></tr><tr class="section-divider"><td></td><td></td><td></td></tr><tr><td class='align-right'><h3>&nbsp;</h3><div style="margin-top:0px"></div>CHAPTER F<br></td><td><h3>CHECK FLEXURAL STRENGTH ABOUT MAJOR AXIS</h3><span style="color:blue;"><b>POSITION OF CHECKING SECTION </b> [mathin]→ 0.000\text{ ft}[mathin]<b> - from the beginning of the element</b></span><br><span style="color:blue;"><b>CRITICAL LOAD COMBINATION </b> [mathin]→[mathin] <b>1: 1.40LL + 1.40SW1 + 1.40WL</b></span><br><br>Calculate limiting width-thickness ratio of flange for flexure<br>[math]\lambda_{f} = \dfrac{b-3·tw}{tw}=\dfrac{6.000-3·0.174}{0.174}=31.483[math]<br>[math]\lambda_{pf} = 1.12\sqrt{\frac{E}{F_{y}}}=1.12\sqrt{\frac{29000.000}{50.000}}=26.973[math]<br>[math]\lambda_{rf} = 1.40\sqrt{\frac{E}{F_{y}}}=1.40\sqrt{\frac{29000.000}{50.000}}=33.716[math]<br>[math]\lambda_{f} = 31.483>\lambda_{pf} = 26.973\text{ and } \lambda_{f} =31.483<\lambda_{rf} = 33.716\rightarrow\text{ NONCOMPACT}[math]<br>Calculate limiting width-thickness ratio of web for flexure<br>[math]\lambda_{w} = \dfrac{d-3·t_w}{t_w}=\dfrac{6.000-3·0.174}{0.174}=31.483[math]<br>[math]\lambda_{pw} = 2.42\sqrt{\frac{E}{F_{y}}}=2.42\sqrt{\frac{29000.000}{50.000}}=58.281[math]<br>[math]\lambda_{rw} = 5.70\sqrt{\frac{E}{F_{y}}}=5.70\sqrt{\frac{29000.000}{50.000}}=137.274[math]<br>[math]\lambda_{w} = 31.483<\lambda_{pw} = 58.281\rightarrow\text{ COMPACT}[math]<br></br><br><span style="font-size: 13pt;">Yielding </span><br>Calculate nominal flexural strength for Yielding  (AISC F7.1 (F7-1))<br>[math]M_{n1} = M_{p}=F_{y}Z_{z}=50.000·8.630=35.958 \text{ k-ft}[math]<br></br><br><span style="font-size: 13pt;">Flange Local Buckling </span><br>Calculate nominal flexural strength for Flange local buckling  (AISC F7.2 (F7-2))<br>[math]M_{n2}=M_p-\left(M_p-F_yS\right)\left(3.57\frac{b}{t_f}\sqrt{\frac{F_y}{E}}-4.0\right)[math]<br>[math]M_{n2}=431.500-\left(431.500-50.000·7.420\right)\left(3.57·\frac{5.478}{0.174}\sqrt{\frac{50.000}{29000.000}}-4.0\right)=32.596\text{ k-ft}[math]<br></br><br><span style="font-size: 13pt;">Lateral-Torsional Buckling</span><br>Calculate nominal flexural strength for Lateral-Torsional Buckling  (AISC F7.4)<br>[math]L_p = 0.13 · E · r_y · \frac{\sqrt{I_x · A}}{M_{n1}} = 0.13 · 29000.000 · 2.367 · \frac{\sqrt{35.000 · 3.980}}{431.500} = 244.088[math]<br>[math]L_r = 2 · E · r_y · \frac{\sqrt{I_x · A}}{0.7 · F_y · S_x} = 2 · 29000.000 · 2.367 · \frac{\sqrt{35.000 · 3.980}}{0.7 · 50.000 · 7.420} = 6239.395[math]<br>Since [mathin]L_b <= L_p[mathin] the limit state of lateral-torsional buckling does not apply.<br>Calculate flexural strength about major axis<br>[math]\text{Resistance factor for flexure: }\phi_{b}=0.900[math]<br>[math]\phi_{b}M_{nz}=0.900·32.596=29.336 \text{ k-ft}[math]<br></br><br><span style="font-size: 12pt;">Check ratio of flexural strength</span>[mathin]\text{ }\frac{M_z}{\phi_{b}М_{nz}}[mathin]<br>[math]\frac{М_z}{\phi_{b}М_{nz}}=\frac{0.021}{29.336}=0.001<1.0[math]<br></td><td><h3>&nbsp;</h3><span style="color:blue;font-weight: bold;">STATUS PASS</span><br></td></tr><tr class="section-divider"><td></td><td></td><td></td></tr><tr><td class='align-right'><h3>&nbsp;</h3><div style="margin-top:0px"></div>CHAPTER F<br></td><td><h3>CHECK FLEXURAL STRENGTH ABOUT MINOR AXIS</h3><span style="color:blue;"><b>POSITION OF CHECKING SECTION </b> [mathin]→ 8.886\text{ ft}[mathin]<b> - from the beginning of the element</b></span><br><span style="color:blue;"><b>CRITICAL LOAD COMBINATION </b> [mathin]→[mathin] <b>1: 1.40LL + 1.40SW1 + 1.40WL</b></span><br><br>Calculate limiting width-thickness ratio of flange for flexure (AISC B4.Table B4.1b)<br>[math]\lambda_{f} = \dfrac{d-3·tw}{tw}=\dfrac{6.000-3·0.174}{0.174}=31.483[math]<br>[math]\lambda_{pf} = 0.38\sqrt{\frac{E}{F_{y}}}=1.12\sqrt{\frac{29000.000}{50.000}}=26.973[math]<br>[math]\lambda_{rf} = 1.40\sqrt{\frac{E}{F_{y}}}=1.40\sqrt{\frac{29000.000}{50.000}}=33.716[math]<br>[math]\lambda_{f} = 31.483>\lambda_{pf} = 26.973\text{ and } \lambda_{f} =31.483<\lambda_{rf} = 33.716\rightarrow\text{ NONCOMPACT}[math]<br>Calculate limiting width-thickness ratio of web for flexure<br>[math]\lambda_{w} = \dfrac{d-3·t_w}{t_w}=\dfrac{6.000-3·0.174}{0.174}=31.483[math]<br>[math]\lambda_{pw} = 2.42\sqrt{\frac{E}{F_{y}}}=2.42\sqrt{\frac{29000.000}{50.000}}=58.281[math]<br>[math]\lambda_{rw} = 5.70\sqrt{\frac{E}{F_{y}}}=5.70\sqrt{\frac{29000.000}{50.000}}=137.274[math]<br>[math]\lambda_{w} = 31.483<\lambda_{pw} = 58.281\rightarrow\text{ COMPACT}[math]<br></br><br><span style="font-size: 13pt;">Yielding </span><br>Calculate nominal flexural strength for Yielding  (AISC F7.1 (F7-1))<br>[math]M_{n1} = M_{p}=F_{y}Z_{z}=50.000·8.630=35.958 \text{ k-ft}[math]<br></br><br><span style="font-size: 13pt;">Flange Local Buckling </span><br>Calculate nominal flexural strength for Flange local buckling  (AISC F7.2 (F7-2))<br>[math]M_{n2}=M_p-\left(M_p-F_yS\right)\left(3.57\frac{b}{t_f}\sqrt{\frac{F_y}{E}}-4.0\right)=431.500-\left(431.500-50.000·7.420\right)\left(3.57·\frac{5.478}{0.174}\sqrt{\frac{50.000}{29000.000}}-4.0\right)=32.596\text{ k-ft}[math]<br>Calculate flexural strength about minor axis<br>[math]\text{Resistance factor for flexure: }\phi_{b}=0.900[math]<br>[math]\phi_{b}M_{ny}=0.900·32.596=29.336 \text{ k-ft}[math]<br></br><br><span style="font-size: 12pt;">Check ratio of flexural strength</span>[mathin]\text{ }\frac{M_y}{\phi_{b}М_{ny}}[mathin]<br>[math]\frac{М_y}{\phi_{b}М_{ny}}=\frac{1.332}{29.336}=0.045<1.0[math]<br></td><td><h3>&nbsp;</h3><span style="color:blue;font-weight: bold;">STATUS PASS</span><br></td></tr><tr class="section-divider"><td></td><td></td><td></td></tr><tr><td class='align-right'><h3>&nbsp;</h3><div style="margin-top:0px"></div>CHAPTER G<br></td><td><h3>CHECK SHEAR STRENGTH Y-AXIS</h3><span style="color:blue;"><b>POSITION OF CHECKING SECTION </b> [mathin]→ 0.000\text{ ft}[mathin]<b> - from the beginning of the element</b></span><br><span style="color:blue;"><b>CRITICAL LOAD COMBINATION </b> [mathin]→[mathin] <b>1: 1.40LL + 1.40SW1 + 1.40WL</b></span><br><br>Calculate the web plate buckling coefficient [mathin]k_{vz}[mathin] (AISC G5)<br>[math]\text{for rectangular HSS and box members }k_{vz}=5.0[math].<br>Calculate the web plate buckling coefficient [mathin]C_{vz}[mathin] (AISC G2.1)<br>[math]\text{ for webs of all other doubly/singly symmetric shapes and channels }[math]<br>[math]\frac{h}{t_w}=\frac{5.478}{0.174}=31.483\leq1.10\sqrt{\frac{k_{vz}E}{F_y}}=1.10·\sqrt{\frac{5·29000.000}{50.000}}=59.237[math]<br>[math]\text{web shear coefficient }C_{vz}=1.000[math]<br>Nominal shear strength y-axis [mathin]V_{ny}[mathin].<br>[math]V_{ny}=0.6F_yA_{w}C_v=0.6·50.000·1.906·1.000=57.190\text{ kip}[math]<br>Calculate shear strength y-axis<br>[math]\text{Resistance factor for shear: }\phi_{v}=0.900[math]<br>[math]\phi_{b}V_{ny}=0.900·57.190=51.471 \text{ kip}[math]<br></br><br><span style="font-size: 12pt;">Check ratio of shear strength</span>[mathin]\text{ }\frac{V_y}{\phi_{v}V_{ny}}[mathin]<br>[math]\frac{V_y}{\phi_{v}V_{ny}}=\frac{0.001}{51.471}=0.000<1.0[math]<br></td><td><h3>&nbsp;</h3><span style="color:blue;font-weight: bold;">STATUS PASS</span><br></td></tr><tr class="section-divider"><td></td><td></td><td></td></tr><tr><td class='align-right'><h3>&nbsp;</h3><div style="margin-top:0px"></div>CHAPTER G<br></td><td><h4>CHECK SHEAR STRENGTH Z-AXIS</h4><span style="color:blue;"><b>POSITION OF CHECKING SECTION </b> [mathin]→ 17.771\text{ ft}[mathin]<b> - from the beginning of the element</b></span><br><span style="color:blue;"><b>CRITICAL LOAD COMBINATION </b> [mathin]→[mathin] <b>1: 1.40LL + 1.40SW1 + 1.40WL</b></span><br><br>Calculate the web plate buckling coefficient [mathin]k_{vy}[mathin] (AISC G5)<br>[math]\text{for rectangular HSS and box members }k_{vy}=5.0[math].<br>Calculate the web plate buckling coefficient [mathin]C_{vy}[mathin] (AISC G2.1)<br>[math]\text{ for webs of all other doubly/singly symmetric shapes and channels }[math]<br>[math]\frac{h}{t_w}=\frac{5.478}{0.174}=31.483\leq1.10\sqrt{\frac{k_{vz}E}{F_y}}=1.10·\sqrt{\frac{5·29000.000}{50.000}}=59.237[math]<br>[math]\text{web shear coefficient }C_{vz}=1.000[math]<br>Nominal shear strength z-axis [mathin]V_{nz}[mathin].<br>[math]V_{nz}=0.6F_yA_{w}C_v=0.6·50.000·1.906·1.000=57.190\text{ kip}[math]<br>Calculate shear strength z-axis<br>[math]\text{Resistance factor for shear: }\phi_{v}=0.900[math]<br>[math]\phi_{v}V_{nz}=0.900·57.190=51.471 \text{ k-ft}[math]<br></br><br><span style="font-size: 12pt;">Check ratio of shear strength</span>[mathin]\text{ }\frac{V_z}{\phi_{v}V_{nz}}[mathin]<br>[math]\frac{V_z}{\phi_{v}V_{nz}}=\frac{0.289}{51.471}=0.006<1.0[math]<br></td><td><h3>&nbsp;</h3><span style="color:blue;font-weight: bold;">STATUS PASS</span><br></td></tr><tr class="section-divider"><td></td><td></td><td></td></tr><tr><td class='align-right'><h3>&nbsp;</h3><div style="margin-top:0px"></div>CHAPTER H<br></td><td><h3>CHECK INTERACTION OF COMBINED STRENGTH</h3><span style="color:blue;"><b>POSITION OF CHECKING SECTION </b> [mathin]→ 8.886\text{ ft}[mathin]<b> - from the beginning of the element</b></span><br><span style="color:blue;"><b>CRITICAL LOAD COMBINATION </b> [mathin]→[mathin] <b>1: 1.40LL + 1.40SW1 + 1.40WL</b></span><br><br>Because Pr/Pc<0.2:<br>[math]\frac{P_r}{2\phi P_c}+\left(\frac{M_{rx}}{\phi M_{cx}}+\frac{M_{ry}}{\phi M_{cy}}\right)=\frac{0.386}{2·98.938}+\left(\frac{0.011}{29.336}+\frac{1.332}{29.336}\right)=0.048<1.0[math]<br></td><td><h3>&nbsp;</h3><span style="color:blue;font-weight: bold;">STATUS PASS</span><br></td></tr><tr class="section-divider"><td></td><td></td><td></td></tr><tr class='row'><td class='row align-right'></td><td class='row'><h2>Displacements and Deflections</h2></td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'><br>
+<table class="results" >
+	<thead>
+		<tr>
+			<th style="" rowspan=2>Id</th>
+			<th style="" rowspan=2>Name</th>
+			<th style="border-bottom: none; padding-bottom: 0px;">$ \max( | \Delta_X | ) $</th>
+			<th style="border-bottom: none; padding-bottom: 0px;">$ \max( | \Delta_Y | ) $</th>
+			<th style="border-bottom: none; padding-bottom: 0px;">$ \max( | \Delta_Z | ) $</th>
+			<th style="border-bottom: none; padding-bottom: 0px;">$ \max( | \delta_y | ) $</th>
+			<th style="border-bottom: none; padding-bottom: 0px;">$ \max( | \delta_z | ) $</th>
+		</tr>
+		<tr>
+			<th style="border-top: none; padding-top: 0px;">[mathin] \left(  \rm{ in } \right) [mathin]</th>
+			<th style="border-top: none; padding-top: 0px;">[mathin] \left(  \rm{ in } \right) [mathin]</th>
+			<th style="border-top: none; padding-top: 0px;">[mathin] \left(  \rm{ in } \right) [mathin]</th>
+			<th style="border-top: none; padding-top: 0px;">[mathin] \left(  \rm{ in } \right) [mathin]</th>
+			<th style="border-top: none; padding-top: 0px;">[mathin] \left(  \rm{ in } \right) [mathin]</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td style="text-align:left;">1</td>
+			<td style="text-align:left;">LC3</td>
+			<td style="">-</td>
+			<td style="">-</td>
+			<td style="">-1.034</td>
+			<td style="">-</td>
+			<td style="">-0.051</td>
+		</tr>
+		</tr>
+			<td class="no-sum" colspan="2"></td>
+			<td class="sum">$ \max( \rm{abs} ) $ <br> -</td>
+			<td class="sum">$ \max( \rm{abs} ) $ <br> -</td>
+			<td class="sum">$ \max( \rm{abs} ) $ <br> [mathin] -1.0338 [mathin]</td>
+			<td class="sum">$ \max( \rm{abs} ) $ <br> -</td>
+			<td class="sum">$ \max( \rm{abs} ) $ <br> [mathin] -0.05093 [mathin]</td>
+		</tr>
+	</tbody>
+</table>
+<br></td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'><p style="text-align: center;"><svg class="svg-content" viewBox="0 0 780.0799999999998 370.72596526050563" width="780.0799999999998" height="370.72596526050563" xmlns="http://www.w3.org/2000/svg">
+	<style>
+		text {
+			font-family: sans-serif;
+		}
+	</style>
+	<text font-size="18" text-anchor="middle" x="390.0399999999999" y="30">Displacements z-axis</text>
+	<g class="x-axis">
+		<text font-size="12" text-anchor="middle" x="410.20339123249045" y="358.72596526050563" >Position along member ft</text>
+		<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="round" stroke="black" d="M 100.32678246498108, 292.72596526050563 l 619.7532175350187, 0 l 0 -202.7259652605056"/>
+		<g class="x-ticks">
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 112.32678246498108, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="112.32678246498108" y="322.72596526050563">0</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 178.52158441331648, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="178.52158441331648" y="322.72596526050563">2</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 244.7163863616519, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="244.7163863616519" y="322.72596526050563">4</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 310.9111883099873, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="310.9111883099873" y="322.72596526050563">6</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 377.1059902583227, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="377.1059902583227" y="322.72596526050563">8</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 443.3007922066581, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="443.3007922066581" y="322.72596526050563">10</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 509.49559415499357, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="509.49559415499357" y="322.72596526050563">12</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 575.690396103329, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="575.690396103329" y="322.72596526050563">14</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 641.8851980516644, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="641.8851980516644" y="322.72596526050563">16</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 708.0799999999998, 292.72596526050563 l 0, 6"/>
+			<text font-size="12" text-anchor="middle" x="708.0799999999998" y="322.72596526050563">18</text>
+		</g>
+	</g>
+	<g class="y-axis">
+		<text font-size="12" text-anchor="middle" x="18" y="191.36298263025282" transform="rotate(-90 18 191.36298263025282)">Displacement in</text>
+		<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="round" stroke="black" d="M 100.32678246498108, 292.72596526050563 l 0, -202.7259652605056 l 619.7532175350187, 0"/>
+		<g class="y-ticks">
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 100.32678246498108, 280.7259652605056 l -6, 0"/>
+			<text font-size="12" text-anchor="end" x="82.32678246498108" y="284.7259652605056">-1.20</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 100.32678246498108, 250.93830438375468 l -6, 0"/>
+			<text font-size="12" text-anchor="end" x="82.32678246498108" y="254.93830438375468">-1.00</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 100.32678246498108, 221.15064350700374 l -6, 0"/>
+			<text font-size="12" text-anchor="end" x="82.32678246498108" y="225.15064350700374">-0.800</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 100.32678246498108, 191.36298263025282 l -6, 0"/>
+			<text font-size="12" text-anchor="end" x="82.32678246498108" y="195.36298263025282">-0.600</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 100.32678246498108, 161.5753217535019 l -6, 0"/>
+			<text font-size="12" text-anchor="end" x="82.32678246498108" y="165.5753217535019">-0.400</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 100.32678246498108, 131.78766087675095 l -6, 0"/>
+			<text font-size="12" text-anchor="end" x="82.32678246498108" y="135.78766087675095">-0.200</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 100.32678246498108, 102.00000000000003 l -6, 0"/>
+			<text font-size="12" text-anchor="end" x="82.32678246498108" y="106.00000000000003">0</text>
+			<path fill="none" stroke-width="1.7999999999999998" stroke-linecap="square" stroke="black" d="M 100.32678246498108, 72.21233912324911 l -6, 0"/>
+			<text font-size="12" text-anchor="end" x="82.32678246498108" y="76.21233912324911">0.200</text>
+		</g>
+	</g>
+	<g class="legend">
+		<g>
+		<path stroke-width="1.2000000000000002" stroke="blue" d="M 301.40004424095144,60 l 12, 0"/>
+		<text font-size="12" text-anchor="start" x="325.40004424095144" y="66">local</text>
+	</g>
+		<g>
+		<path stroke-width="1.2000000000000002" stroke="red" d="M 365.3649547481536,60 l 12, 0"/>
+		<text font-size="12" text-anchor="start" x="389.3649547481536" y="66">local relative</text>
+	</g>
+	</g>
+	<g class="data">
+		<line x1="112.32678246498108" y1="292.72596526050563" x2="112.32678246498108" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="178.52158441331648" y1="292.72596526050563" x2="178.52158441331648" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="244.7163863616519" y1="292.72596526050563" x2="244.7163863616519" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="310.9111883099873" y1="292.72596526050563" x2="310.9111883099873" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="377.1059902583227" y1="292.72596526050563" x2="377.1059902583227" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="443.3007922066581" y1="292.72596526050563" x2="443.3007922066581" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="509.49559415499357" y1="292.72596526050563" x2="509.49559415499357" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="575.690396103329" y1="292.72596526050563" x2="575.690396103329" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="641.8851980516644" y1="292.72596526050563" x2="641.8851980516644" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="708.0799999999998" y1="292.72596526050563" x2="708.0799999999998" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="112.32678246498108" y1="292.72596526050563" x2="112.32678246498108" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="178.52158441331648" y1="292.72596526050563" x2="178.52158441331648" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="244.7163863616519" y1="292.72596526050563" x2="244.7163863616519" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="310.9111883099873" y1="292.72596526050563" x2="310.9111883099873" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="377.1059902583227" y1="292.72596526050563" x2="377.1059902583227" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="443.3007922066581" y1="292.72596526050563" x2="443.3007922066581" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="509.49559415499357" y1="292.72596526050563" x2="509.49559415499357" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="575.690396103329" y1="292.72596526050563" x2="575.690396103329" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="641.8851980516644" y1="292.72596526050563" x2="641.8851980516644" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="708.0799999999998" y1="292.72596526050563" x2="708.0799999999998" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="280.72596526050563" x2="720.0799999999998" y2="280.72596526050563" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="250.9383043837547" x2="720.0799999999998" y2="250.9383043837547" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="221.1506435070038" x2="720.0799999999998" y2="221.1506435070038" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="191.36298263025287" x2="720.0799999999998" y2="191.36298263025287" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="161.57532175350195" x2="720.0799999999998" y2="161.57532175350195" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="131.787660876751" x2="720.0799999999998" y2="131.787660876751" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="102.00000000000006" x2="720.0799999999998" y2="102.00000000000006" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> 
+		<line x1="112.32678246498108" y1="292.72596526050563" x2="112.32678246498108" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="178.52158441331648" y1="292.72596526050563" x2="178.52158441331648" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="244.7163863616519" y1="292.72596526050563" x2="244.7163863616519" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="310.9111883099873" y1="292.72596526050563" x2="310.9111883099873" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="377.1059902583227" y1="292.72596526050563" x2="377.1059902583227" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="443.3007922066581" y1="292.72596526050563" x2="443.3007922066581" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="509.49559415499357" y1="292.72596526050563" x2="509.49559415499357" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="575.690396103329" y1="292.72596526050563" x2="575.690396103329" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="641.8851980516644" y1="292.72596526050563" x2="641.8851980516644" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="708.0799999999998" y1="292.72596526050563" x2="708.0799999999998" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="112.32678246498108" y1="292.72596526050563" x2="112.32678246498108" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="178.52158441331648" y1="292.72596526050563" x2="178.52158441331648" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="244.7163863616519" y1="292.72596526050563" x2="244.7163863616519" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="310.9111883099873" y1="292.72596526050563" x2="310.9111883099873" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="377.1059902583227" y1="292.72596526050563" x2="377.1059902583227" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="443.3007922066581" y1="292.72596526050563" x2="443.3007922066581" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="509.49559415499357" y1="292.72596526050563" x2="509.49559415499357" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="575.690396103329" y1="292.72596526050563" x2="575.690396103329" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="641.8851980516644" y1="292.72596526050563" x2="641.8851980516644" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="708.0799999999998" y1="292.72596526050563" x2="708.0799999999998" y2="90.00000000000003" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="280.72596526050563" x2="720.0799999999998" y2="280.72596526050563" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="250.9383043837547" x2="720.0799999999998" y2="250.9383043837547" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="221.1506435070038" x2="720.0799999999998" y2="221.1506435070038" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="191.36298263025287" x2="720.0799999999998" y2="191.36298263025287" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="161.57532175350195" x2="720.0799999999998" y2="161.57532175350195" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="131.787660876751" x2="720.0799999999998" y2="131.787660876751" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> <line x1="100.32678246498108" y1="102.00000000000006" x2="720.0799999999998" y2="102.00000000000006" fill="none" shape-rendering="crispEdges" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5"  stroke-opacity="0.1"></line> 
+		<path fill="none" stroke-width="1.2000000000000002" stroke="blue" d="M 112.32678246498108, 102.00000000000003 L 259.3702606429647, 146.0216946267064 L 406.41373882094825, 186.57163737822742 L 553.4572169989318, 222.81726313305796 L 700.5006951769154, 255.9724190719256 "/>
+		<path fill="none" stroke-width="1.2000000000000002" stroke="red" d="M 112.32678246498108, 102.00000000000003 L 259.3702606429647, 107.52858985872498 L 406.41373882094825, 109.58542784226464 L 553.4572169989318, 107.33794882911377 L 700.5006951769154, 102.00000000000003 "/>
+	</g>
+</svg></p></td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'><h2>Deflection Check</h2></td><td class='row'></td></tr><tr class='row'><td class='row align-right'> </td><td class='row'><h3>Critical Load Combination: LC3</h3></td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'><h3>Critical Evaluation Point: [mathin]8.8855ft [mathin] from the beginning of the member<h3></td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'>[mathin]L_{span} = 17.771 \;  \rm{ ft }[mathin] </td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'>[mathin]x_i = 0 \;  \rm{ ft }[mathin] </td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'>[mathin]x_f = 17.771 \;  \rm{ ft }[mathin] </td><td class='row'></td></tr><tr class='row'><td class='row align-right'>User input</td><td class='row'>Member was considered to be supported on both ends.</td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'>[mathin]D_L = 250[mathin] </td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'>[mathin]\delta_{z,max} = -0.05093 \;  \rm{ in }[mathin] </td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'>[mathin]\frac{L_{span}}{\delta_z} = 4187.2[mathin] </td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'><span style="color:blue;font-weight: bold;">[math]\frac{ D_L }{ L_{span} / \delta_{max} } \leq 1[math]</span></td><td class='row'></td></tr><tr class='row'><td class='row align-right'></td><td class='row'><span style="color:blue;font-weight: bold;">[math]0.059706 \leq 1[math]</span></td><td class='row'><span style="color:blue;font-weight: bold;">
+        STATUS OK!<br>Ratio: 0.060                 
+    </span></td></tr><tr class="section-divider"><td></td><td></td><td></td></tr></table></div>
+	</div>
+
+	<script>
+		try {
+			// Allow iframe communication to get HTML
+			function receiveMessage(event) {
+				if (event.data == "getHTML") {
+					event.source.postMessage(document.documentElement.innerHTML, event.origin);
+				}
+			}
+
+			window.addEventListener("message", receiveMessage, false);
+		} catch (e) {
+
+		}
+
+		var LOADED = false;
+		jQuery(document).ready(function () {
+			jQuery('i.fa').each(function () {
+				jQuery(this).on('click', function () {
+					if (jQuery(this).attr('class') == "fa fa-angle-down") {
+						var level = parseInt(jQuery(this).parent().attr('level'));
+						var next_level = level + 1;
+						jQuery(this).attr('class', 'fa fa-angle-right');
+						jQuery(this).closest('tr').nextAll().each(function () {
+							if (parseInt(jQuery(this).find('td').eq(1).find('div').attr('level')) == next_level) {
+								jQuery(this).find('td div[level=' + String(next_level) + ']').each(function () { jQuery(this).hide(); });
+							} else return false;
+						});
+					} else if (jQuery(this).attr('class') == "fa fa-angle-right") {
+						jQuery(this).attr('class', 'fa fa-angle-down');
+						var level = parseInt(jQuery(this).parent().attr('level'));
+						var next_level = level + 1;
+						jQuery(this).closest('tr').eq(0).nextAll().each(function () {
+							if (parseInt(jQuery(this).find('td').eq(1).find('div').attr('level')) == next_level) {
+								jQuery(this).find('td div[level=' + String(next_level) + ']').each(function () { jQuery(this).show(); });
+							} else return false;
+						});
+					}
+				});
+			});
+			MathJax.Hub.Queue(function () {
+				jQuery('div.inline-block-math').each(function () {
+					jQuery(this).attr('style', 'flex: 0 1 auto; padding: 0px !important;');
+				});
+				jQuery("#loading").hide();
+				jQuery('#report').css('visibility', 'visible'); // make document visible after loaded
+				setTimeout(function () {
+					LOADED = true;
+				}, 1000);
+			});
+		});
+	</script>
+</body>
+
+</html>

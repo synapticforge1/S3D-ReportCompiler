@@ -1,0 +1,87 @@
+name: Publish to JSR
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # DO NOT pin this to chase a missing JSR provenance attestation. That experiment was already
+      # run on the sibling `wasmtk` project on 2026-07-30 and RULED OUT: its provenance history
+      # split exactly on a Deno release boundary (<= 2.9.1 attested, >= 2.9.2 not), which looked
+      # causal, so a release was published with `deno-version: v2.9.1` pinned. It published with no
+      # provenance anyway (JSR `rekorLogId` null), so the Deno version is NOT the cause and the
+      # correlation was coincidental. Floating `v2.x` is correct; the "Verify provenance" step at
+      # the end of this job is what detects a fix whenever one lands.
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # Provenance requires a GitHub OIDC token. The `id-token: write` permission above is what
+      # injects ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN into the runner. If they are absent despite the
+      # permission, an org/enterprise Actions OIDC policy is blocking the token and `deno publish`
+      # will silently skip provenance (the publish itself still succeeds). This makes that failure
+      # mode visible instead of leaving it to be discovered on jsr.io.
+      - name: Check OIDC availability (provenance prerequisite)
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "OIDC token endpoint available — provenance prerequisites met."
+          else
+            echo "::warning::OIDC token NOT available (URL present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}, TOKEN present: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}). deno publish will skip provenance. Verify id-token:write is honored — check org/enterprise Settings → Actions → General OIDC policy."
+          fi
+
+      - name: Publish to JSR
+        run: deno publish
+
+      - name: Create release branch
+        run: |
+          git checkout -b release/${GITHUB_REF_NAME}
+          git push origin release/${GITHUB_REF_NAME}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${GITHUB_REF_NAME} \
+            --title "${GITHUB_REF_NAME}" \
+            --target release/${GITHUB_REF_NAME} \
+            --generate-notes
+
+      # The OIDC step above only proves the PREREQUISITE was met. On wasmtk it passed on ten
+      # consecutive releases while JSR recorded NO provenance at all (rekorLogId null) — ten
+      # releases of false assurance. This checks the OUTCOME instead: JSR is the authority on
+      # whether a provenance statement actually landed in the Sigstore Rekor transparency log.
+      # Runs last so a failure here never blocks the publish or the GitHub release, but still fails
+      # the job loudly rather than letting the regression stay invisible.
+      - name: Verify provenance was recorded on JSR
+        run: |
+          PKG=$(deno eval 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).name)')
+          SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}
+          NAME=${PKG#*/}
+          VERSION=${GITHUB_REF_NAME#v}
+          URL="https://api.jsr.io/scopes/${SCOPE}/packages/${NAME}/versions/${VERSION}"
+          echo "Checking $URL"
+          # JSR ingests asynchronously, so poll rather than reading once.
+          for i in $(seq 1 12); do
+            BODY=$(curl -sf -H "Accept: application/json" "$URL" || true)
+            REKOR=$(printf '%s' "$BODY" | deno eval 'const t=await new Response(Deno.stdin.readable).text(); try { console.log(JSON.parse(t).rekorLogId ?? "") } catch { console.log("") }' || true)
+            if [ -n "$REKOR" ]; then
+              echo "✅ Provenance recorded — Rekor log ID: $REKOR"
+              exit 0
+            fi
+            echo "  attempt $i: no provenance yet, retrying in 15s"
+            sleep 15
+          done
+          echo "::error::${PKG}@${VERSION} was published WITHOUT provenance (no Sigstore/Rekor entry). The package IS published and the GitHub release IS created — only the attestation is missing. Already RULED OUT on wasmtk: the Deno version. The OIDC step above passes, so check JSR-side or GitHub-side changes, and confirm deno publish was not passed --no-provenance."
+          exit 1

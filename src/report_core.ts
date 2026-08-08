@@ -1,0 +1,710 @@
+/**
+ * @module
+ *
+ * Everything that turns SkyCiv report HTML into one printable document, with no
+ * I/O of any kind: strings in, strings out. That is what makes it portable --
+ * this module runs unchanged on Deno, Node, Bun and in a browser, because it
+ * never touches a filesystem, a process or a runtime global.
+ *
+ * The parts that cannot be portable -- reading files, launching a browser to
+ * print -- live in `./runtime`.
+ */
+
+import { mathjax } from "mathjax-full/js/mathjax.js";
+import { TeX } from "mathjax-full/js/input/tex.js";
+import { CHTML } from "mathjax-full/js/output/chtml.js";
+import { liteAdaptor } from "mathjax-full/js/adaptors/liteAdaptor.js";
+import { RegisterHTMLHandler } from "mathjax-full/js/handlers/html.js";
+import { AllPackages } from "mathjax-full/js/input/tex/AllPackages.js";
+
+/**
+ * Package version. Written by `deno task update-version` from deno.json, which
+ * is the single source of truth -- do not edit this by hand.
+ */
+export const VERSION = "1.0.0";
+
+export const MATHJAX_FONTS =
+  "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/output/chtml/fonts/woff-v2";
+
+// ---------------------------------------------------------------------------
+// Delimiter discovery
+//
+// Which strings mark up an equation is a property of the document, not of this
+// code: every report embeds its own MathJax tex2jax configuration. Reading it
+// means a template that switches from [math]..[math] to $$..$$ -- both declared
+// in the same config -- keeps working instead of silently mangling the page.
+// ---------------------------------------------------------------------------
+
+export type Delim = { open: string; close: string; display: boolean };
+
+// Used only when a report carries no readable config.
+export const FALLBACK_DELIMS: Delim[] = [
+  { open: "[mathin]", close: "[mathin]", display: false },
+  { open: "[math]", close: "[math]", display: true },
+  { open: "$$", close: "$$", display: true },
+  { open: "$", close: "$", display: false },
+];
+
+// Bounds a single expression so an unbalanced delimiter cannot consume the rest
+// of the document. Longest real body measured in this set: 219 characters.
+//
+// The cap limits the blast radius but does not eliminate it, and the exposure
+// is worst for "$". A literal dollar sign in prose -- a cost in the project
+// notes, say -- either pairs with the next one and swallows the text between
+// them, or is left stranded and fails the guard. That ambiguity is inherent to
+// the delimiter: MathJax reads these documents the same way.
+const MAX_MATH_BODY = 2000;
+
+// Decode a JavaScript string literal the way the browser would. Note that an
+// unrecognised escape simply drops the backslash, so '\[' is "[" -- which is
+// why the degenerate-delimiter check below exists.
+function decodeJsString(literal: string): string {
+  return literal.replace(
+    /\\(.)/g,
+    (_m, c) => c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c,
+  );
+}
+
+// Slice a balanced [...] array starting at `key:`, ignoring brackets that occur
+// inside string literals.
+function sliceArrayLiteral(src: string, key: string): string | null {
+  const at = src.search(new RegExp(`${key}\\s*:\\s*\\[`));
+  if (at < 0) return null;
+
+  const start = src.indexOf("[", at + key.length);
+  let depth = 0;
+  let quote: string | null = null;
+
+  for (let i = start; i < src.length; i++) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "[") depth++;
+    else if (ch === "]" && --depth === 0) return src.slice(start, i + 1);
+  }
+  return null;
+}
+
+const PAIR_RE = /\[\s*(['"])((?:\\.|(?!\1)[^\\])*)\1\s*,\s*(['"])((?:\\.|(?!\3)[^\\])*)\3\s*\]/g;
+
+export const skippedDelims: Set<string> = new Set();
+
+function readPairs(src: string, key: string, display: boolean): Delim[] {
+  const arr = sliceArrayLiteral(src, key);
+  if (!arr) return [];
+
+  const out: Delim[] = [];
+  for (const m of arr.matchAll(PAIR_RE)) {
+    const open = decodeJsString(m[2]);
+    const close = decodeJsString(m[4]);
+    if (!open || !close) continue;
+
+    // SkyCiv's config declares ['\[','\]'], which JavaScript evaluates to a
+    // bare "[" and "]". Honouring that would treat every bracketed phrase in
+    // the prose as an equation, so single-character bracket delimiters are
+    // refused -- loudly, rather than silently doing the wrong thing.
+    if (open.length === 1 && "[](){}<>".includes(open)) {
+      skippedDelims.add(`${open}...${close}`);
+      continue;
+    }
+    out.push({ open, close, display });
+  }
+  return out;
+}
+
+export function parseDelimiters(src: string): Delim[] {
+  const found = [
+    ...readPairs(src, "displayMath", true),
+    ...readPairs(src, "inlineMath", false),
+  ];
+  if (found.length === 0) return FALLBACK_DELIMS;
+
+  // Longest opener first, so $$ is tried before $ and [mathin] before any
+  // shorter pair that shares its prefix.
+  return found.sort((a, b) => b.open.length - a.open.length);
+}
+
+export function buildMathRegex(delims: Delim[]): RegExp {
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const parts = delims.map((d) => {
+    // A one-character delimiter that opens and closes an expression can only be
+    // paired unambiguously if the body excludes it.
+    const body = d.open === d.close && d.open.length === 1
+      ? `[^${esc(d.open)}]{1,${MAX_MATH_BODY}}?`
+      : `[\\s\\S]{1,${MAX_MATH_BODY}}?`;
+    return `${esc(d.open)}(${body})${esc(d.close)}`;
+  });
+
+  return new RegExp(parts.join("|"), "g");
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+//
+// Everything the bake step removes or rewrites is counted, so a build can be
+// audited rather than taken on trust.
+// ---------------------------------------------------------------------------
+
+export const audit = {
+  loadersRemoved: 0,
+  bodyTagMissing: 0,
+  visibilityNeutralised: 0,
+  heightNeutralised: 0,
+  atPageDropped: 0,
+  strayTokensDropped: 0,
+};
+
+// Annotated rather than left to inference: JSR rejects a public API whose types
+// it cannot read without running the type checker ("slow types"), and these are
+// exported.
+export const delimSignatures: Set<string> = new Set();
+export const seenOpeners: Set<string> = new Set();
+export const svgStyleWarnings: Set<string> = new Set();
+
+// ---------------------------------------------------------------------------
+// CSS scoping
+//
+// Each report keeps its own stylesheet, rewritten so it can only affect its own
+// wrapper. That removes two assumptions at once: that every report ships the
+// same CSS, and that the only ids worth rewriting are the two this template
+// happens to use. html/body selectors map onto the wrapper, since the wrapper
+// is what stands in for the document once many of them share one page.
+// ---------------------------------------------------------------------------
+
+// Prefix id selectors only where ids can legally appear. Doing this by plain
+// text search would rewrite hex colours -- #fff is not an id.
+function namespaceIds(selector: string, prefix: string): string {
+  return selector.replace(/#([A-Za-z_][\w-]*)/g, (_m, id) => `#${prefix}${id}`);
+}
+
+function scopeSelector(selector: string, scope: string, prefix: string): string {
+  const s = namespaceIds(selector.trim(), prefix);
+  if (!s) return "";
+
+  const rooted = s.replace(/^(?:html|body|:root)\b\s*/i, "");
+  if (rooted !== s) return rooted ? `${scope} ${rooted}` : scope;
+  return `${scope} ${s}`;
+}
+
+// Walk top-level rules, brace-matching with awareness of string literals.
+export function scopeCss(css: string, scope: string, prefix: string): string {
+  const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const out: string[] = [];
+  let i = 0;
+
+  const skipQuoted = (s: string, at: number): number => {
+    const q = s[at];
+    for (let k = at + 1; k < s.length; k++) {
+      if (s[k] === "\\") k++;
+      else if (s[k] === q) return k;
+    }
+    return s.length;
+  };
+
+  while (i < src.length) {
+    let open = -1;
+    for (let j = i; j < src.length; j++) {
+      const ch = src[j];
+      if (ch === "'" || ch === '"') j = skipQuoted(src, j);
+      else if (ch === "{") {
+        open = j;
+        break;
+      }
+    }
+    if (open < 0) break;
+
+    let depth = 0;
+    let close = src.length;
+    for (let k = open; k < src.length; k++) {
+      const ch = src[k];
+      if (ch === "'" || ch === '"') k = skipQuoted(src, k);
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) {
+        close = k;
+        break;
+      }
+    }
+
+    let prelude = src.slice(i, open).trim();
+    const block = src.slice(open + 1, close);
+    i = close + 1;
+
+    // A stray ";" between rules is legal -- CSS error recovery discards it.
+    // Left in place it would be glued onto the following selector, and a
+    // browser drops a rule whose selector it cannot parse. That silently
+    // deletes styling, so anything up to the last semicolon is discarded here.
+    // Caveat: a selector carrying a semicolon inside an attribute value, as in
+    // a[href="x;y"], would be truncated. No such selector exists in these
+    // reports, and the alternative -- a full selector parser -- is not worth it.
+    const lastSemicolon = prelude.lastIndexOf(";");
+    if (lastSemicolon >= 0) {
+      audit.strayTokensDropped++;
+      prelude = prelude.slice(lastSemicolon + 1).trim();
+    }
+
+    if (prelude.startsWith("@")) {
+      const name = prelude.slice(1).split(/[\s({]/)[0].toLowerCase();
+      // We define page geometry ourselves; a report's own @page would fight it.
+      if (name === "page") continue;
+      if (["media", "supports", "layer", "container"].includes(name)) {
+        out.push(`${prelude} {\n${scopeCss(block, scope, prefix)}\n}`);
+      } else {
+        // @font-face, @keyframes: no selectors to scope.
+        out.push(`${prelude} {${block}}`);
+      }
+      continue;
+    }
+
+    const selectors = [
+      ...new Set(
+        prelude.split(",").map((s) => scopeSelector(s, scope, prefix)).filter(Boolean),
+      ),
+    ];
+    if (selectors.length > 0) out.push(`${selectors.join(", ")} {${block}}`);
+  }
+
+  return out.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Portability transforms
+// ---------------------------------------------------------------------------
+
+// CSS inside <svg> is the least portable construct in these files, so its rules
+// are hoisted onto presentation attributes. The rules are parsed rather than
+// assumed: hard-coding `font-family="sans-serif"` would silently apply the
+// wrong value the moment a diagram styled its text differently.
+//
+// Only bare element selectors can be hoisted this way. Anything else (classes,
+// ids, descendant selectors) is left as a <style> block and reported, since
+// dropping it would change the drawing.
+//
+// ORDERING: this runs after the maths has been converted, and it rewrites every
+// <text> element it finds. That is safe only because the maths is encoded as
+// CHTML, which emits no SVG. Switching the output back to SVG would put
+// MathJax's own <text> elements in its path -- convert first, or scope this to
+// the diagrams, if that ever changes.
+export function portableSvg(html: string): string {
+  return html.replace(/<svg\b[\s\S]*?<\/svg>/gi, (svg) => {
+    const block = svg.match(/<style>([\s\S]*?)<\/style>/i);
+    if (!block) return svg;
+
+    let out = svg;
+    let allHoisted = true;
+
+    for (const [, selectorList, declarations] of block[1].matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const decls = declarations
+        .split(";")
+        .map((d) => d.trim())
+        .filter(Boolean)
+        .map((d) => {
+          const i = d.indexOf(":");
+          return [d.slice(0, i).trim(), d.slice(i + 1).trim()] as const;
+        })
+        .filter(([prop, value]) => prop && value);
+
+      if (decls.length === 0) continue;
+
+      for (const selector of selectorList.split(",").map((s) => s.trim()).filter(Boolean)) {
+        if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(selector)) {
+          svgStyleWarnings.add(selector);
+          allHoisted = false;
+          continue;
+        }
+        // Inserted immediately after the tag name so it precedes any attribute
+        // already on the element. In HTML the first occurrence of a duplicated
+        // attribute wins, which preserves "stylesheet beats presentation
+        // attribute" -- the precedence the rule had before it was hoisted.
+        const attrs = decls.map(([p, v]) => `${p}="${v}"`).join(" ");
+        out = out.replace(new RegExp(`<${selector}\\b`, "gi"), `<${selector} ${attrs}`);
+      }
+    }
+
+    return allHoisted ? out.replace(/<style>[\s\S]*?<\/style>/gi, "") : out;
+  });
+}
+
+// Remove one element and its subtree by id, matching the closing tag by depth
+// rather than assuming the element contains no nested tags of the same name.
+function removeElementById(html: string, id: string): string {
+  const openTag = new RegExp(
+    `<([a-zA-Z][\\w-]*)[^>]*\\bid\\s*=\\s*["']${id}["'][^>]*>`,
+    "i",
+  );
+  const m = html.match(openTag);
+  if (!m || m.index === undefined) return html;
+
+  const tag = m[1];
+  const scan = new RegExp(`<(/?)${tag}\\b`, "gi");
+  scan.lastIndex = m.index + m[0].length;
+
+  let depth = 1;
+  let hit: RegExpExecArray | null;
+  while ((hit = scan.exec(html)) !== null) {
+    depth += hit[1] ? -1 : 1;
+    if (depth === 0) {
+      const end = html.indexOf(">", hit.index);
+      if (end < 0) return html;
+      audit.loadersRemoved++;
+      return html.slice(0, m.index) + html.slice(end + 1);
+    }
+  }
+  return html;
+}
+
+// ---------------------------------------------------------------------------
+// Maths
+// ---------------------------------------------------------------------------
+
+const adaptor = liteAdaptor();
+RegisterHTMLHandler(adaptor);
+
+const chtml = new CHTML({ fontURL: MATHJAX_FONTS });
+const mjDoc = mathjax.document("", {
+  InputJax: new TeX({ packages: AllPackages }),
+  OutputJax: chtml,
+});
+
+export const mathStats = { converted: 0, failed: 0, firstFailure: "" };
+
+function tex2html(latex: string, display: boolean): string {
+  try {
+    const html = adaptor.outerHTML(mjDoc.convert(latex.trim(), { display }));
+    mathStats.converted++;
+    return html;
+  } catch (e) {
+    if (mathStats.failed === 0) {
+      mathStats.firstFailure = `${latex.trim().slice(0, 60)} (${e})`;
+    }
+    mathStats.failed++;
+    // Leave the source visible rather than silently dropping a calculation.
+    // It must be escaped: expressions routinely contain "<" (e.g. \lambda < 200),
+    // which would otherwise be injected into the document as markup.
+    const escaped = latex
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    return `<code>${escaped}</code>`;
+  }
+}
+
+/** MathJax's stylesheet, with every glyph the document actually used. */
+export function mathStyleSheet(): string {
+  return adaptor.textContent(chtml.styleSheet(mjDoc) as never);
+}
+
+// ---------------------------------------------------------------------------
+// Bake
+// ---------------------------------------------------------------------------
+
+export function bakeBody(src: string, prefix: string): string {
+  // Read the delimiters before the scripts are stripped -- the tex2jax config
+  // lives in one of them.
+  const delims = parseDelimiters(src);
+  delimSignatures.add(delims.map((d) => `${d.open}..${d.close}`).join(" "));
+  for (const d of delims) seenOpeners.add(d.open);
+
+  // Scripts come out next, so the config block -- which contains the delimiter
+  // strings as literals -- is never itself read as an expression.
+  let html = src.replace(/<script[\s\S]*?<\/script>/gi, "");
+  html = html.replace(/<!--[\s\S]*?-->/g, "");
+
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+  if (!bodyMatch) audit.bodyTagMissing++;
+  let body = bodyMatch ? bodyMatch[1] : html;
+
+  // The spinner exists only to be hidden by the JS that we removed. It is the
+  // one element deliberately dropped, and the count is reported.
+  body = removeElementById(body, "loading");
+
+  // Namespace every id rather than the two this template happens to use, so
+  // many documents can share one page without colliding.
+  body = body.replace(
+    /\bid\s*=\s*(["'])([^"']*)\1/gi,
+    (_m, q, id) => `id=${q}${prefix}${id}${q}`,
+  );
+  body = body.replace(
+    /\bhref\s*=\s*(["'])#([^"']*)\1/gi,
+    (_m, q, id) => `href=${q}#${prefix}${id}${q}`,
+  );
+
+  // One left-to-right pass over every configured pair, so they cannot
+  // interleave. Each pair contributes one capture group, in the same order.
+  body = body.replace(buildMathRegex(delims), (...args) => {
+    const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
+    const i = groups.findIndex((g) => g !== undefined);
+    return i < 0 ? args[0] as string : tex2html(groups[i]!, delims[i].display);
+  });
+
+  return portableSvg(body);
+}
+
+export function bakeStyle(src: string, scope: string, prefix: string): string {
+  // Only <head> styles. The reports carry a third <style> block inside the
+  // diagram <svg>, which portableSvg hoists onto presentation attributes --
+  // pulling it into the global sheet as well would leak an SVG-scoped rule
+  // into document scope.
+  const head = src.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? src;
+
+  let css = [...head.matchAll(/<style>([\s\S]*?)<\/style>/gi)]
+    .map((m) => m[1])
+    .join("\n")
+    // At-rules with no block would confuse the brace walker.
+    .replace(/@(?:import|charset|namespace)[^;]*;/gi, "")
+    // Strip comments before counting, or a commented-out rule is audited as
+    // though it had been active.
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  audit.atPageDropped += (css.match(/@page\b/gi) ?? []).length;
+  css = scopeCss(css, scope, prefix);
+
+  // The gate the removed JavaScript would have opened.
+  css = css.replace(/visibility:\s*hidden/gi, () => {
+    audit.visibilityNeutralised++;
+    return "visibility: visible";
+  });
+
+  // height:100% is meaningless in paged media and makes some engines emit a
+  // single viewport-tall page.
+  css = css.replace(/height:\s*100%/gi, () => {
+    audit.heightNeutralised++;
+    return "height: auto";
+  });
+
+  return css;
+}
+
+/** Wrap baked bodies and their scoped stylesheets into one printable document. */
+export function assembleDocument(
+  bodies: string[],
+  styles: string[],
+  mathCss: string,
+): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Combined Design Report</title>
+<style>
+@page { size: Letter; margin: 0.5in; }
+
+/* Legacy spellings first: older engines only implement those. */
+.report-sheet { page-break-after: always; break-after: page; }
+.report-sheet:last-child { page-break-after: auto; break-after: auto; }
+
+/* Applies to the small nested tables. On the outer table -- which is the whole
+   report -- it is unsatisfiable and the engine ignores it. The reports' own
+   stylesheet also declares .unbreakable, but no element carries that class, so
+   it is not repeated here. */
+table { page-break-inside: avoid; break-inside: avoid; }
+
+/* Sections are free to run across a page break -- the rules that bound them are
+   cosmetic, and keeping whole rows together wasted roughly a third of the page
+   count on trailing whitespace. What must never be sliced in half is a graphic
+   or an equation, so the constraint is applied to those alone.
+   mjx-container is the wrapper MathJax puts around every typeset expression. */
+img, svg, mjx-container { page-break-inside: avoid; break-inside: avoid; }
+
+html, body { height: auto; margin: 0; padding: 0; }
+img, svg { max-width: 100%; }
+
+${styles.join("\n")}
+${mathCss}
+</style>
+</head>
+<body>
+${bodies.map((b, i) => `<div class="report-sheet rs${i}">${b}</div>`).join("\n")}
+</body>
+</html>
+`;
+}
+
+// ---------------------------------------------------------------------------
+// Guard: nothing that looks like unrendered maths may reach the PDF.
+//
+// A delimiter this code does not understand produces no error -- it simply
+// never matches, and the LaTeX is typeset as prose. That is the failure mode
+// most likely to survive review, so it is checked for explicitly. Only report
+// bodies should be passed here: MathJax's own stylesheet contains CSS escapes
+// that read as TeX commands.
+// ---------------------------------------------------------------------------
+
+export function findLeftoverMath(baked: string): string[] {
+  const leftovers: string[] = [];
+
+  for (const opener of seenOpeners) {
+    const n = baked.split(opener).length - 1;
+    if (n > 0) leftovers.push(`${n} x "${opener}"`);
+  }
+
+  const texCommands = baked.match(/\\[a-zA-Z]{2,}/g);
+  if (texCommands) {
+    const sample = [...new Set(texCommands)].slice(0, 6).join(", ");
+    leftovers.push(`${texCommands.length} TeX command(s): ${sample}`);
+  }
+
+  return leftovers;
+}
+
+// ---------------------------------------------------------------------------
+// Verification: the source half
+//
+// Deliberately re-derives what a reader should see from the original HTML,
+// using none of the transforms above. A check that shares logic with the thing
+// it checks can agree with its mistakes.
+// ---------------------------------------------------------------------------
+
+const ENTITIES: Record<string, string> = {
+  "&nbsp;": " ",
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&apos;": "'",
+};
+
+export function decodeEntities(s: string): string {
+  return s
+    .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/g, (m) => ENTITIES[m] ?? m)
+    .replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(Number(d)));
+}
+
+// Three letters or more: PDF extraction breaks short runs on kerning, and
+// shorter tokens would produce false alarms.
+export function textWords(text: string): Set<string> {
+  return new Set((text.match(/[A-Za-z]{3,}/g) ?? []).map((w) => w.toLowerCase()));
+}
+
+export function textNumbers(text: string): Set<string> {
+  return new Set(text.match(/\d+\.\d+|\d+/g) ?? []);
+}
+
+export type SourceTokens = {
+  words: Set<string>;
+  numbers: Set<string>;
+  expectedImages: number;
+};
+
+export function extractSourceTokens(sources: string[]): SourceTokens {
+  const words = new Set<string>();
+  const numbers = new Set<string>();
+  const texCommands = new Set<string>();
+  let expectedImages = 0;
+
+  for (const raw of sources) {
+    let html = raw
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<div id="loading"[\s\S]*?<\/div>/i, " ");
+
+    // Only the body is drawn; <title> would otherwise read as missing.
+    html = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
+
+    // Only embedded images are counted. Deriving the figure count by subtracting
+    // the spinner would mean trusting this function's loader-removal regex to
+    // match the baker's, and this check is worthless if it can agree with the
+    // baker's mistakes. An external image cannot render hermetically anyway,
+    // and the bake step warns separately if any survives.
+    expectedImages += (html.match(/<img\b[^>]*\bsrc\s*=\s*["']data:/gi) ?? []).length;
+
+    // "<" is a relational operator inside mathematics -- "30.483<\lambda_{rf}".
+    // A <[^>]+> stripper would consume from there to the next ">" and swallow
+    // real numbers, making this check falsely lenient. Requiring a letter after
+    // "<" keeps it to genuine tags.
+    const text = decodeEntities(html.replace(/<\/?[a-zA-Z][^>]*>/g, " "));
+
+    for (const c of text.match(/\\([a-zA-Z]{2,})/g) ?? []) {
+      texCommands.add(c.slice(1).toLowerCase());
+    }
+    for (const n of textNumbers(text)) numbers.add(n);
+    for (const w of textWords(text)) words.add(w);
+  }
+
+  // Command and delimiter names are notation, not content: a reader never sees
+  // "dfrac". This costs a little coverage, because some command names are also
+  // ordinary words -- "text", "left", "right", "delta" stop being checked as
+  // prose. That is the right trade: the alternative is failing a correct build.
+  for (const noise of ["mathin", "math"]) texCommands.add(noise);
+  for (const c of texCommands) words.delete(c);
+
+  return { words, numbers, expectedImages };
+}
+
+export type PdfObservations = {
+  text: string;
+  pages: number;
+  imagePaints: number;
+  diagramTitlePages: number[];
+  diagramAxisPages: number[];
+  headingPages: number[];
+  blankPages: number[];
+};
+
+export type VerificationResult = {
+  missingWords: string[];
+  missingNumbers: string[];
+  leftoverLatex: string[];
+  splitDiagrams: number[];
+  failures: string[];
+};
+
+/** Compare what the sources contain against what the PDF actually shows. */
+export function compareAgainstPdf(
+  src: SourceTokens,
+  pdf: PdfObservations,
+  reportCount: number,
+): VerificationResult {
+  // PDF text arrives as positioned fragments, so "REFERENCES CALCULATIONS" can
+  // extract as one run and a single word can arrive in pieces. Comparing token
+  // sets would report both as missing. Reducing each side to a normalised
+  // stream and searching by substring survives concatenation and fragmentation
+  // alike; it can only under-report absence, which is the safe direction.
+  const letters = pdf.text.toLowerCase().replace(/[^a-z]/g, "");
+  const digits = pdf.text.replace(/\s+/g, "");
+
+  const missingWords = [...src.words].filter((w) => !letters.includes(w));
+  const missingNumbers = [...src.numbers].filter((n) => !digits.includes(n));
+
+  // The two bracket delimiters are named explicitly, but the real protection is
+  // the backslash-command pattern: it catches unrendered TeX whatever delimiter
+  // was wrapped around it, including one this code has never heard of.
+  const leftoverLatex = pdf.text.match(/\\[a-zA-Z]{2,}|\[math\]|\[mathin\]/g) ?? [];
+  const splitDiagrams = pdf.diagramTitlePages.filter(
+    (p) => !pdf.diagramAxisPages.includes(p),
+  );
+
+  const failures: string[] = [];
+  if (missingWords.length || missingNumbers.length) failures.push("content missing from the PDF");
+  if (leftoverLatex.length) failures.push("unrendered LaTeX in the PDF");
+  if (pdf.imagePaints > src.expectedImages) failures.push("an image was split across a page break");
+  if (pdf.imagePaints < src.expectedImages) {
+    failures.push("fewer images drawn than the sources contain");
+  }
+  if (splitDiagrams.length) failures.push(`diagram split on page(s) ${splitDiagrams.join(", ")}`);
+  if (pdf.headingPages.length !== reportCount) {
+    failures.push("report count does not match the source");
+  }
+  if (pdf.blankPages.length) {
+    failures.push(`blank page(s): ${pdf.blankPages.slice(0, 10).join(", ")}`);
+  }
+
+  return {
+    missingWords,
+    missingNumbers,
+    leftoverLatex: [...leftoverLatex],
+    splitDiagrams,
+    failures,
+  };
+}
+
+/** Order report filenames the way a reader expects: member_2 before member_10. */
+export function sortReportNames(names: string[]): string[] {
+  return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}

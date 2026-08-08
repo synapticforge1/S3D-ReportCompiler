@@ -1,0 +1,53 @@
+# ── Client data — NEVER tracked ───────────────────────────────────────────────
+# The full 48-report working set is a real client's sealed AISC 360-16
+# calculations. Only the sanitized samples in tests/HTMLFilesToBeCompiled/ are
+# committed (see scripts/sanitize-report.ts for exactly what is scrubbed).
+#
+# An entire ignored directory is deliberate: a per-file rule leaks the moment
+# someone drops a new report in beside the samples. Keep the real set here and
+# build it with `cd local && deno run -A ../main.ts` — the defaults resolve from
+# the working directory, so that just works.
+/local/
+
+# Claude Code project instructions — machine-local, same convention as wasmtk.
+# The durable project rules live in cmem/, which IS tracked.
+CLAUDE.md
+
+# Claude Code machine-local settings (per-developer permission allowlist).
+# It records commands approved on THIS machine and must not travel with the
+# repo — an allowlist from one machine should never pre-approve commands on
+# someone else's checkout.
+.claude/settings.local.json
+
+# Session transcripts. Untracked by owner decision: they carry absolute paths
+# from the machine they were recorded on and client identifiers from the report
+# excerpts. cmem/*.md is the portable record; the transcripts are not.
+/cmem/transcript/
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+# Node and Bun need these on disk; Deno uses the same folder via
+# "nodeModulesDir": "manual" in deno.json.
+/node_modules
+
+# ── Build output ──────────────────────────────────────────────────────────────
+# Not anchored, and no placeholder is committed: the build creates its output
+# directory next to whatever it is compiling, so one appears wherever you run.
+#
+# No exceptions under this rule. Any PDF produced from the real report set is a
+# render of client calculations carrying the same metadata the sample sanitizer
+# exists to remove — that is why the Bluebeam benchmark was deleted rather than
+# re-included. See cmem/roadmap.md task 3b.
+CompiledPDF/
+
+# Generated browser bundle — rebuild with `deno task bundle:browser`
+/tests/report_core.browser.js
+
+# Font cache, populated on first run so later builds work offline. Not anchored
+# to the root: it is created in the working directory, so running the build from
+# tests/ or local/ drops one there too.
+.mathjax-fonts/
+
+# ── Editors / OS ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp

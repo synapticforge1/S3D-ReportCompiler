@@ -1,0 +1,28 @@
+{
+  "name": "@jrmarcum/s3d-reportcompiler",
+  "version": "1.0.0",
+  "description": "Compile a folder of SkyCiv structural design reports into one combined PDF, and prove nothing was lost.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "s3d-reportcompiler": "./main.ts"
+  },
+  "scripts": {
+    "build": "node main.ts",
+    "build:deno": "deno run -A main.ts",
+    "build:bun": "bun run main.ts",
+    "bundle:browser": "bun build ./src/report_core.ts --target=browser --outfile=tests/report_core.browser.js",
+    "serve": "npx --yes serve ."
+  },
+  "dependencies": {
+    "mathjax-full": "3.2.2",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "4.6.82"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}
