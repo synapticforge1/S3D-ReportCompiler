@@ -23,6 +23,10 @@ import { AllPackages } from "mathjax-full/js/input/tex/AllPackages.js";
  */
 export const VERSION = "1.0.0";
 
+/**
+ * CDN base the MathJax CHTML web fonts are fetched from, once, before being
+ * inlined as data URIs so the baked document needs no network at render time.
+ */
 export const MATHJAX_FONTS =
   "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/output/chtml/fonts/woff-v2";
 
@@ -35,9 +39,13 @@ export const MATHJAX_FONTS =
 // in the same config -- keeps working instead of silently mangling the page.
 // ---------------------------------------------------------------------------
 
+/**
+ * One delimiter pair from a report's `tex2jax` config. `display` distinguishes
+ * block mathematics from inline.
+ */
 export type Delim = { open: string; close: string; display: boolean };
 
-// Used only when a report carries no readable config.
+/** Used only when a report carries no readable `tex2jax` config. */
 export const FALLBACK_DELIMS: Delim[] = [
   { open: "[mathin]", close: "[mathin]", display: false },
   { open: "[math]", close: "[math]", display: true },
@@ -91,6 +99,11 @@ function sliceArrayLiteral(src: string, key: string): string | null {
 
 const PAIR_RE = /\[\s*(['"])((?:\\.|(?!\1)[^\\])*)\1\s*,\s*(['"])((?:\\.|(?!\3)[^\\])*)\3\s*\]/g;
 
+/**
+ * Delimiter pairs that were declared but refused as degenerate, as
+ * `"open...close"` strings. Report these — silently ignoring a configured
+ * delimiter is how expressions end up typeset as prose.
+ */
 export const skippedDelims: Set<string> = new Set();
 
 function readPairs(src: string, key: string, display: boolean): Delim[] {
@@ -116,6 +129,14 @@ function readPairs(src: string, key: string, display: boolean): Delim[] {
   return out;
 }
 
+/**
+ * Read a report's own `tex2jax` configuration and return its delimiter pairs,
+ * sorted **longest opener first** so `$$` is tried before `$`.
+ *
+ * Falls back to {@link FALLBACK_DELIMS} when no config can be read.
+ * Degenerate single-character bracket delimiters are refused and recorded in
+ * {@link skippedDelims}.
+ */
 export function parseDelimiters(src: string): Delim[] {
   const found = [
     ...readPairs(src, "displayMath", true),
@@ -128,6 +149,11 @@ export function parseDelimiters(src: string): Delim[] {
   return found.sort((a, b) => b.open.length - a.open.length);
 }
 
+/**
+ * Compile delimiter pairs into a single alternating matcher, one capture group
+ * per pair. Expression bodies are length-capped so an unbalanced delimiter
+ * cannot swallow the rest of the document.
+ */
 export function buildMathRegex(delims: Delim[]): RegExp {
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -150,6 +176,14 @@ export function buildMathRegex(delims: Delim[]): RegExp {
 // audited rather than taken on trust.
 // ---------------------------------------------------------------------------
 
+/**
+ * Running count of everything the bake step removed or rewrote, so a build can
+ * be audited rather than taken on trust.
+ *
+ * Module-level and cumulative across every report baked in one process. Print
+ * it: for a document that will be sealed, "nothing was lost" has to be
+ * evidenced, not assumed.
+ */
 export const audit = {
   loadersRemoved: 0,
   bodyTagMissing: 0,
@@ -159,11 +193,24 @@ export const audit = {
   strayTokensDropped: 0,
 };
 
-// Annotated rather than left to inference: JSR rejects a public API whose types
-// it cannot read without running the type checker ("slow types"), and these are
-// exported.
+// The three below are annotated rather than left to inference: JSR rejects a
+// public API whose types it cannot read without running the type checker
+// ("slow types"), and these are exported.
+
+/**
+ * One entry per distinct delimiter set seen across the reports baked so far.
+ * More than one means the inputs disagree about their own maths syntax — worth
+ * warning about, though not itself an error.
+ */
 export const delimSignatures: Set<string> = new Set();
+
+/** Every opening delimiter encountered, for diagnostics. */
 export const seenOpeners: Set<string> = new Set();
+
+/**
+ * Selectors from an inline SVG's `<style>` block that could not be hoisted onto
+ * presentation attributes, so the block was left in place.
+ */
 export const svgStyleWarnings: Set<string> = new Set();
 
 // ---------------------------------------------------------------------------
@@ -191,7 +238,17 @@ function scopeSelector(selector: string, scope: string, prefix: string): string 
   return `${scope} ${s}`;
 }
 
-// Walk top-level rules, brace-matching with awareness of string literals.
+/**
+ * Rewrite a stylesheet so it can only affect its own report.
+ *
+ * Every selector is prefixed with `scope`, every id is namespaced with
+ * `prefix`, and `html`/`body`/`:root` selectors are mapped onto the wrapper
+ * that stands in for the document. Walks top-level rules by brace matching,
+ * with awareness of string literals.
+ *
+ * @param scope  wrapper class selector, e.g. `".rs7"`
+ * @param prefix id namespace, e.g. `"r7-"`
+ */
 export function scopeCss(css: string, scope: string, prefix: string): string {
   const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const out: string[] = [];
@@ -289,6 +346,15 @@ export function scopeCss(css: string, scope: string, prefix: string): string {
 // CHTML, which emits no SVG. Switching the output back to SVG would put
 // MathJax's own <text> elements in its path -- convert first, or scope this to
 // the diagrams, if that ever changes.
+/**
+ * Hoist an inline SVG's internal `<style>` rules onto presentation attributes,
+ * so the drawing survives being merged into a document with other stylesheets.
+ *
+ * ⚠️ Ordering matters: this must run **after** the maths has been converted.
+ * It rewrites every `<text>` element it finds, which is safe only because CHTML
+ * emits no SVG. Switching the maths output back to SVG would put MathJax's own
+ * `<text>` elements in its path.
+ */
 export function portableSvg(html: string): string {
   return html.replace(/<svg\b[\s\S]*?<\/svg>/gi, (svg) => {
     const block = svg.match(/<style>([\s\S]*?)<\/style>/i);
@@ -370,6 +436,15 @@ const mjDoc = mathjax.document("", {
   OutputJax: chtml,
 });
 
+/**
+ * Running totals for maths conversion, cumulative across every report baked in
+ * one process.
+ *
+ * ⚠️ `failed: 0` does **not** mean every expression was rendered. An
+ * unrecognised delimiter never reaches the converter at all, so it cannot fail
+ * — it is simply typeset as prose. {@link findLeftoverMath} is what catches
+ * that; this counter cannot.
+ */
 export const mathStats = { converted: 0, failed: 0, firstFailure: "" };
 
 function tex2html(latex: string, display: boolean): string {
@@ -402,6 +477,15 @@ export function mathStyleSheet(): string {
 // Bake
 // ---------------------------------------------------------------------------
 
+/**
+ * Turn one report's `<body>` into a fragment ready to concatenate with others.
+ *
+ * Pre-renders every expression to CHTML using the report's own delimiters,
+ * strips scripts, removes the loading spinner, namespaces ids with `prefix`,
+ * and makes inline SVG portable. Updates {@link mathStats} and {@link audit}.
+ *
+ * @param prefix id namespace, e.g. `"r7-"`
+ */
 export function bakeBody(src: string, prefix: string): string {
   // Read the delimiters before the scripts are stripped -- the tex2jax config
   // lives in one of them.
@@ -444,6 +528,15 @@ export function bakeBody(src: string, prefix: string): string {
   return portableSvg(body);
 }
 
+/**
+ * Extract one report's stylesheets and scope them to that report's wrapper.
+ *
+ * Also neutralises the `visibility: hidden` reveal gate and relaxes `height:
+ * 100%` on wrappers, both counted in {@link audit}.
+ *
+ * @param scope  wrapper class selector, e.g. `".rs7"`
+ * @param prefix id namespace, e.g. `"r7-"`
+ */
 export function bakeStyle(src: string, scope: string, prefix: string): string {
   // Only <head> styles. The reports carry a third <style> block inside the
   // diagram <svg>, which portableSvg hoists onto presentation attributes --
@@ -534,6 +627,17 @@ ${bodies.map((b, i) => `<div class="report-sheet rs${i}">${b}</div>`).join("\n")
 // that read as TeX commands.
 // ---------------------------------------------------------------------------
 
+/**
+ * **The guard.** Surviving delimiters and TeX commands in a baked document.
+ *
+ * An empty array is the only acceptable result before rendering. This is the
+ * only thing that catches an unrecognised delimiter, which raises no error of
+ * its own — it simply never matches, and the LaTeX is typeset as prose while
+ * {@link mathStats} still reports `0 failed`.
+ *
+ * ⚠️ Pass report **bodies** only, never MathJax's own stylesheet: it contains
+ * CSS escapes that read as TeX commands.
+ */
 export function findLeftoverMath(baked: string): string[] {
   const leftovers: string[] = [];
 
@@ -569,28 +673,43 @@ const ENTITIES: Record<string, string> = {
   "&apos;": "'",
 };
 
+/** Decode the HTML entities that appear in these reports. */
 export function decodeEntities(s: string): string {
   return s
     .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/g, (m) => ENTITIES[m] ?? m)
     .replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(Number(d)));
 }
 
-// Three letters or more: PDF extraction breaks short runs on kerning, and
-// shorter tokens would produce false alarms.
+/**
+ * Lower-cased words of three letters or more.
+ *
+ * Three is deliberate: PDF extraction breaks short runs on kerning, so shorter
+ * tokens would produce false alarms.
+ */
 export function textWords(text: string): Set<string> {
   return new Set((text.match(/[A-Za-z]{3,}/g) ?? []).map((w) => w.toLowerCase()));
 }
 
+/** Distinct numeric literals, integer or decimal. */
 export function textNumbers(text: string): Set<string> {
   return new Set(text.match(/\d+\.\d+|\d+/g) ?? []);
 }
 
+/** Everything the source reports contain that the finished PDF must still have. */
 export type SourceTokens = {
   words: Set<string>;
   numbers: Set<string>;
   expectedImages: number;
 };
 
+/**
+ * Derive the expected content from the **raw source reports**, independently of
+ * anything the bake step did.
+ *
+ * Deliberately shares no code with the transforms: a build and its own
+ * self-assessment failing the same way is exactly what the verification exists
+ * to rule out.
+ */
 export function extractSourceTokens(sources: string[]): SourceTokens {
   const words = new Set<string>();
   const numbers = new Set<string>();
@@ -637,6 +756,13 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
   return { words, numbers, expectedImages };
 }
 
+/**
+ * What was actually found in the finished PDF, read back from disk.
+ *
+ * `imagePaints` counts paint operations, not images: a figure straddling a page
+ * break is painted on **both** pages, so a count above the expected number
+ * means something was sliced.
+ */
 export type PdfObservations = {
   text: string;
   pages: number;
@@ -647,6 +773,10 @@ export type PdfObservations = {
   blankPages: number[];
 };
 
+/**
+ * Outcome of comparing sources against the PDF. A non-empty `failures` means
+ * the PDF does not faithfully reproduce its sources and must not be issued.
+ */
 export type VerificationResult = {
   missingWords: string[];
   missingNumbers: string[];

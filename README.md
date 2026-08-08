@@ -388,3 +388,8 @@ Two limits worth knowing before you rely on it:
 ## Licence
 
 MIT © 2026 Jon Marcum. See [LICENSE](LICENSE).
+
+Every dependency is permissive — MIT, Apache-2.0, 0BSD, Zlib — with no copyleft and no NOTICE files
+to propagate. The published package bundles no third-party code. Full verified tree and the two
+places where third-party code *does* travel into an artifact:
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

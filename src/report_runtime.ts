@@ -15,20 +15,32 @@
 // So the browser path is "bake, then hand the HTML to the page", which
 // browserBake() below exists to make explicit rather than leaving it implied.
 
+/** The host this module is running on. */
 export type Runtime = "deno" | "bun" | "node" | "browser";
 
 declare const Deno: { version?: { deno?: string } } | undefined;
 declare const Bun: { version?: string } | undefined;
 
+/**
+ * The detected host, resolved once at module load.
+ *
+ * ⚠️ Bun is checked before Node because Bun also defines
+ * `process.versions.node`; testing for Node first would misreport it.
+ */
 export const RUNTIME: Runtime = (() => {
-  // Bun is checked before Node: it also defines process.versions.node.
   if (typeof Bun !== "undefined") return "bun";
   if (typeof Deno !== "undefined") return "deno";
   if (typeof process !== "undefined" && process.versions?.node) return "node";
   return "browser";
 })();
 
-export const isBrowser = RUNTIME === "browser";
+/**
+ * True when there is no filesystem or process to reach.
+ *
+ * Every I/O function below throws a descriptive error in this case rather than
+ * failing obscurely on a missing `node:` builtin.
+ */
+export const isBrowser: boolean = RUNTIME === "browser";
 
 function requireHost(what: string): void {
   if (isBrowser) {
@@ -61,23 +73,34 @@ async function pathMod(): Promise<PathModule> {
   return await pathPromise;
 }
 
+/** Read a UTF-8 text file. */
 export async function readTextFile(file: string): Promise<string> {
   return await (await fs()).readFile(file, "utf8");
 }
 
+/** Read a file as raw bytes. */
 export async function readFile(file: string): Promise<Uint8Array> {
   return new Uint8Array(await (await fs()).readFile(file));
 }
 
+/** Write bytes or text to `file`, replacing it if it exists. */
 export async function writeFile(file: string, data: Uint8Array | string): Promise<void> {
   await (await fs()).writeFile(file, data);
 }
 
+/**
+ * Names of the files directly inside `dir`.
+ *
+ * One level deep and files only — subdirectories are not descended into and
+ * not returned, which is what lets an output folder sit safely inside the
+ * folder being scanned for reports.
+ */
 export async function listFiles(dir: string): Promise<string[]> {
   const entries = await (await fs()).readdir(dir, { withFileTypes: true });
   return entries.filter((e) => e.isFile()).map((e) => e.name);
 }
 
+/** True if `file` exists and is a regular file. */
 export async function fileExists(file: string): Promise<boolean> {
   try {
     return (await (await fs()).stat(file)).isFile();
@@ -86,6 +109,7 @@ export async function fileExists(file: string): Promise<boolean> {
   }
 }
 
+/** True if `dir` exists and is a directory. */
 export async function dirExists(dir: string): Promise<boolean> {
   try {
     return (await (await fs()).stat(dir)).isDirectory();
@@ -94,10 +118,17 @@ export async function dirExists(dir: string): Promise<boolean> {
   }
 }
 
+/** Create `dir` and any missing parents. No error if it already exists. */
 export async function mkdirp(dir: string): Promise<void> {
   await (await fs()).mkdir(dir, { recursive: true });
 }
 
+/**
+ * Delete `target`, ignoring any failure.
+ *
+ * For cleanup paths only, where not deleting something is not a build failure.
+ * Never use it where the deletion is the point.
+ */
 export async function removeQuietly(target: string, recursive = false): Promise<void> {
   try {
     await (await fs()).rm(target, { recursive, force: true });
@@ -106,19 +137,23 @@ export async function removeQuietly(target: string, recursive = false): Promise<
   }
 }
 
+/** Move or rename a path. */
 export async function rename(from: string, to: string): Promise<void> {
   await (await fs()).rename(from, to);
 }
 
+/** Create a uniquely-named temporary directory and return its path. */
 export async function makeTempDir(prefix: string): Promise<string> {
   const [f, p, os] = [await fs(), await pathMod(), await import("node:os")];
   return await f.mkdtemp(p.join(os.tmpdir(), prefix));
 }
 
+/** Resolve symlinks and `..` segments to a canonical path. */
 export async function realPath(target: string): Promise<string> {
   return await (await fs()).realpath(target);
 }
 
+/** Join path segments with `/`, collapsing repeated separators. */
 export function joinPath(...parts: string[]): string {
   // Kept synchronous and separator-agnostic: every runtime here accepts "/" in
   // paths, including Windows, and the alternative is making every call site
@@ -126,6 +161,7 @@ export function joinPath(...parts: string[]): string {
   return parts.join("/").replace(/\/{2,}/g, "/");
 }
 
+/** The final segment of a path, accepting either separator. */
 export function baseName(file: string): string {
   return file.replace(/^.*[\\/]/, "");
 }
@@ -170,23 +206,30 @@ export function cwd(): string {
 // Process
 // --------------------------------------------------------------------------
 
+/**
+ * Command-line arguments, excluding the executable and script.
+ *
+ * Deno and Bun both populate `process.argv` in the Node layout, so one slice
+ * covers all three. Empty in a browser.
+ */
 export function args(): string[] {
   if (isBrowser) return [];
-  // Deno and Bun both populate process.argv in the Node layout, so one slice
-  // covers all three.
   return process.argv.slice(2);
 }
 
+/** An environment variable, or `undefined` (always `undefined` in a browser). */
 export function env(name: string): string | undefined {
   return isBrowser ? undefined : process.env[name];
 }
 
+/** Terminate the process with `code`. Throws in a browser, where it has no meaning. */
 export function exit(code: number): never {
   if (isBrowser) throw new Error(`exit(${code}) requested in a browser`);
   process.exit(code);
   throw new Error("unreachable");
 }
 
+/** Exit status and captured stderr from a spawned process. */
 export type RunResult = { code: number; stderr: string };
 
 /** Run a command to completion, capturing stderr. */
@@ -212,6 +255,12 @@ export async function run(cmd: string, argv: string[]): Promise<RunResult> {
 // Browser discovery
 // --------------------------------------------------------------------------
 
+/**
+ * Path to an installed Chrome or Edge, or `null` if none was found.
+ *
+ * `CHROME_PATH` is tried first; the rest are standard *system install*
+ * locations, not user directories.
+ */
 export async function findChrome(): Promise<string | null> {
   const fromEnv = env("CHROME_PATH");
   const candidates = [

@@ -13,7 +13,16 @@ commercially.
 | `pdfjs-dist` | 4.6.82 | **Apache-2.0** | text/operator extraction for verification |
 | `@types/node` | ^22.10.2 (dev) | MIT | needed only by `deno check` |
 
-`pdf-lib` pulls `pdfkit`, `xmldoc` and `linebreak` — all MIT.
+⚠️ **Corrected 2026-08-08:** an earlier version of this file said "`pdf-lib` pulls `pdfkit`, `xmldoc`
+and `linebreak` — all MIT." **None of those three is in the tree.** They are dependencies of
+`pdf-lib`'s *source* repository, not of the published package. What is actually installed is
+`@pdf-lib/standard-fonts`, `@pdf-lib/upng`, `pako` and `tslib`. The conclusion was right by luck —
+they are all permissive — but the list was wrong, and it was wrong because it was written from the
+project's README rather than from `npm ls`.
+
+The full verified tree, with the parent each package arrives through, now lives in
+[../THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) and is generated from what is actually on disk.
+That file is the authority; this one is the reasoning.
 
 ## Runtimes
 
@@ -56,5 +65,17 @@ accepted but carries the NOTICE-propagation and patent clauses.
 
 ## This project
 
-No licence file has been chosen. If this is offered to SkyCiv or published, pick one — the dependency
-set imposes no copyleft, so anything from MIT upward is available.
+**MIT**, © 2026 Jon Marcum. `LICENSE` is at the repository root, and `deno.json` declares
+`"license": "MIT"` so JSR records it.
+
+Compatible with the whole dependency set: MIT, Apache-2.0, 0BSD and Zlib impose no copyleft.
+
+### Obligations, checked before the first publish
+
+- **The published package bundles nothing.** It is six first-party files; dependencies are declared
+  and resolved by the consumer. No attribution obligation is triggered by publishing it.
+- **No NOTICE files to propagate.** None of the Apache-2.0 packages in the tree ships one, so
+  Apache-2.0 §4(d) imposes nothing.
+- **Two artifacts do carry third-party code**, neither of them committed: the browser bundle, which
+  bundles MathJax, and the output PDF, which embeds MathJax's Apache-2.0 fonts as data URIs. See
+  [../THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).

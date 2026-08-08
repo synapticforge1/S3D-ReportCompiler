@@ -237,12 +237,30 @@ deno task publish       # syncs version, commits, tags, pushes → triggers publ
 publish arriving through its native GitHub Actions OIDC integration. A local publish succeeds and
 produces an *unattested* release, which cannot be undone for that version number.
 
-⚠️ **Expect the provenance verification step to be the thing that tells you the truth.** The sibling
-`wasmtk` project has published ten consecutive releases with **no provenance recorded on JSR**
-(`rekorLogId` null) while its OIDC-prerequisite check passed every time. The cause is still
-unidentified; the Deno version has been ruled out. `publish.yml`'s final step polls the JSR API and
-fails the job if no Rekor entry appears — after the publish and the GitHub release have already
-succeeded, so a failure there means "unattested", not "broken".
+### 📌 On the missing provenance attestation — decided, not outstanding
+
+The sibling `wasmtk` project publishes with **no `rekorLogId` recorded on JSR** while its
+OIDC-prerequisite check passes every time. **This is a JSR-side issue, not a defect in the workflow's
+provenance setup.** JSR reports that package at a **100% score while still flagging provenance**,
+which is what identifies it as a reporting problem on their end. Nothing in `publish.yml` needs
+changing, and the Deno version was ruled out by experiment (see task 8's sibling note and the comment
+in the workflow).
+
+📌 **Owner decision (2026-08-08): ignore it.** Expect the same here, and do not go looking for a
+cause in this repository.
+
+The final workflow step therefore **warns and exits 0** rather than failing the job. That is a
+deliberate reversal of how it was first written:
+
+⚠️ **A gate that fails on every release for a known upstream quirk is worse than no gate.** It makes
+a red job the normal state, and the next genuine failure gets waved through with it. The step still
+prints the outcome — the information is worth having, and if JSR fixes the reporting it will simply
+start printing a Rekor log ID — but it no longer pretends to be a pass/fail signal about this
+repository.
+
+The check is still worth running at all because of what that episode showed: the *prerequisite*
+passed for ten releases while the *outcome* was absent, and only asking JSR directly could tell those
+two apart.
 
 Pre-flight, all currently green:
 
