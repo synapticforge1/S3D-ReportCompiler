@@ -47,12 +47,23 @@ if (diffCode !== 0) {
   await run(["git", "commit", "-m", `bump version to ${tag}`]);
 }
 
-// 4. Tag (force-update so a re-run after a failed push still works)
+// 4. Tag (force-update so a re-run after a failed release still works)
 await run(["git", "tag", "-f", tag]);
 
-// 5. Push commit + tag — triggers publish.yml, which publishes with provenance
+// 5. Push commit + tag — triggers publish.yml, which publishes with provenance.
+//
+// The tag push is forced to match the `-f` above. Without it, retrying a failed
+// release is stuck: the local tag moves to the fix commit, the remote tag still
+// points at the broken one, and a plain push is rejected as non-fast-forward —
+// so re-running the workflow just rebuilds the commit that already failed.
+//
+// ⚠️ Safe only while the version is unpublished. JSR versions are IMMUTABLE, so
+// once a version exists on the registry, moving its tag changes what the GitHub
+// release points at while the published code stays put — the two then disagree
+// permanently. If `deno publish` has already succeeded for this version, bump
+// instead of retrying.
 await run(["git", "push"]);
-await run(["git", "push", "origin", tag]);
+await run(["git", "push", "--force", "origin", tag]);
 
 console.log(`\nTag ${tag} pushed. GitHub Actions will publish to JSR with provenance.`);
 console.log(`Watch progress at: https://github.com/jrmarcum/S3D-ReportCompiler/actions`);
