@@ -10,7 +10,10 @@ Defaults resolve from the **working directory**, so which folder you stand in se
 ```bash
 deno task check                          # types
 deno fmt --check                         # formatting (main.ts, src/, scripts/)
+deno doc --lint src/*.ts                 # docs coverage — a scored JSR criterion
+deno check --doc src/*.ts                # the JSDoc examples actually compile
 deno publish --dry-run --allow-dirty     # JSR validation, incl. slow types
+deno task verify-release <version>       # after a release: did it get an attestation?
 
 cd tests && deno run -A ../main.ts       # the 2 committed samples
 cd local && deno run -A ../main.ts       # the real 48-report set

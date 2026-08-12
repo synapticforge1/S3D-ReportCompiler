@@ -27,13 +27,15 @@ combined, verified PDF. Runs on Deno, Node, Bun and in a browser. See [overview.
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML**; browser bakes and prints |
 | Published | **JSR `@jrmarcum/s3d-reportcompiler` v1.0.2**, score **100**, global install verified working |
-| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · **1.0.2 ❌ — published locally, so it has no provenance** |
+| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · **1.0.2 ❌ (published locally — no provenance)** |
+| Next release | **1.0.3 is staged** — bumped and committed, awaiting `deno task publish` |
 
-⚠️ **1.0.2 did not go through GitHub Actions.** There is no `v1.0.2` tag, no `release/v1.0.2` branch
-and no Rekor entry — the signatures of a workstation `deno publish`. The package itself is fine and
-the `./cli` fix is in it, but the release is **unattested and unrecorded on GitHub**, and JSR versions
-are immutable so it cannot be corrected in place. Release **1.0.3 through `deno task publish`** to get
-back onto the attested path. See [known-issues.md](known-issues.md) #26.
+⚠️ **1.0.2 did not go through GitHub Actions.** No `v1.0.2` tag, no `release/v1.0.2` branch, no Rekor
+entry — the signatures of a workstation `deno publish`. The package itself is fine and the `./cli`
+fix is in it, but the release is **unattested and unrecorded on GitHub**, and JSR versions are
+immutable so it cannot be corrected in place. **1.0.3 via `deno task publish` returns to the attested
+path** — and the release now verifies its own provenance rather than leaving it to be noticed later.
+See [known-issues.md](known-issues.md) #26.
 
 ⚠️ **Correction (2026-08-08): the PDF is not byte-reproducible, and an earlier note here saying the
 three runtimes produce "byte-identical output" was measured on the wrong artifact.** Chrome stamps its

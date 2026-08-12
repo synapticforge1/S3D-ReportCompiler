@@ -237,16 +237,28 @@ deno install -g -n s3d-reportcompiler -A -f jsr:@jrmarcum/s3d-reportcompiler/cli
 ⚠️ Within 24 hours of a release, add `--min-dep-age=0` or Deno silently installs the previous
 version — see the note at the end of [known-issues.md](known-issues.md).
 
-### 🔴 Outstanding: 1.0.2 has no provenance
+### 🟡 1.0.3 is staged, to restore provenance
 
 **1.0.2 was published from a workstation rather than through GitHub Actions** (bug #26). No `v1.0.2`
 tag, no `release/v1.0.2` branch, no Rekor entry, while 1.0.0 and 1.0.1 are both attested. JSR reports
-it at score 100 regardless, because provenance is not scored — which is precisely why this was easy
-to miss.
+it at score 100 regardless, because provenance is not scored — which is precisely why it was easy to
+miss. Immutable, so it cannot be corrected.
 
-Immutable, so it cannot be corrected. **Release 1.0.3 with `deno task publish`** to return to the
-attested path, and treat the tag and `release/v1.0.3` branch appearing on GitHub as the confirmation
-that it went the right way.
+**1.0.3 is bumped and committed. Release it with `deno task publish`** — not `deno publish`.
+
+What to watch for, in order:
+
+1. `tagging <sha> <subject>` — confirm it names the commit you expect **before** it tags.
+2. The workflow runs at `github.com/jrmarcum/S3D-ReportCompiler/actions`.
+3. A `v1.0.3` tag and a `release/v1.0.3` branch appear on GitHub. Their *absence* is what identified
+   #26 after the fact.
+4. The script waits and then reports `✅ 1.0.3 is published AND attested` with a Rekor log ID. If it
+   prints `❌ … NO provenance attestation` instead, it exits non-zero and the release needs another
+   bump — but you will know within minutes rather than days.
+
+What 1.0.3 carries beyond the version: the `./cli` fix is already in 1.0.2, so this release is about
+the release *process* — the pre-flight guards, the provenance verification, the install tasks, and
+full function documentation.
 
 ### ⚠️ Two predictions in this file were wrong. Both are corrected below.
 

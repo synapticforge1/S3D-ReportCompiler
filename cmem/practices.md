@@ -256,3 +256,19 @@ be distinguished in code.
 **Rule:** make the release state itself out loud, and make every guard fail loudly when it cannot
 run. Then confirm the guard fires — see §2. A check you have never seen refuse is a check you have
 not yet written.
+
+### Detecting is not preventing, and saying so matters
+
+A fourth release went out unattested because `deno publish` was typed instead of `deno task publish`.
+There is no fix for that: Deno has no pre-publish hook and a task cannot shadow a subcommand. The
+honest response was **not** to claim the script now prevents it, but to shorten the feedback loop —
+`deno task publish` now waits for the release and checks `rekorLogId`, exiting non-zero if it is
+absent.
+
+⚠️ **Where a guard cannot exist, say plainly that it cannot**, and put the effort into noticing
+instead. A guard described as preventing something it merely detects is worse than no guard, because
+it stops anyone looking.
+
+The reason this one was needed at all: **an unattested release is indistinguishable from an attested
+one everywhere a person would look.** Same score of 100, same package page, same install. The only
+difference is one field on an API nobody queries by hand.
