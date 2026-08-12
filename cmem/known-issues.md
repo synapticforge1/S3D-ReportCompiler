@@ -143,6 +143,43 @@ missing permission (a broken guard: refuse) from real network trouble (warn and 
 **A guard that cannot run must not report success** — [practices.md](practices.md) §2, learned again
 the hard way, in the guard written to enforce it.
 
+**#24 and #25 are fixed in 1.0.2**, verified by installing from JSR and running it:
+`--version` → `1.0.2`, `-h` → the full usage text.
+
+| # | Bug | Silent? |
+|---|---|---|
+| 26 | **1.0.2 was published from a workstation, not through GitHub Actions**, so it carries no provenance. No `v1.0.2` tag, no `release/v1.0.2` branch, no Rekor entry — while 1.0.0 and 1.0.1 are both attested. JSR versions are immutable, so it cannot be fixed in place; 1.0.3 must go through `deno task publish` | **yes** — the publish succeeded and JSR still reports score 100, because the score does not include provenance |
+
+⚠️ **Score 100 does not mean the release was done correctly.** That is the trap here: JSR reports
+1.0.2 at 100, identical to the two attested releases, because provenance is not a scored criterion.
+The only way to see the difference is to ask for `rekorLogId` directly, or to notice that no tag and
+no release branch were created.
+
+⚠️ A local `deno publish` is not blocked by anything and produces a perfectly good package. The rule
+"always release with `deno task publish`" is enforced only by habit — `deno publish` typed directly
+still works, and silently costs the attestation.
+
+### Not a bug, but it will look like one — Deno's minimum dependency age
+
+Immediately after a release, `deno install` may **silently install the previous version**, and then
+report an error describing *that* version:
+
+```
+$ deno install -g -n s3d-reportcompiler -A jsr:@jrmarcum/s3d-reportcompiler/cli
+error: Unknown export './cli' for '@jrmarcum/s3d-reportcompiler@1.0.1'.
+```
+
+The export exists in 1.0.2. Deno applies a **24-hour minimum dependency age** by default as a
+supply-chain measure and resolves to the newest version older than that — so a just-published version
+is invisible, and the error names the fallback. `--reload` does not help; this is policy, not cache.
+
+```bash
+deno install -g -n s3d-reportcompiler -A --min-dep-age=0 jsr:@jrmarcum/s3d-reportcompiler/cli
+```
+
+Worth knowing before diagnosing a phantom packaging bug: the message points at the wrong version, and
+everything about it looks like a broken publish.
+
 ⚠️ **Bug 23 is a gap between two decisions that were each right.** `nodeModulesDir: "manual"` was
 chosen so Deno reads the same `node_modules` as Node and Bun, which is what preserves `.npmrc`'s
 `omit=optional` and the identical-output property. The workflow was copied from a sibling project that

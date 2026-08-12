@@ -69,6 +69,22 @@ deno install -g -n s3d-reportcompiler -A jsr:@jrmarcum/s3d-reportcompiler/cli
 
 ⚠️ Without `/cli` you install the *library* entrypoint, and the command runs, does
 nothing and exits 0 — the package's default export is the pure API, not the CLI.
+Requires **1.0.2 or later**; earlier versions have no `./cli` export.
+
+⚠️ **Just after a release, Deno may quietly install the previous version.** Deno
+applies a minimum dependency age (24 hours by default) as a supply-chain measure,
+and silently resolves to the newest version older than that. The symptom is
+confusing, because it reports the *old* version's exports:
+
+```
+error: Unknown export './cli' for '@jrmarcum/s3d-reportcompiler@1.0.1'.
+```
+
+Either wait a day, or opt out for this install:
+
+```bash
+deno install -g -n s3d-reportcompiler -A --min-dep-age=0 jsr:@jrmarcum/s3d-reportcompiler/cli
+```
 
 Bun:
 

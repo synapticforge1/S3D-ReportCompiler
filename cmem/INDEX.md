@@ -26,12 +26,14 @@ combined, verified PDF. Runs on Deno, Node, Bun and in a browser. See [overview.
 | Maths | 8,286 expressions typeset, **0 failed** |
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML**; browser bakes and prints |
-| Published | **JSR `@jrmarcum/s3d-reportcompiler`** — 1.0.0 and 1.0.1, both **score 100 and attested** |
+| Published | **JSR `@jrmarcum/s3d-reportcompiler` v1.0.2**, score **100**, global install verified working |
+| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · **1.0.2 ❌ — published locally, so it has no provenance** |
 
-⚠️ **The global install is broken in every published version so far.** `deno install -g` installs the
-`.` export, which is the library, so the command runs and exits 0 doing nothing. The `./cli` export
-that fixes it exists on `main` but **missed the 1.0.1 release** — the tag was cut one commit early.
-Fixed in 1.0.2. See [known-issues.md](known-issues.md) #24 and #25.
+⚠️ **1.0.2 did not go through GitHub Actions.** There is no `v1.0.2` tag, no `release/v1.0.2` branch
+and no Rekor entry — the signatures of a workstation `deno publish`. The package itself is fine and
+the `./cli` fix is in it, but the release is **unattested and unrecorded on GitHub**, and JSR versions
+are immutable so it cannot be corrected in place. Release **1.0.3 through `deno task publish`** to get
+back onto the attested path. See [known-issues.md](known-issues.md) #26.
 
 ⚠️ **Correction (2026-08-08): the PDF is not byte-reproducible, and an earlier note here saying the
 three runtimes produce "byte-identical output" was measured on the wrong artifact.** Chrome stamps its

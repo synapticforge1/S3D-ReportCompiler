@@ -225,23 +225,28 @@ assume a single file covers everything.
 **`@jrmarcum/s3d-reportcompiler` is live**: 1.0.0 and 1.0.1, both score **100**, all four runtimes
 declared (`browser`, `deno`, `node`, `bun`), and both **attested** — Rekor entries present.
 
-### 🔴 Outstanding: the global install is broken in every published version
+### ✅ The global install works as of 1.0.2
 
-`deno install -g jsr:@jrmarcum/s3d-reportcompiler` installs the `.` export — the *library* — so the
-command runs, does nothing and exits 0 (bug #24). The `./cli` export that fixes it is on `main` but
-**missed 1.0.1**: the tag was cut one commit early (bug #25). **1.0.2 ships it.**
-
-Until then the working install is from a checkout:
-
-```bash
-deno install -g -n s3d-reportcompiler -A -f <path-to-repo>/main.ts
-```
-
-After 1.0.2, note the `/cli`:
+Verified by installing from JSR and running it — `--version` → `1.0.2`, `-h` → the full usage text.
+Bugs #24 and #25 are closed. Note the `/cli`:
 
 ```bash
 deno install -g -n s3d-reportcompiler -A -f jsr:@jrmarcum/s3d-reportcompiler/cli
 ```
+
+⚠️ Within 24 hours of a release, add `--min-dep-age=0` or Deno silently installs the previous
+version — see the note at the end of [known-issues.md](known-issues.md).
+
+### 🔴 Outstanding: 1.0.2 has no provenance
+
+**1.0.2 was published from a workstation rather than through GitHub Actions** (bug #26). No `v1.0.2`
+tag, no `release/v1.0.2` branch, no Rekor entry, while 1.0.0 and 1.0.1 are both attested. JSR reports
+it at score 100 regardless, because provenance is not scored — which is precisely why this was easy
+to miss.
+
+Immutable, so it cannot be corrected. **Release 1.0.3 with `deno task publish`** to return to the
+attested path, and treat the tag and `release/v1.0.3` branch appearing on GitHub as the confirmation
+that it went the right way.
 
 ### ⚠️ Two predictions in this file were wrong. Both are corrected below.
 
@@ -307,6 +312,20 @@ All three exist because of a release that went wrong; none is theoretical:
 
 It also **prints the commit and subject it is about to tag.** That single line is what would have
 caught bug #25 — v1.0.1 was cut one commit before the fix it was meant to ship, and nothing said so.
+
+⚠️ **None of it helps if `deno publish` is run directly**, which is how 1.0.2 lost its attestation
+(#26). The script is the whole release procedure, not a convenience wrapper around part of it:
+
+| | `deno task publish` | `deno publish` |
+|---|---|---|
+| Provenance / Rekor entry | ✅ | ❌ **none** |
+| Git tag + `release/vX.Y.Z` branch | ✅ | ❌ |
+| GitHub release | ✅ | ❌ |
+| Version sync across the three files | ✅ | ❌ |
+| Refuses to release the wrong commit | ✅ | ❌ |
+
+Both produce a package JSR scores at 100. Only one produces a release you can prove came from this
+repository.
 
 ### 📌 Provenance — resolved for this package
 
