@@ -174,6 +174,45 @@ excluding tool-owned files.
 
 ---
 
+## Phase 8 — packaging, and four releases to get one right
+
+The build was finished and verified. What remained was shipping it: restructure into `main.ts` +
+`src/`, sanitize samples, publish to JSR with provenance. That sounded like an afternoon. It produced
+**four bugs and four new practices**, none of them in the converter.
+
+**The pattern across all four: the code was correct and the *packaging around it* was not.** Every
+gate — types, formatting, docs, dry run, builds on three runtimes — passed throughout, because every
+gate exercised the code. Nothing exercised the artifact, the install, or the release.
+
+| # | What shipped wrong | Why nothing caught it |
+|---|---|---|
+| 23 | the release workflow could not install its dependencies | `deno publish --dry-run` passed locally, in a tree that already had `node_modules` |
+| 24 | a global install that ran, did nothing, exited 0 | `deno install -g` installs the `.` export, not `bin`; the README documented the broken command |
+| 25 | the fix for #24 missed the release it was written for | `git tag` tags whatever HEAD is and prints nothing |
+| 26 | two releases published with no provenance | `deno publish` and `deno task publish` differ by one word |
+
+### The two that taught the most
+
+**#25 — nothing was broken.** The fix was written, reviewed, committed and pushed, and the release
+still did not contain it, because the tag was cut one commit early. There was no defect to find, only
+an assumption nobody had made visible. The remedy was one line of output: `tagging 8ff6093 <subject>`.
+
+**#26 — documentation lost to naming, twice.** After the first unattested release the response was a
+warning in the script header, a contrast table, and a verification step reporting the damage
+afterwards. All of it was in place when the next release went the same way. The owner's own account —
+*"I thought that was what was happening, that is why I was asking when it popped up in the jsr instead
+of the github actions"* — made the cause obvious: `deno publish` reasonably reads as *the way you
+publish this package*. Renaming the task to `release` and **deleting** the `publish` task (an alias
+would have preserved the habit) ended it. Four characters achieved what four paragraphs had not.
+
+⚠️ **The self-inflicted one worth remembering:** while testing the guard written to prevent #25, the
+guard's own JSR check could not run — the task lacked `--allow-net`, and the `catch` written for
+"offline, keep going" swallowed it. The script then force-pushed a tag onto a published version, the
+exact act the guard existed to prevent. Practice §2 — *a check that cannot fail proves nothing* —
+violated inside the check written to enforce it.
+
+Practices [§11](practices.md) through [§14](practices.md) all come from this phase.
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is

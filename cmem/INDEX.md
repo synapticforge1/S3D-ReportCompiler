@@ -84,8 +84,10 @@ needs `safe.directory` set for the D: drive before it will run at all — see
 7. **[licensing.md](licensing.md)** — verified dependency licences
 8. **[roadmap.md](roadmap.md)** — open tasks and repository decisions
 9. **[practices.md](practices.md)** — ⭐ the working rules this project paid for, each with the evidence.
-   General enough to outlive this codebase; read before starting anything similar. §11 and §12 came
-   from the first release failing, and are the two most likely to save someone else a bad afternoon
+   General enough to outlive this codebase; read before starting anything similar. **§11–§14 all came
+   from packaging and releasing** — rehearse in the real environment, spend analysis where the risk is,
+   automate what you assume the release contains, and rename rather than document. Four releases were
+   needed to get one right, and none of the four bugs was in the converter
 
 ### The record of how it was built
 
