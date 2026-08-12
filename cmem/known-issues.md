@@ -115,6 +115,15 @@ Kept because the *pattern* matters more than the individual bugs.
 |---|---|---|
 | 22 | **A relative output path given on the command line produced no PDF.** Chrome does not resolve a relative `--print-to-pdf` against the calling process's working directory; it prints `Failed to write file <path>: The system cannot find the path specified` to stderr and **still exits 0**. Fixed by resolving both positional paths to absolute via `rt.resolvePath()` before use | **yes** — only the existing stale-PDF guard turned it into a visible failure |
 | 23 | **The first release workflow failed: `deno publish` could not resolve `mathjax-full`.** `deno.json` sets `"nodeModulesDir": "manual"`, so Deno reads npm dependencies from an on-disk `node_modules` — and the workflow never created one. Fixed by adding an `npm ci` step before publish | no — failed loudly, and before publishing anything |
+| 24 | **The globally installed command did nothing and exited 0.** `deno install -g` installs the `.` export, not the `bin` field, and `.` is `report_core.ts` — a pure library. The binary installed successfully, ran, defined some functions and exited cleanly, including for `--version`. Fixed by adding a `./cli` export pointing at `main.ts` | **yes** — the most silent failure in the ledger: successful install, zero output, exit 0 |
+
+⚠️ **Bug 24 shipped in 1.0.0, and the README documented the broken command.** Every gate passed:
+types, fmt, doc lint, `deno publish --dry-run`, and builds on three runtimes — because all of them
+exercise `main.ts` *directly*. Nothing exercised the installed entrypoint. It was found by a user
+installing it, which is the worst way to find it.
+
+The same shape as #23 one step further out: **the release pipeline was tested, the thing the release
+produces was not.** Post-publish, install the package the way the README tells someone to and run it.
 
 ⚠️ **Bug 23 is a gap between two decisions that were each right.** `nodeModulesDir: "manual"` was
 chosen so Deno reads the same `node_modules` as Node and Bun, which is what preserves `.npmrc`'s

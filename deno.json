@@ -5,6 +5,7 @@
   "license": "MIT",
   "exports": {
     ".": "./src/report_core.ts",
+    "./cli": "./main.ts",
     "./runtime": "./src/report_runtime.ts"
   },
   "bin": {

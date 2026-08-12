@@ -124,9 +124,22 @@ integration, so a local `deno publish` would succeed and produce an *unattested*
 
 | Export | Points at | Why |
 |---|---|---|
-| `.` | `src/report_core.ts` | the programmatic API is the pure core |
+| `.` | `src/report_core.ts` | the programmatic API is the pure core — importing it has no side effects |
+| `./cli` | `main.ts` | the command-line entrypoint |
 | `./runtime` | `src/report_runtime.ts` | host adapter; throws in a browser |
-| `bin` | `main.ts` | **not** an export — importing it would run a build |
+
+⚠️ **`./cli` exists because `deno install -g` installs the `.` export, not the `bin` field.** Without
+it, `deno install -g jsr:@jrmarcum/s3d-reportcompiler` installs `report_core.ts` — a pure library — so
+the command runs, does nothing and **exits 0**. It looks installed and behaves like a no-op. This
+shipped in 1.0.0 and was only found by someone actually installing it; the README documented the
+broken command, because the install path was never exercised. The correct form is:
+
+```bash
+deno install -g -n s3d-reportcompiler -A jsr:@jrmarcum/s3d-reportcompiler/cli
+```
+
+Splitting the library from the CLI is still right — `import "@jrmarcum/s3d-reportcompiler"` must not
+execute a build — so the fix is the extra export rather than pointing `.` at `main.ts`.
 
 ⚠️ **JSR rejects "slow types".** Every exported symbol needs a type its analyser can read without
 running `tsc`. Four exported `new Set<string>()` declarations had to become

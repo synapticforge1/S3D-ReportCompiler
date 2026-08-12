@@ -118,9 +118,13 @@ import * as rt from "./src/report_runtime.ts";
 // settles. The baked HTML fetches nothing, so this only has to cover layout.
 const VIRTUAL_TIME_BUDGET_MS = 180_000;
 
+// Split on a SINGLE leading dash, not a double one. Splitting on "--" would file
+// `-v` under positionals, and the tool would go looking for a folder named "-v"
+// instead of printing its version -- an unknown short option has to be rejected,
+// not silently reinterpreted as a path.
 const argv = rt.args();
-const positional = argv.filter((a) => !a.startsWith("--"));
-const flags = argv.filter((a) => a.startsWith("--"));
+const positional = argv.filter((a) => !a.startsWith("-"));
+const flags = argv.filter((a) => a.startsWith("-"));
 
 // The baked HTML is kept by default: it is the exact document Chrome was handed,
 // so it is what makes a result inspectable afterwards. `--keep-html` is still
@@ -136,47 +140,90 @@ const KNOWN_FLAGS = [
   "--no-keep-html",
   "--no-optimize",
   "--no-verify",
+  "-v",
   "--version",
+  "-h",
   "--help",
+  "-?",
 ];
 const unknownFlags = flags.filter((f) => !KNOWN_FLAGS.includes(f));
 if (unknownFlags.length > 0) {
-  console.error(`Unknown option(s): ${unknownFlags.join(", ")}`);
+  console.error(`Unknown option(s): ${unknownFlags.join(", ")}\n`);
   console.error(`Supported: ${KNOWN_FLAGS.join(", ")}`);
+  console.error(`Run with --help for what they do.`);
   rt.exit(1);
 }
 
-if (flags.includes("--version")) {
+if (flags.includes("-v") || flags.includes("--version")) {
   console.log(VERSION);
   rt.exit(0);
 }
 
-if (flags.includes("--help")) {
-  console.log(`s3d-reportcompiler ${VERSION}
+/** Usage text. Shared by --help and by the "nothing to do" paths below. */
+function helpText(): string {
+  return `s3d-reportcompiler ${VERSION}
 
-Compile a folder of SkyCiv design reports into one combined PDF, then verify
-that the PDF still contains everything the sources did.
+Compiles a folder of SkyCiv design reports into ONE combined PDF, then checks
+that every word, number and figure in the reports survived into it.
 
-  s3d-reportcompiler [htmlDir] [output.pdf] [options]
+USAGE
+  s3d-reportcompiler                        compile the reports here
+  s3d-reportcompiler <reportsFolder>
+  s3d-reportcompiler <reportsFolder> <output.pdf>
 
-Paths default to the CURRENT WORKING DIRECTORY. Run it from either place:
+THE SIMPLE WAY
+  Open a terminal in the folder holding your member_*.html reports and run the
+  command with no arguments. It finds them, and writes the result to a new
+  CompiledPDF folder beside them:
 
-  in the project folder             in the reports folder
-    HTMLFilesToBeCompiled/*.html      *.html
-    CompiledPDF/                      CompiledPDF/
+      CompiledPDF/combined_report.pdf     <- the document
+      CompiledPDF/combined_report.html    <- exactly what was sent to Chrome
 
-CompiledPDF/ is created if missing and holds both outputs:
-  combined_report.html              the baked document Chrome was given
-  combined_report.pdf               the result
+  It also works one level up, from a folder containing HTMLFilesToBeCompiled/.
 
-Options:
-  --no-keep-html  discard the baked HTML after rendering, leaving only the PDF
-  --no-optimize   skip the recompression pass
-  --no-verify     skip the conservation check. Not advisable for a document
-                  that will be issued -- the check is what proves nothing
-                  was dropped, and a dropped value still looks right.
-  --version       print the version and exit
-  --help          print this and exit`);
+IF YOU WANT TO CHOOSE THE PATHS
+  Quote anything containing spaces.
+
+      s3d-reportcompiler "C:\\Jobs\\Gate Calcs\\Reports"
+      s3d-reportcompiler "C:\\Jobs\\Gate Calcs\\Reports" "C:\\Jobs\\GateCalcs.pdf"
+
+  The second argument names the PDF, and the folder above it is created if it
+  does not exist.
+
+OPTIONS
+  --no-keep-html  delete the intermediate HTML, leaving only the PDF
+  --no-optimize   skip the recompression pass (the PDF ends up ~2x larger)
+  --no-verify     skip the check that nothing was lost. NOT ADVISABLE for a
+                  document that will be issued or sealed -- the check is the
+                  only thing proving a value was not silently dropped, and a
+                  dropped value still looks right on the page.
+  -v, --version   print the version and exit
+  -h, --help      print this and exit
+
+REQUIREMENTS
+  Google Chrome or Microsoft Edge must be installed -- it does the rendering.
+  If it is somewhere unusual, point at it:
+
+      Windows   set CHROME_PATH=C:\\Path\\To\\chrome.exe
+      macOS     export CHROME_PATH=/Applications/…/Google Chrome
+      Linux     export CHROME_PATH=/usr/bin/chromium
+
+  The first run downloads maths fonts once and caches them in .mathjax-fonts,
+  so later runs work offline.
+
+WHAT "PASS" AT THE END MEANS
+  Every distinct word and number in your reports was found in the PDF, no
+  figure was cut across a page break, no equation was left unrendered, and
+  every report contributed a page. If anything is missing the command says so
+  and exits with an error rather than handing you a plausible-looking file.
+
+  Read the "diagram(s) checked" count: it reports how many diagrams the split
+  check actually recognised. A low number means it did not run on the rest,
+  not that they are fine.`;
+}
+
+if (flags.includes("-h") || flags.includes("--help") || flags.includes("-?")) {
+  console.log(helpText());
   rt.exit(0);
 }
 
@@ -369,12 +416,17 @@ try {
   allHtml = (await rt.listFiles(htmlDir))
     .filter((n) => n.toLowerCase().endsWith(".html"));
 } catch {
-  console.error(`No such folder: ${htmlDir}`);
-  console.error(
-    positional[0]
-      ? "Check the path given as the first argument."
-      : `Run this from a folder containing ${INPUT_DIR}/, or from the reports folder itself.`,
-  );
+  console.error(`No such folder:\n  ${htmlDir}\n`);
+  if (positional[0]) {
+    console.error("Check the path given as the first argument.");
+    console.error("If it contains spaces, wrap the whole path in quotes.");
+  } else {
+    console.error(`Nothing to compile here. Either:`);
+    console.error(`  - run this from the folder holding your member_*.html reports, or`);
+    console.error(`  - run it from a folder containing ${INPUT_DIR}/, or`);
+    console.error(`  - give the folder as an argument: s3d-reportcompiler "<path to reports>"`);
+  }
+  console.error(`\nRun with --help for examples.`);
   rt.exit(1);
 }
 
@@ -384,13 +436,16 @@ const entries = sortReportNames(
 
 if (entries.length === 0) {
   // Reaching here without positional[0] means the working directory had no
-  // nested input folder AND no reports of its own, so say what was looked for
-  // in both places rather than just naming the one that came out of it.
-  console.error(`No report .html files found in ${htmlDir}`);
+  // nested input folder AND no reports of its own. Someone who runs the command
+  // in the wrong place gets the whole usage text, not a one-line rebuke -- this
+  // is the most likely first experience of the tool going wrong.
+  console.error(`No .html reports found in:\n  ${htmlDir}\n`);
   if (!positional[0]) {
-    console.error(`  looked for ${INPUT_DIR}/ here, then for *.html here.`);
-    console.error(`  Run this from a folder containing ${INPUT_DIR}/, or from the reports`);
-    console.error(`  folder itself, or pass the folder as the first argument.`);
+    console.error(`Looked for a ${INPUT_DIR}/ folder here, then for *.html here.\n`);
+    console.error(helpText());
+  } else {
+    console.error(`That folder exists but holds no .html files.`);
+    console.error(`Run with --help for examples.`);
   }
   rt.exit(1);
 }
@@ -406,9 +461,14 @@ const skipped = allHtml.length - entries.length;
 
 const chrome = await rt.findChrome();
 if (!chrome) {
+  console.error("Could not find Google Chrome or Microsoft Edge.\n");
+  console.error("One of them does the rendering, so it has to be installed. If you");
+  console.error("already have one somewhere non-standard, point at the executable:\n");
+  console.error(`  Windows   set CHROME_PATH=C:\\Path\\To\\chrome.exe`);
   console.error(
-    "Could not find Chrome or Edge. Install one, or set CHROME_PATH to the executable.",
+    `  macOS     export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`,
   );
+  console.error(`  Linux     export CHROME_PATH=/usr/bin/chromium`);
   rt.exit(1);
 }
 

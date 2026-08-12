@@ -61,11 +61,14 @@ npx jsr add @jrmarcum/s3d-reportcompiler
 
 #### As a global CLI tool
 
-Deno:
+Deno — note the **`/cli`** on the end:
 
 ```bash
-deno install -g -n s3d-reportcompiler -A jsr:@jrmarcum/s3d-reportcompiler
+deno install -g -n s3d-reportcompiler -A jsr:@jrmarcum/s3d-reportcompiler/cli
 ```
+
+⚠️ Without `/cli` you install the *library* entrypoint, and the command runs, does
+nothing and exits 0 — the package's default export is the pure API, not the CLI.
 
 Bun:
 
@@ -94,7 +97,7 @@ Restart your terminal afterwards.
 Deno:
 
 ```bash
-deno run -A jsr:@jrmarcum/s3d-reportcompiler
+deno run -A jsr:@jrmarcum/s3d-reportcompiler/cli
 ```
 
 Bun requires a one-time registry configuration so it can resolve JSR packages, in `~/.bun/bin/.npmrc`:
