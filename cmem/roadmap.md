@@ -222,8 +222,26 @@ assume a single file covers everything.
 
 ## ✅ 5. First commit, and the first JSR release — DONE (2026-08-08)
 
-**`@jrmarcum/s3d-reportcompiler@1.0.0` is live**: score **100**, all four runtimes declared
-(`browser`, `deno`, `node`, `bun`), and the version **is attested** — a Rekor entry is present.
+**`@jrmarcum/s3d-reportcompiler` is live**: 1.0.0 and 1.0.1, both score **100**, all four runtimes
+declared (`browser`, `deno`, `node`, `bun`), and both **attested** — Rekor entries present.
+
+### 🔴 Outstanding: the global install is broken in every published version
+
+`deno install -g jsr:@jrmarcum/s3d-reportcompiler` installs the `.` export — the *library* — so the
+command runs, does nothing and exits 0 (bug #24). The `./cli` export that fixes it is on `main` but
+**missed 1.0.1**: the tag was cut one commit early (bug #25). **1.0.2 ships it.**
+
+Until then the working install is from a checkout:
+
+```bash
+deno install -g -n s3d-reportcompiler -A -f <path-to-repo>/main.ts
+```
+
+After 1.0.2, note the `/cli`:
+
+```bash
+deno install -g -n s3d-reportcompiler -A -f jsr:@jrmarcum/s3d-reportcompiler/cli
+```
 
 ### ⚠️ Two predictions in this file were wrong. Both are corrected below.
 
@@ -274,7 +292,21 @@ produces an *unattested* release, which cannot be undone for that version number
 ⚠️ **`deno task publish` force-pushes the tag.** That is what makes a failed release retryable, and it
 is only safe while the version is unpublished. Once a version exists on JSR it is immutable — moving
 its tag would leave the GitHub release pointing somewhere the published code does not. **Bump instead
-of retrying.**
+of retrying.** The script now enforces this rather than merely warning: it queries JSR and refuses if
+the version already exists.
+
+### What `deno task publish` checks before it tags
+
+All three exist because of a release that went wrong; none is theoretical:
+
+| Refuses when | Because |
+|---|---|
+| the working tree has uncommitted tracked changes | they are not in the commit being tagged, so they are not in the release |
+| HEAD is behind its upstream | commits from elsewhere would be missing from the release |
+| the version is already on JSR | versions are immutable; forcing the tag would desync the GitHub release from the published code |
+
+It also **prints the commit and subject it is about to tag.** That single line is what would have
+caught bug #25 — v1.0.1 was cut one commit before the fix it was meant to ship, and nothing said so.
 
 ### 📌 Provenance — resolved for this package
 

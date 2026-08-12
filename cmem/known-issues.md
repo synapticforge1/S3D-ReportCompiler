@@ -125,6 +125,24 @@ installing it, which is the worst way to find it.
 The same shape as #23 one step further out: **the release pipeline was tested, the thing the release
 produces was not.** Post-publish, install the package the way the README tells someone to and run it.
 
+| # | Bug | Silent? |
+|---|---|---|
+| 25 | **The fix for #24 missed the release it was written for.** `v1.0.1` was tagged at the commit *before* the `./cli` export landed, so 1.0.1 published without it and the global install stayed broken. JSR versions are immutable, so it could only be corrected by burning 1.0.2 | **yes** — the release succeeded, scored 100 and was attested; only the missing export gave it away |
+
+⚠️ **`git tag` tags whatever HEAD happens to be, and says nothing about it.** `scripts/publish.ts`
+now refuses to tag when the working tree has uncommitted tracked changes or HEAD is behind its
+upstream, refuses outright when the version is already on JSR, and **prints the commit and subject it
+is about to tag** so the release is visible before it is cut.
+
+⚠️ **The first version of that guard was itself broken, and proved it immediately.** The JSR check
+`fetch`ed without `--allow-net` in the task definition; the resulting `NotCapable` was caught by a
+`catch` written for "offline, keep going", so the guard reported nothing and the script force-pushed
+a tag onto an already-published version — the exact act it existed to prevent. It now distinguishes a
+missing permission (a broken guard: refuse) from real network trouble (warn and continue).
+
+**A guard that cannot run must not report success** — [practices.md](practices.md) §2, learned again
+the hard way, in the guard written to enforce it.
+
 ⚠️ **Bug 23 is a gap between two decisions that were each right.** `nodeModulesDir: "manual"` was
 chosen so Deno reads the same `node_modules` as Node and Bun, which is what preserves `.npmrc`'s
 `omit=optional` and the identical-output property. The workflow was copied from a sibling project that

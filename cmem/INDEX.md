@@ -26,7 +26,12 @@ combined, verified PDF. Runs on Deno, Node, Bun and in a browser. See [overview.
 | Maths | 8,286 expressions typeset, **0 failed** |
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML**; browser bakes and prints |
-| Published | **JSR `@jrmarcum/s3d-reportcompiler` v1.0.0, score 100, attested** (Rekor entry present) |
+| Published | **JSR `@jrmarcum/s3d-reportcompiler`** — 1.0.0 and 1.0.1, both **score 100 and attested** |
+
+⚠️ **The global install is broken in every published version so far.** `deno install -g` installs the
+`.` export, which is the library, so the command runs and exits 0 doing nothing. The `./cli` export
+that fixes it exists on `main` but **missed the 1.0.1 release** — the tag was cut one commit early.
+Fixed in 1.0.2. See [known-issues.md](known-issues.md) #24 and #25.
 
 ⚠️ **Correction (2026-08-08): the PDF is not byte-reproducible, and an earlier note here saying the
 three runtimes produce "byte-identical output" was measured on the wrong artifact.** Chrome stamps its

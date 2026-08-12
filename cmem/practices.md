@@ -219,3 +219,40 @@ defect was boring, undocumented, and in a file copied without reading closely.
 **Rule:** an inherited concern is a hypothesis about *your* system, not a finding. Check whether it
 reproduces before building around it — and give at least equal attention to the parts that were
 copied rather than reasoned about, because those are the parts nobody has examined.
+
+---
+
+## 13. Automate what you assume the release contains
+
+Three releases, three ways of shipping the wrong thing — none of them a coding error:
+
+| | What shipped | Why |
+|---|---|---|
+| 1.0.0 | a global install that did nothing | `deno install -g` installs the `.` export, not `bin` |
+| 1.0.1 | the fix for that, **missing** | the tag was cut one commit before it |
+| — | a tag force-pushed onto a published version | the guard against exactly this could not run |
+
+The second is the instructive one. Everything was correct — the fix was written, reviewed, committed,
+pushed — and the release still did not contain it, because `git tag` tags whatever HEAD happens to be
+and prints nothing. There was no bug to find. There was only an assumption nobody had rendered
+visible.
+
+The fix is not vigilance, it is output. `deno task publish` now prints:
+
+```
+  tagging 8ff6093  Fix global install, and make the CLI explain itself
+  as       v1.0.2
+```
+
+One line, and the class of mistake becomes hard to make.
+
+⚠️ **The third row is the sharpest lesson, because it happened *inside the guard written to prevent
+the second*.** The JSR "already published" check called `fetch` while the task lacked `--allow-net`.
+The `NotCapable` error landed in a `catch` written for "offline, keep going", so the check reported
+nothing and the script proceeded to force-push a tag onto a published version — precisely the act it
+existed to stop. A missing permission is a **broken check**, not an absent hazard, and the two must
+be distinguished in code.
+
+**Rule:** make the release state itself out loud, and make every guard fail loudly when it cannot
+run. Then confirm the guard fires — see §2. A check you have never seen refuse is a check you have
+not yet written.
