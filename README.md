@@ -108,6 +108,22 @@ Windows (PowerShell), user level — no admin required:
 
 Restart your terminal afterwards.
 
+#### From a checkout
+
+```bash
+deno task install       # global command built from THIS working tree
+deno task install:jsr   # global command from the published registry
+deno task uninstall
+```
+
+`deno task install` is the one to use while developing or if you keep a clone: it
+installs whatever is in your working tree, so there is no publish step and no
+waiting on the registry. `install:jsr` installs the released package and passes
+`--min-dep-age=0`, so it also works within 24 hours of a release.
+
+Both install the command as `s3d-reportcompiler`, and `--force` means re-running
+either one simply replaces whatever is installed.
+
 #### Run on demand without installing
 
 Deno:

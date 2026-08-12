@@ -141,6 +141,28 @@ deno install -g -n s3d-reportcompiler -A jsr:@jrmarcum/s3d-reportcompiler/cli
 Splitting the library from the CLI is still right — `import "@jrmarcum/s3d-reportcompiler"` must not
 execute a build — so the fix is the extra export rather than pointing `.` at `main.ts`.
 
+### Installing it
+
+| Task | Installs from | Use when |
+|---|---|---|
+| `deno task install` | this working tree | developing, or you keep a clone — no publish, no registry lag |
+| `deno task install:jsr` | the published package | you want exactly what users get |
+
+⚠️ **`deno task install` deliberately omits `--config deno.json`.** Passing it breaks the install:
+
+```
+error: Failed to resolve the specifier "mathjax-full/js/input/tex/AllPackages.js" as its
+after-prefix portion could not be URL-parsed relative to "npm:mathjax-full@3.2.2/"
+```
+
+The trailing-slash prefix mapping in `imports` — required for JSR to resolve subpath imports — is not
+handled the same way when the config is attached to a globally installed command. Without `--config`,
+Deno resolves the bare specifiers through `package.json` instead and it works. Verified end to end:
+the installed command compiles the 13 samples to 100 pages and reports PASS.
+
+⚠️ `install:jsr` passes `--min-dep-age=0`, because Deno's 24-hour minimum dependency age otherwise
+installs the *previous* release and reports the error against *its* exports.
+
 ⚠️ **JSR rejects "slow types".** Every exported symbol needs a type its analyser can read without
 running `tsc`. Four exported `new Set<string>()` declarations had to become
 `const x: Set<string> = new Set()`. `deno publish --dry-run` is the check; it is a hard error, not a
