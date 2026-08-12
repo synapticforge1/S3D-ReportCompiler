@@ -148,7 +148,24 @@ the hard way, in the guard written to enforce it.
 
 | # | Bug | Silent? |
 |---|---|---|
-| 26 | **1.0.2 was published from a workstation, not through GitHub Actions**, so it carries no provenance. No `v1.0.2` tag, no `release/v1.0.2` branch, no Rekor entry — while 1.0.0 and 1.0.1 are both attested. JSR versions are immutable, so it cannot be fixed in place; 1.0.3 must go through `deno task publish` | **yes** — the publish succeeded and JSR still reports score 100, because the score does not include provenance |
+| 26 | **1.0.2 AND 1.0.3 were published from a workstation, not through GitHub Actions**, so neither carries provenance. No tag, no release branch, no Rekor entry for either — while 1.0.0 and 1.0.1 are attested. JSR versions are immutable, so neither can be fixed in place | **yes** — both publishes succeeded and JSR reports score 100, because the score does not include provenance |
+
+⚠️ **The second loss is the important one.** After 1.0.2, the response was documentation: a warning
+in the script header, a contrast table in the roadmap, and a verification step that reports the
+damage afterwards. **1.0.3 was then lost the same way.** Documentation does not intervene at the
+moment someone types a command.
+
+**Root cause: the names.** `deno publish` and `deno task publish` differ by one word and do opposite
+things. The owner's account — *"I thought that was what was happening, that is why I was asking when
+it popped up in the jsr instead of the github actions"* — is a naming failure, not a discipline one.
+`deno publish` reasonably reads as *the way you publish this package*.
+
+**Fixed by renaming the task to `deno task release`** (`publish` kept as a working alias). See
+[practices.md](practices.md) §14.
+
+🔒 **Still worth doing: make JSR refuse.** The package can be configured to require publishing from
+a GitHub Actions workflow, which turns this from something detected afterwards into something that
+cannot happen.
 
 ⚠️ **Score 100 does not mean the release was done correctly.** That is the trap here: JSR reports
 1.0.2 at 100, identical to the two attested releases, because provenance is not a scored criterion.
@@ -156,7 +173,7 @@ The only way to see the difference is to ask for `rekorLogId` directly, or to no
 no release branch were created.
 
 ⚠️ A local `deno publish` is not blocked by anything and produces a perfectly good package. The rule
-"always release with `deno task publish`" is enforced only by habit — `deno publish` typed directly
+"always release with `deno task release`" is enforced only by habit — `deno publish` typed directly
 still works, and silently costs the attestation.
 
 ### Not a bug, but it will look like one — Deno's minimum dependency age

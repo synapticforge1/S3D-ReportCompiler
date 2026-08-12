@@ -237,7 +237,7 @@ pushed — and the release still did not contain it, because `git tag` tags what
 and prints nothing. There was no bug to find. There was only an assumption nobody had rendered
 visible.
 
-The fix is not vigilance, it is output. `deno task publish` now prints:
+The fix is not vigilance, it is output. `deno task release` now prints:
 
 ```
   tagging 8ff6093  Fix global install, and make the CLI explain itself
@@ -259,10 +259,10 @@ not yet written.
 
 ### Detecting is not preventing, and saying so matters
 
-A fourth release went out unattested because `deno publish` was typed instead of `deno task publish`.
+A fourth release went out unattested because `deno publish` was typed instead of `deno task release`.
 There is no fix for that: Deno has no pre-publish hook and a task cannot shadow a subcommand. The
 honest response was **not** to claim the script now prevents it, but to shorten the feedback loop —
-`deno task publish` now waits for the release and checks `rekorLogId`, exiting non-zero if it is
+`deno task release` now waits for the release and checks `rekorLogId`, exiting non-zero if it is
 absent.
 
 ⚠️ **Where a guard cannot exist, say plainly that it cannot**, and put the effort into noticing
@@ -272,3 +272,29 @@ it stops anyone looking.
 The reason this one was needed at all: **an unattested release is indistinguishable from an attested
 one everywhere a person would look.** Same score of 100, same package page, same install. The only
 difference is one field on an API nobody queries by hand.
+
+---
+
+## 14. If two commands differ by one word and do opposite things, rename one
+
+`deno publish` and `deno task publish`. One uploads from the workstation and produces a release with
+**no provenance**, permanently, because JSR versions are immutable. The other tags a commit and lets
+GitHub Actions publish with an OIDC token. **Two releases were lost to the gap between those names.**
+
+Every response to the first loss treated it as a discipline problem — clearer documentation, a
+warning in the script header, a table contrasting the two commands, a verification step that
+reports the damage afterwards. All of it was written, and the very next release was lost the same
+way.
+
+⚠️ **The owner's own account is the tell:** *"I thought that was what was happening — that is why I
+was asking when it popped up in the jsr instead of the github actions."* Nobody ignored a warning.
+The name `deno publish` reasonably reads as *the way you publish this package*, and no amount of
+documentation makes a wrong name read right at the moment of typing.
+
+The fix was four characters: the task is now `deno task release`. The collision is gone, so the
+mistake has nowhere to come from.
+
+**Rule:** when a mistake repeats after you have documented it, stop documenting and change the
+shape of the thing. Naming *is* an interface. And prefer a constraint at the boundary that can
+actually refuse — JSR can be configured to require publishing from GitHub Actions, which makes the
+wrong command fail rather than succeed quietly.

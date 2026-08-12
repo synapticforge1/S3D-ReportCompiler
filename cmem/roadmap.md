@@ -237,14 +237,26 @@ deno install -g -n s3d-reportcompiler -A -f jsr:@jrmarcum/s3d-reportcompiler/cli
 ⚠️ Within 24 hours of a release, add `--min-dep-age=0` or Deno silently installs the previous
 version — see the note at the end of [known-issues.md](known-issues.md).
 
-### 🟡 1.0.3 is staged, to restore provenance
+### 🟡 1.0.4 is staged, to restore provenance
+
+**1.0.3 was lost the same way as 1.0.2** — `deno publish` instead of the release task. The task is
+now named **`deno task release`** so it cannot be confused with `deno publish`; that rename is the
+actual fix, and everything below it is secondary.
+
+🔒 **Do this once and the problem ends:** on jsr.io → the package → settings, require publishing from
+a GitHub Actions workflow. A workstation `deno publish` then fails at the registry instead of quietly
+producing an unattested version. Everything in this repo can only *detect* the mistake after the
+fact; only JSR can refuse it.
+
+<details>
+<summary>The 1.0.3 attempt, kept for the record</summary>
 
 **1.0.2 was published from a workstation rather than through GitHub Actions** (bug #26). No `v1.0.2`
 tag, no `release/v1.0.2` branch, no Rekor entry, while 1.0.0 and 1.0.1 are both attested. JSR reports
 it at score 100 regardless, because provenance is not scored — which is precisely why it was easy to
 miss. Immutable, so it cannot be corrected.
 
-**1.0.3 is bumped and committed. Release it with `deno task publish`** — not `deno publish`.
+**1.0.3 is bumped and committed. Release it with `deno task release`** — not `deno publish`.
 
 What to watch for, in order:
 
@@ -259,6 +271,13 @@ What to watch for, in order:
 What 1.0.3 carries beyond the version: the `./cli` fix is already in 1.0.2, so this release is about
 the release *process* — the pre-flight guards, the provenance verification, the install tasks, and
 full function documentation.
+
+</details>
+
+**Release 1.0.4 with `deno task release`.** The four things to watch are unchanged from the list
+above; substitute 1.0.4. The one that settles it is step 3 — a `v1.0.4` tag and a `release/v1.0.4`
+branch appearing on GitHub. If they do not appear, the release did not go through Actions, whatever
+jsr.io shows.
 
 ### ⚠️ Two predictions in this file were wrong. Both are corrected below.
 
@@ -299,20 +318,20 @@ nothing installed, which is what CI actually is. That procedure is now in
 
 ```bash
 deno task bump          # or edit "version" in deno.json
-deno task publish       # syncs version, commits, tags, pushes → triggers publish.yml
+deno task release       # syncs version, commits, tags, pushes → triggers publish.yml
 ```
 
 ⚠️ **Never run `deno publish` from a workstation.** JSR only records a provenance attestation for a
 publish arriving through its native GitHub Actions OIDC integration. A local publish succeeds and
 produces an *unattested* release, which cannot be undone for that version number.
 
-⚠️ **`deno task publish` force-pushes the tag.** That is what makes a failed release retryable, and it
+⚠️ **`deno task release` force-pushes the tag.** That is what makes a failed release retryable, and it
 is only safe while the version is unpublished. Once a version exists on JSR it is immutable — moving
 its tag would leave the GitHub release pointing somewhere the published code does not. **Bump instead
 of retrying.** The script now enforces this rather than merely warning: it queries JSR and refuses if
 the version already exists.
 
-### What `deno task publish` checks before it tags
+### What `deno task release` checks before it tags
 
 All three exist because of a release that went wrong; none is theoretical:
 
@@ -327,7 +346,7 @@ caught bug #25 — v1.0.1 was cut one commit before the fix it was meant to ship
 
 ### After the tag: the release is not done until provenance is confirmed
 
-`deno task publish` now waits for the workflow to publish and then checks the attestation, via
+`deno task release` now waits for the workflow to publish and then checks the attestation, via
 [`scripts/verify-release.ts`](../scripts/verify-release.ts). It exits non-zero if the version landed
 without one, so an unattested release cannot pass quietly.
 
@@ -347,7 +366,7 @@ changed is that the loss is now loud and immediate instead of found days later.
 ⚠️ **None of it helps if `deno publish` is run directly**, which is how 1.0.2 lost its attestation
 (#26). The script is the whole release procedure, not a convenience wrapper around part of it:
 
-| | `deno task publish` | `deno publish` |
+| | `deno task release` | `deno publish` |
 |---|---|---|
 | Provenance / Rekor entry | ✅ | ❌ **none** |
 | Git tag + `release/vX.Y.Z` branch | ✅ | ❌ |
