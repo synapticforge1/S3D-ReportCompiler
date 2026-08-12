@@ -109,9 +109,21 @@ if (diffCode !== 0) {
       Deno.exit(1);
     }
     await res.body?.cancel();
-  } catch {
-    // Offline or JSR unreachable. Not a reason to block a release — the publish
-    // step would fail on a duplicate anyway; this check only makes it fail early.
+  } catch (e) {
+    // ⚠️ Continuing past a check that could not run is what made this guard
+    // useless the first time it was exercised: the deno task lacked
+    // --allow-net, the fetch threw NotCapable, the catch swallowed it, and the
+    // script cheerfully force-pushed a tag onto an already-published version.
+    //
+    // A missing permission is a broken guard, not an offline machine, so those
+    // two are now distinguished. Genuine network trouble still only warns —
+    // `deno publish` would reject a duplicate anyway, so this check exists to
+    // fail *early*, not to be the only thing standing in the way.
+    if (e instanceof Deno.errors.NotCapable) {
+      console.error(`\n❌ Cannot check JSR: the publish task is missing --allow-net=api.jsr.io.`);
+      console.error(`   Refusing to continue with a guard that cannot run.`);
+      Deno.exit(1);
+    }
     console.warn(`  (could not reach JSR to check whether ${version} exists — continuing)`);
   }
 
