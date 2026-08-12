@@ -294,7 +294,24 @@ documentation makes a wrong name read right at the moment of typing.
 The fix was four characters: the task is now `deno task release`. The collision is gone, so the
 mistake has nowhere to come from.
 
+### ⚠️ An alias would have preserved the bug
+
+The obvious courtesy is to keep `publish` working as an alias so nobody's habits break. **That was
+considered and rejected, and the reasoning generalises.**
+
+An alias keeps the word available. Someone reaching for "publish" still finds a `publish` that works,
+so the habit is never retrained — and the moment they type it one word short, they are back to the
+unattested path. The alias preserves exactly the muscle memory the rename existed to break.
+
+There is no `publish` task now. `deno task publish` answers `Task not found` and lists `release`,
+which is the correct outcome: a wrong turn that stops you and points, rather than one that quietly
+works until the day it does not.
+
+⚠️ Do not confuse this with breaking a *published* API, where deprecation and aliases are right. This
+is a private entry point with one user, and the whole value is that the old name stops resolving.
+
 **Rule:** when a mistake repeats after you have documented it, stop documenting and change the
-shape of the thing. Naming *is* an interface. And prefer a constraint at the boundary that can
-actually refuse — JSR can be configured to require publishing from GitHub Actions, which makes the
-wrong command fail rather than succeed quietly.
+shape of the thing. Naming *is* an interface — and when you rename to remove a hazard, **do not keep
+the hazardous name alive out of politeness.** A rename with an alias is a comment. Prefer, above
+both, a constraint at the boundary that can actually refuse: JSR can be configured to require
+publishing from GitHub Actions, which makes the wrong command fail rather than succeed quietly.

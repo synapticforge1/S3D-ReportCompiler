@@ -35,8 +35,9 @@ release task. No tag, no release branch, no Rekor entry for either. **The cause 
 publish` and `deno task publish` differ by one word and do entirely different things, and the
 reasonable assumption was that the registry command routed through Actions. It does not.
 
-**The task is now `deno task release`** (`publish` kept as an alias) so the two names cannot be
-confused. See [known-issues.md](known-issues.md) #26 and [practices.md](practices.md) §14.
+**The task is now `deno task release`, and there is no `publish` task at all** — deliberately, so the
+word is not typeable here and the near-collision has nowhere to start. `deno task publish` now answers
+`Task not found` and lists `release`. See [known-issues.md](known-issues.md) #26 and [practices.md](practices.md) §14.
 
 🔒 **The real fix is registry-side:** JSR can be set to *require* publishing from a GitHub Actions
 workflow, which makes a workstation `deno publish` fail outright. That is prevention rather than

@@ -160,7 +160,9 @@ things. The owner's account — *"I thought that was what was happening, that is
 it popped up in the jsr instead of the github actions"* — is a naming failure, not a discipline one.
 `deno publish` reasonably reads as *the way you publish this package*.
 
-**Fixed by renaming the task to `deno task release`** (`publish` kept as a working alias). See
+**Fixed by renaming the task to `deno task release` and removing the `publish` task entirely** — an
+alias was considered and rejected, because keeping the word available is what keeps it in muscle
+memory. `deno task publish` now answers `Task not found` and lists the real one. See
 [practices.md](practices.md) §14.
 
 🔒 **Still worth doing: make JSR refuse.** The package can be configured to require publishing from

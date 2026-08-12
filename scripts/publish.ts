@@ -7,15 +7,19 @@
  * the native OIDC integration. A local `deno publish` would succeed and produce
  * an unattested release.
  *
- * Usage: deno task release      (`deno task publish` is a kept alias)
+ * Usage: deno task release      (this file; there is no `publish` task)
  *
  * ⚠️ **`deno task release`, never `deno publish`.** Those two differ by one word
  * and do completely different things: this one tags and lets GitHub Actions
  * publish with an OIDC token, which is the only source of provenance;
  * `deno publish` uploads straight from the workstation and produces an
  * unattested release that cannot be corrected, because JSR versions are
- * immutable. 1.0.2 and 1.0.3 were both lost that way. The task was renamed to
- * `release` specifically to stop the two names colliding.
+ * immutable. 1.0.2 and 1.0.3 were both lost that way.
+ *
+ * The task is called `release` and **no `publish` task exists**, deliberately —
+ * so the word "publish" never appears as something you can type here, and the
+ * near-collision with `deno publish` has nowhere to start. The file keeps its
+ * name because that is what it does; only the entry point is named `release`.
  *
  * Steps:
  *   1. Read the current version from deno.json

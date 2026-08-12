@@ -356,7 +356,7 @@ deno task verify-release 1.0.1      # audit any version
 ```
 
 Exit codes: **0** attested · **1** published but not attested · **2** not published yet. Verified
-against all three real cases. `deno task publish --no-wait` skips the wait if you do not want to hold
+against all three real cases. `deno task release --no-wait` skips the wait if you do not want to hold
 the terminal.
 
 ⚠️ **This detects, it does not prevent.** Deno has no pre-publish hook and a task cannot shadow a

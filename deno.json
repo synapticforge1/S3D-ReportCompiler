@@ -38,7 +38,6 @@
     "update-version": "deno run --allow-read --allow-write scripts/sync-version.ts",
     "bump": "deno run --allow-read --allow-write scripts/bump.ts",
     "release": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net=api.jsr.io scripts/publish.ts",
-    "publish": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net=api.jsr.io scripts/publish.ts",
     "verify-release": "deno run --allow-read --allow-net=api.jsr.io scripts/verify-release.ts"
   },
   "fmt": {
