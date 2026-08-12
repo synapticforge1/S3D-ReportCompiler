@@ -273,6 +273,15 @@ const outputPdf = await rt.resolvePath(
 // the only one that needs the network.
 // ---------------------------------------------------------------------------
 
+/**
+ * One font file, from the on-disk cache or downloaded once and cached.
+ *
+ * Writes to a scratch name and renames into place, so a build interrupted
+ * mid-write cannot leave a truncated font that every later build silently
+ * reuses.
+ *
+ * @param cacheDir `.mathjax-fonts` in the working directory
+ */
 async function fontBytes(url: string, cacheDir: string): Promise<Uint8Array> {
   const name = rt.baseName(url).replace(/[^\w.-]/g, "_");
   const cached = rt.joinPath(cacheDir, name);
@@ -295,6 +304,14 @@ async function fontBytes(url: string, cacheDir: string): Promise<Uint8Array> {
   }
 }
 
+/**
+ * Replace every `url(...)` in a stylesheet with a base64 data URI, making the
+ * document hermetic — no CDN can be slow, blocked or down at render time.
+ *
+ * ⚠️ Every reference is resolved first, then rewritten in a single pass.
+ * Substituting one at a time by substring is unsafe: a font name that is a
+ * suffix of another would be rewritten inside its neighbour's URL too.
+ */
 async function inlineFonts(css: string, cacheDir: string): Promise<string> {
   const refs = [
     ...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map((m) => m[1])),
@@ -330,6 +347,17 @@ async function inlineFonts(css: string, cacheDir: string): Promise<string> {
 // Verification: the PDF half
 // ---------------------------------------------------------------------------
 
+/**
+ * Read the finished PDF back **from disk** and record what is actually in it.
+ *
+ * Deliberately re-reads the artifact rather than trusting anything held in
+ * memory: the file that ships is the file that gets checked.
+ *
+ * Counts image *paints*, not images — a figure straddling a page break is
+ * painted on both pages, so a count above the expected number means a split.
+ * Tracks drawing as well as text, because a page holding only a diagram has no
+ * extractable text and calling it blank would fail a correct build.
+ */
 async function readPdf(pdfPath: string): Promise<PdfObservations> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const doc = await pdfjs.getDocument({ data: await rt.readFile(pdfPath) }).promise;

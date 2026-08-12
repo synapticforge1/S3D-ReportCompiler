@@ -110,9 +110,12 @@ export const FALLBACK_DELIMS: Delim[] = [
 // the delimiter: MathJax reads these documents the same way.
 const MAX_MATH_BODY = 2000;
 
-// Decode a JavaScript string literal the way the browser would. Note that an
-// unrecognised escape simply drops the backslash, so '\[' is "[" -- which is
-// why the degenerate-delimiter check below exists.
+/**
+ * Decode a JavaScript string literal the way the browser would.
+ *
+ * ⚠️ An unrecognised escape simply drops the backslash, so `'\['` evaluates to
+ * `"["` -- which is why the degenerate-delimiter check below exists.
+ */
 function decodeJsString(literal: string): string {
   return literal.replace(
     /\\(.)/g,
@@ -120,8 +123,10 @@ function decodeJsString(literal: string): string {
   );
 }
 
-// Slice a balanced [...] array starting at `key:`, ignoring brackets that occur
-// inside string literals.
+/**
+ * Slice a balanced `[...]` array starting at `key:`, ignoring brackets that
+ * occur inside string literals.
+ */
 function sliceArrayLiteral(src: string, key: string): string | null {
   const at = src.search(new RegExp(`${key}\\s*:\\s*\\[`));
   if (at < 0) return null;
@@ -153,6 +158,7 @@ const PAIR_RE = /\[\s*(['"])((?:\\.|(?!\1)[^\\])*)\1\s*,\s*(['"])((?:\\.|(?!\3)[
  */
 export const skippedDelims: Set<string> = new Set();
 
+/** Delimiter pairs from one config key, refusing degenerate ones. */
 function readPairs(src: string, key: string, display: boolean): Delim[] {
   const arr = sliceArrayLiteral(src, key);
   if (!arr) return [];
@@ -270,12 +276,20 @@ export const svgStyleWarnings: Set<string> = new Set();
 // is what stands in for the document once many of them share one page.
 // ---------------------------------------------------------------------------
 
-// Prefix id selectors only where ids can legally appear. Doing this by plain
-// text search would rewrite hex colours -- #fff is not an id.
+/**
+ * Prefix id selectors, only where an id can legally appear.
+ *
+ * ⚠️ Doing this by plain text search would rewrite hex colours -- `#fff` is not
+ * an id.
+ */
 function namespaceIds(selector: string, prefix: string): string {
   return selector.replace(/#([A-Za-z_][\w-]*)/g, (_m, id) => `#${prefix}${id}`);
 }
 
+/**
+ * Scope one selector to a report's wrapper. `html`/`body`/`:root` map onto the
+ * wrapper itself, since it stands in for the document once many share a page.
+ */
 function scopeSelector(selector: string, scope: string, prefix: string): string {
   const s = namespaceIds(selector.trim(), prefix);
   if (!s) return "";
@@ -442,8 +456,12 @@ export function portableSvg(html: string): string {
   });
 }
 
-// Remove one element and its subtree by id, matching the closing tag by depth
-// rather than assuming the element contains no nested tags of the same name.
+/**
+ * Remove one element and its subtree by id.
+ *
+ * Matches the closing tag by depth rather than assuming the element contains no
+ * nested tags of the same name.
+ */
 function removeElementById(html: string, id: string): string {
   const openTag = new RegExp(
     `<([a-zA-Z][\\w-]*)[^>]*\\bid\\s*=\\s*["']${id}["'][^>]*>`,
@@ -494,6 +512,12 @@ const mjDoc = mathjax.document("", {
  */
 export const mathStats = { converted: 0, failed: 0, firstFailure: "" };
 
+/**
+ * Typeset one LaTeX expression to CHTML, updating {@link mathStats}.
+ *
+ * A failure returns an escaped fallback rather than throwing, so one bad
+ * expression cannot abort the bake -- the guard catches what survives.
+ */
 function tex2html(latex: string, display: boolean): string {
   try {
     const html = adaptor.outerHTML(mjDoc.convert(latex.trim(), { display }));

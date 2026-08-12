@@ -28,6 +28,12 @@ import denoJson from "../deno.json" with { type: "json" };
 const version = denoJson.version;
 const tag = `v${version}`;
 
+/**
+ * Run a command, and abort the whole release if it fails.
+ *
+ * Every step here is load-bearing — a failed `git push` must not be followed by
+ * a tag push — so there is deliberately no "continue on error" path.
+ */
 async function run(cmd: string[]): Promise<void> {
   const p = new Deno.Command(cmd[0], { args: cmd.slice(1) });
   const { code, stderr } = await p.output();
@@ -153,3 +159,36 @@ await run(["git", "push", "--force", "origin", tag]);
 
 console.log(`\nTag ${tag} pushed. GitHub Actions will publish to JSR with provenance.`);
 console.log(`Watch progress at: https://github.com/jrmarcum/S3D-ReportCompiler/actions`);
+
+// 7. Wait for the release to land, and confirm it is ATTESTED.
+//
+// Pushing the tag is not the finish line — it is the point where the outcome
+// stops being visible. 1.0.2 went out unattested and that was only noticed days
+// later, because a successful publish and an attested publish look identical
+// everywhere except one field on the JSR API (see cmem/known-issues.md #26).
+//
+// Skip with --no-wait when you do not want to hold the terminal; the check is
+// then `deno task verify-release` whenever you like.
+if (Deno.args.includes("--no-wait")) {
+  console.log(`\n--no-wait: not waiting. Confirm with:  deno task verify-release`);
+} else {
+  console.log(`\nWaiting for the workflow to publish, then checking provenance…`);
+  console.log(
+    `(Ctrl-C is safe — the release continues; check later with deno task verify-release)\n`,
+  );
+
+  const check = new Deno.Command("deno", {
+    args: [
+      "run",
+      "--allow-read",
+      "--allow-net=api.jsr.io",
+      "scripts/verify-release.ts",
+      version,
+      "--wait",
+    ],
+  });
+  const { code } = await check.output();
+  // Propagate the verdict: an unattested release should not exit 0, or CI and
+  // shell chains would treat it as a clean run.
+  if (code !== 0) Deno.exit(code);
+}

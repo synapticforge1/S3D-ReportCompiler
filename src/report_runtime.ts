@@ -59,6 +59,7 @@ export const RUNTIME: Runtime = (() => {
  */
 export const isBrowser: boolean = RUNTIME === "browser";
 
+/** Throw a descriptive error if this is a browser, where `what` cannot work. */
 function requireHost(what: string): void {
   if (isBrowser) {
     throw new Error(
@@ -78,12 +79,14 @@ type PathModule = typeof import("node:path");
 let fsPromise: Promise<FsModule> | null = null;
 let pathPromise: Promise<PathModule> | null = null;
 
+/** `node:fs/promises`, imported lazily and memoised. Throws in a browser. */
 async function fs(): Promise<FsModule> {
   requireHost("Filesystem access");
   fsPromise ??= import("node:fs/promises");
   return await fsPromise;
 }
 
+/** `node:path`, imported lazily and memoised. Throws in a browser. */
 async function pathMod(): Promise<PathModule> {
   requireHost("Path handling");
   pathPromise ??= import("node:path");

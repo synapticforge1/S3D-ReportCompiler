@@ -313,6 +313,25 @@ All three exist because of a release that went wrong; none is theoretical:
 It also **prints the commit and subject it is about to tag.** That single line is what would have
 caught bug #25 — v1.0.1 was cut one commit before the fix it was meant to ship, and nothing said so.
 
+### After the tag: the release is not done until provenance is confirmed
+
+`deno task publish` now waits for the workflow to publish and then checks the attestation, via
+[`scripts/verify-release.ts`](../scripts/verify-release.ts). It exits non-zero if the version landed
+without one, so an unattested release cannot pass quietly.
+
+```bash
+deno task verify-release            # the version in deno.json
+deno task verify-release 1.0.1      # audit any version
+```
+
+Exit codes: **0** attested · **1** published but not attested · **2** not published yet. Verified
+against all three real cases. `deno task publish --no-wait` skips the wait if you do not want to hold
+the terminal.
+
+⚠️ **This detects, it does not prevent.** Deno has no pre-publish hook and a task cannot shadow a
+subcommand, so `deno publish` typed directly still works and still loses the attestation. What
+changed is that the loss is now loud and immediate instead of found days later.
+
 ⚠️ **None of it helps if `deno publish` is run directly**, which is how 1.0.2 lost its attestation
 (#26). The script is the whole release procedure, not a convenience wrapper around part of it:
 
