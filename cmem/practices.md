@@ -315,3 +315,22 @@ shape of the thing. Naming *is* an interface — and when you rename to remove a
 the hazardous name alive out of politeness.** A rename with an alias is a comment. Prefer, above
 both, a constraint at the boundary that can actually refuse: JSR can be configured to require
 publishing from GitHub Actions, which makes the wrong command fail rather than succeed quietly.
+
+---
+
+## 15. Anything that would be a shell script is a Bun `.ts` script
+
+**Rule:** a task-oriented script that would normally be written as a `.sh` shell script **shall
+always be a Bun script of type `.ts`** (run with `bun`). Don't write `.sh`, `.ps1`, `.bat` or `.cmd`
+files for it.
+
+**Scope:** this applies only to scripts that would otherwise be shell scripts. Regular project files
+are not covered: `main.ts`, `src/`, tests and everything else that is part of the program keep
+running on Deno, Node and Bun as before. It also does not change the existing Deno tooling in [`scripts/`](../scripts/) (`bump`, `sync-version`, `publish`,
+`verify-release`, `sanitize-report`). Those are Deno scripts by design, run with scoped permissions,
+and they stay that way.
+
+This rule was set by the project owner as a convention. It does not come from a specific incident.
+It follows from the project running on Windows, macOS and Linux: one TypeScript file works on every
+machine and gets type-checked, and a shell script does neither. Keep the §13 lessons when writing
+one: every guard must fail loudly when it can't run.

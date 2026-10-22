@@ -5,7 +5,7 @@
 ```
 main.ts                        CLI entry point
 src/                           the two library modules
-scripts/                       release tooling, sample sanitizer
+scripts/                       release tooling, sample sanitizer (Deno); new shell-style scripts are Bun .ts — practices.md §15
 tests/HTMLFilesToBeCompiled/   13 SANITIZED sample reports (committed)
 tests/controls/                negative controls
 tests/browser_example.html     the browser path

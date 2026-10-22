@@ -87,7 +87,9 @@ needs `safe.directory` set for the D: drive before it will run at all — see
    General enough to outlive this codebase; read before starting anything similar. **§11–§14 all came
    from packaging and releasing** — rehearse in the real environment, spend analysis where the risk is,
    automate what you assume the release contains, and rename rather than document. Four releases were
-   needed to get one right, and none of the four bugs was in the converter
+   needed to get one right, and none of the four bugs was in the converter. **§15** is a convention
+   rather than a lesson: anything that would be a shell script is written as a Bun `.ts` script instead
+   (regular project files and the existing Deno scripts in `scripts/` are not affected)
 
 ### The record of how it was built
 
