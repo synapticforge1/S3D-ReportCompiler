@@ -92,3 +92,29 @@ Two extraction rules that were bugs first:
 ## Negative controls
 
 A check that cannot fail proves nothing. See [testing.md](testing.md) — every control is reproducible.
+
+## The lessons that cost the most to learn
+
+*(Moved here from `INDEX.md` on 2026-10-26, verbatim, when the index was cut to one line per file;
+the earlier text is `git show 48ae20d:cmem/INDEX.md`.)*
+
+⚠️ **A converter that reports success is not the same as a correct document.** Three separate failure
+modes in this project were *silent*: an unrecognised delimiter (480 expressions typeset as prose while
+the log said `0 failed`), a stale PDF read back after a failed render, and a CSS rule dropped by the
+scoping refactor. None raised an error. All three are why the build now verifies itself and exits
+non-zero.
+
+⚠️ **Faithful HTML rendering requires an HTML engine.** This is not a limitation of one tool — the
+markup has no appearance until an engine computes one, and every engine computes it differently. The
+original script used WeasyPrint, which has no JavaScript engine, and would have produced ~400 blank
+pages. See [design-decisions.md](design-decisions.md).
+
+⚠️ **As the pipeline hardened, the bugs moved into the checker.** Reviews 1–2 found bugs in the
+builder; reviews 4–5 found bugs in the verification code — an image count that assumed one figure per
+report, a blank-page test that would flag a diagram-only page, a diagram check that silently no-ops.
+A broken check is more dangerous than a broken build: it fails in the safe-looking direction.
+
+⚠️ **The verification caught a bug introduced by the hardening.** Adding `browser_example.html` to the
+folder made it a 49th report. The build refused to ship. Conversely, the **stray-semicolon** bug — the
+CSS scoping silently deleting a rule from every report — was found only by a **negative control**,
+because the dropped rule was cosmetic and lost no words or numbers. Both kinds of test are load-bearing.

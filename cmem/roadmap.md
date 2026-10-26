@@ -3,7 +3,32 @@
 Open work, highest priority first. Status markers: 🔴 not started · 🟡 in progress · ✅ done.
 
 Keep this current — it is the first thing to read after [INDEX.md](INDEX.md) when picking the project
-back up.
+back up. **The status line lives here and nowhere else** (workspace memory policy, letter H26; moved
+out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
+
+## Current state
+
+| | |
+|---|---|
+| Output | **380 pages, 3.35 MB** (~3,354,900 bytes) from 48 reports (measured 2026-08-08) |
+| Maths | 8,286 expressions typeset, **0 failed** (2026-08-08) |
+| Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages (2026-08-08) |
+| Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08) |
+| Published | **JSR `@jrmarcum/s3d-reportcompiler` 1.0.4** = latest, published 2026-08-12 through Actions (re-read from JSR 2026-10-26) |
+| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · **1.0.4 ✅** Rekor `2439323008` (`deno task verify-release 1.0.4`, 2026-10-26) |
+| Tags | `v1.0.0`, `v1.0.1`, `v1.0.4` (= `12e84db`) on `origin`, with their `release/v*` branches |
+| Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
+
+🔁 **Corrected 2026-10-26:** this memory said "1.0.4 is staged and unreleased" for two and a half
+months after 1.0.4 had shipped attested on 2026-08-12. Nothing re-read JSR in between.
+
+⚠️ **The PDF is not byte-reproducible** (correction of 2026-08-08): Chrome stamps its render time
+into `/CreationDate` and `/ModDate`, so two builds of identical input differ in hash. What is
+identical across runtimes is the **baked intermediate HTML**; compare that by hash, and the PDF by
+page count and approximate size ([testing.md](testing.md)).
+
+For comparison: render-then-merge produced 9.46 MB / 356 pages, and the manual Bluebeam shrink of it
+3.46 MB ([design-decisions.md](design-decisions.md)). This build beats the manual step and removes it.
 
 ---
 
@@ -237,7 +262,11 @@ deno install -g -n s3d-reportcompiler -A -f jsr:@jrmarcum/s3d-reportcompiler/cli
 ⚠️ Within 24 hours of a release, add `--min-dep-age=0` or Deno silently installs the previous
 version — see the note at the end of [known-issues.md](known-issues.md).
 
-### 🟡 1.0.4 is staged, to restore provenance
+### ✅ 1.0.4 restored provenance — released 2026-08-12
+
+Released through `deno task release`: tag `v1.0.4` and branch `release/v1.0.4` on GitHub, JSR
+latest, attested (Rekor `2439323008`; re-verified 2026-10-26 with `deno task verify-release 1.0.4`).
+The text below is the record of how it got there.
 
 **1.0.3 was lost the same way as 1.0.2** — `deno publish` instead of the release task. The task is
 now named **`deno task release`** so it cannot be confused with `deno publish`; that rename is the
@@ -261,7 +290,7 @@ miss. Immutable, so it cannot be corrected.
 What to watch for, in order:
 
 1. `tagging <sha> <subject>` — confirm it names the commit you expect **before** it tags.
-2. The workflow runs at `github.com/jrmarcum/S3D-ReportCompiler/actions`.
+2. The workflow runs at `github.com/synapticforge1/S3D-ReportCompiler/actions` (then `jrmarcum/`).
 3. A `v1.0.3` tag and a `release/v1.0.3` branch appear on GitHub. Their *absence* is what identified
    #26 after the fact.
 4. The script waits and then reports `✅ 1.0.3 is published AND attested` with a Rekor log ID. If it
@@ -431,7 +460,16 @@ git config --global --add safe.directory <repo-root>
 ```
 
 That is a machine-local setting — it cannot travel with the repo, so anyone cloning to a similar
-filesystem hits it independently.
+filesystem hits it independently. (Until 2026-10-26 this line named the real path; it was replaced
+by the placeholder under the workspace privacy rule — see [INDEX.md](INDEX.md) § Privacy.)
+
+⚠️ **On an exFAT drive, also set `git config --local maintenance.strategy gc`** (workspace letters
+H16, H26 §5; set in this clone 2026-10-26, 1 pack at the time). The failure it answers, as the
+workspace recorded it from other repos on exFAT (binaryang, 2026-09-16): git's detached geometric
+maintenance cannot replace files on exFAT (`renaming pack … failed: File exists`, `could not write
+multi-pack-index`), so rolled-up packs pile up and `.git` grows without bound. It lives in
+`.git/config`, so every fresh clone needs it again. This repo had not hit it — the setting is
+preventive. The workspace is choosing one recipe for everyone (divergence P7).
 
 ---
 
@@ -558,3 +596,35 @@ Emitting **MathML** would fix (1) and (3). Generating PDF from their data model 
 round-trip entirely — the case where **Typst** becomes the right tool.
 
 See [known-issues.md](known-issues.md) and [design-decisions.md](design-decisions.md).
+
+---
+
+## 🟡 11. Workspace floor (letter H26) — what is left, all of it the owner's call
+
+Since 2026-10-26 this repo sits under the workspace's common rules (`../cmem/working-rules.md`,
+`memory-conventions.md`). Done in-repo on 2026-10-26: `origin` reset to the org, the stale links
+fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ block copied
+([best-practices.md](best-practices.md)), the privacy rule recorded ([INDEX.md](INDEX.md) § Privacy),
+`.gitattributes` made wildcard-first, the status line moved here. What remains:
+
+1. **Push.** `48ae20d` and the conformance commit are on local `main` only (`origin/main` =
+   `17aa1af`, read with `ls-remote` 2026-10-26).
+2. **The drive path in history (H19).** `roadmap.md` carried this machine's project path from
+   `387cbd9` onward — **inside every tagged tree, `v1.0.0`, `v1.0.1` and `v1.0.4`**, all public. The
+   published JSR packages do NOT contain it (`deno.json` `publish.include` has no `cmem/`). A purge
+   rewrites every commit from `387cbd9`, so the three tags move — and **pushing a moved `v*` tag
+   re-runs `publish.yml`** (it triggers on `push: tags: v*`). JSR refuses an existing version, but
+   read what the workflow does after that refusal before moving any tag (workspace working-rules §
+   Git). The rewritten tags would also no longer be the commits JSR's provenance attests. Decide:
+   purge and accept the moved tags, or leave the history and record why.
+3. **The five `scripts/*.ts` run under Deno** (`Deno.*` APIs, `deno run` tasks). The workspace rule
+   says committed scripts are Bun TypeScript and Deno stays only where JSR publishing needs it;
+   [practices.md](practices.md) §15 exempts them today. 🗓️ Class them: release tooling of a Deno
+   product (stays), or port to Bun (one at a time, each proved equivalent by an output diff before
+   the Deno one is removed). The same question covers `tests/controls/export-transcript.ts` and
+   `redact-paths.ts`, which are tooling rather than tests (drift X17).
+4. **JSR: require publishing from GitHub Actions** — still the one real prevention for #26 (above).
+5. **The pull line** ("At session start, read `../cmem/workspace-correspondence.md`, then the
+   letters in `../cmem/handoffs.md` addressed to this repo") is in the gitignored `CLAUDE.md` on
+   this machine only; a clone does not get it. INDEX § Workspace carries the same instruction for
+   clones.

@@ -170,7 +170,7 @@ await run(["git", "push"]);
 await run(["git", "push", "--force", "origin", tag]);
 
 console.log(`\nTag ${tag} pushed. GitHub Actions will publish to JSR with provenance.`);
-console.log(`Watch progress at: https://github.com/jrmarcum/S3D-ReportCompiler/actions`);
+console.log(`Watch progress at: https://github.com/synapticforge1/S3D-ReportCompiler/actions`);
 
 // 7. Wait for the release to land, and confirm it is ATTESTED.
 //

@@ -81,7 +81,7 @@ for (let i = 1; i <= attempts; i++) {
 if (!info) {
   console.error(`\n⚠️  ${version} is not on JSR${wait ? " yet" : ""}.`);
   console.error(`   If a release is in flight, watch it at:`);
-  console.error(`   https://github.com/jrmarcum/S3D-ReportCompiler/actions`);
+  console.error(`   https://github.com/synapticforge1/S3D-ReportCompiler/actions`);
   Deno.exit(2);
 }
 

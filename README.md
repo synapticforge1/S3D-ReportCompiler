@@ -233,7 +233,7 @@ Thirteen sanitized sample reports ship with the repository — covering both sec
 original set (`HSS6x6x3/16` and all three `HSS12x12x5/8` members):
 
 ```bash
-git clone https://github.com/jrmarcum/S3D-ReportCompiler
+git clone https://github.com/synapticforge1/S3D-ReportCompiler
 cd S3D-ReportCompiler && npm install
 cd tests && deno run -A ../main.ts
 ```

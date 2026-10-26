@@ -150,6 +150,9 @@ the hard way, in the guard written to enforce it.
 |---|---|---|
 | 26 | **1.0.2 AND 1.0.3 were published from a workstation, not through GitHub Actions**, so neither carries provenance. No tag, no release branch, no Rekor entry for either — while 1.0.0 and 1.0.1 are attested. JSR versions are immutable, so neither can be fixed in place | **yes** — both publishes succeeded and JSR reports score 100, because the score does not include provenance |
 
+✅ **1.0.4 restored provenance**: released through `deno task release` on 2026-08-12, attested (Rekor
+`2439323008`, re-verified 2026-10-26). 1.0.2 and 1.0.3 stay unattested forever.
+
 ⚠️ **The second loss is the important one.** After 1.0.2, the response was documentation: a warning
 in the script header, a contrast table in the roadmap, and a verification step that reports the
 damage afterwards. **1.0.3 was then lost the same way.** Documentation does not intervene at the
