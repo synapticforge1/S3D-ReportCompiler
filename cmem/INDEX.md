@@ -60,6 +60,7 @@ here. The triggers "update the project memory" (audit for stale live claims, not
 | [testing.md](testing.md) | How to test, especially the **negative controls** |
 | [licensing.md](licensing.md) | Verified dependency licences (MIT project) |
 | [roadmap.md](roadmap.md) | **Current state** and open tasks, incl. the owner's workspace items (task 11) |
+| [bun-migration.md](bun-migration.md) | The move off Deno (JSR kept): what was measured, the seven steps, the owner's decisions |
 | [practices.md](practices.md) | ⭐ The working rules this project paid for, each with its evidence |
 | [best-practices.md](best-practices.md) | The workspace's 28 ★ convergent rules — a stamped verbatim COPY, never edited here |
 | [process-log.md](process-log.md) | How it was built: what was tried, what was measured, which claims were wrong |

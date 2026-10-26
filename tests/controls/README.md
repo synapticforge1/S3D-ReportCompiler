@@ -46,12 +46,14 @@ works for the one person it was written for.
 
 ## Spikes
 
-⚠️ `spike-pdfmake.ts` is excluded from `deno check`: it imports `npm:pdfmake`, which is deliberately
-**not** a dependency. The spike is kept as the record of a rejected option, not as working code.
+**Retired 2026-10-26** (owner: "retire it if it is not being used" — nothing ran or imported it, and
+it imported `npm:pdfmake`, deliberately not a dependency, which would not survive the move off Deno;
+[../../cmem/bun-migration.md](../../cmem/bun-migration.md)). Its verdict stays here; the script is
+`git show a57cd72:tests/controls/spike-pdfmake.ts`.
 
 | Script | Verdict |
 |---|---|
-| `spike-pdfmake.ts` | pdfmake runs under Deno and handles tables, base64 PNGs and inline SVG as true vectors (110 paths, 107 strokes, 146 text ops) — but it has no CSS engine and **cannot place an SVG inline within text**, which is fatal for 87 inline expressions per report. Rejected; see [../../cmem/design-decisions.md](../../cmem/design-decisions.md) |
+| `spike-pdfmake.ts` (retired) | pdfmake runs under Deno and handles tables, base64 PNGs and inline SVG as true vectors (110 paths, 107 strokes, 146 text ops) — but it has no CSS engine and **cannot place an SVG inline within text**, which is fatal for 87 inline expressions per report. Rejected; see [../../cmem/design-decisions.md](../../cmem/design-decisions.md) |
 
 ## Utilities
 

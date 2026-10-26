@@ -607,8 +607,9 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 ([best-practices.md](best-practices.md)), the privacy rule recorded ([INDEX.md](INDEX.md) § Privacy),
 `.gitattributes` made wildcard-first, the status line moved here. What remains:
 
-1. **Push.** `48ae20d` and the conformance commit are on local `main` only (`origin/main` =
-   `17aa1af`, read with `ls-remote` 2026-10-26).
+1. **Push.** `48ae20d` and the conformance commit were on local `main` only (`origin/main` =
+   `17aa1af`, read with `ls-remote` 2026-10-26). Owner, 2026-10-26: push before the Bun work starts
+   (`git ls-remote origin refs/heads/main` is the check).
 2. **The drive path in history (H19).** `roadmap.md` carried this machine's project path from
    `387cbd9` onward — **inside every tagged tree, `v1.0.0`, `v1.0.1` and `v1.0.4`**, all public. The
    published JSR packages do NOT contain it (`deno.json` `publish.include` has no `cmem/`). A purge
@@ -617,14 +618,22 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
    read what the workflow does after that refusal before moving any tag (workspace working-rules §
    Git). The rewritten tags would also no longer be the commits JSR's provenance attests. Decide:
    purge and accept the moved tags, or leave the history and record why.
-3. **The five `scripts/*.ts` run under Deno** (`Deno.*` APIs, `deno run` tasks). The workspace rule
-   says committed scripts are Bun TypeScript and Deno stays only where JSR publishing needs it;
-   [practices.md](practices.md) §15 exempts them today. 🗓️ Class them: release tooling of a Deno
-   product (stays), or port to Bun (one at a time, each proved equivalent by an output diff before
-   the Deno one is removed). The same question covers `tests/controls/export-transcript.ts` and
-   `redact-paths.ts`, which are tooling rather than tests (drift X17).
+3. **The five `scripts/*.ts` run under Deno** (drift X17). → **Answered by the owner 2026-10-26:
+   port them** — the whole toolchain moves to Bun, scoped in task 12.
 4. **JSR: require publishing from GitHub Actions** — still the one real prevention for #26 (above).
 5. **The pull line** ("At session start, read `../cmem/workspace-correspondence.md`, then the
    letters in `../cmem/handoffs.md` addressed to this repo") is in the gitignored `CLAUDE.md` on
    this machine only; a clone does not get it. INDEX § Workspace carries the same instruction for
    clones.
+
+---
+
+## 🔴 12. Move the toolchain off Deno, keep JSR — SCOPED 2026-10-26, not started
+
+Owner, 2026-10-26: "scope this repo's transition to bun per the guidelines in the binaryang
+project". **The scope, the measurements and the seven steps: [bun-migration.md](bun-migration.md).**
+In one line: the published code already runs on Node and Bun (no `Deno.*` call), so only the
+toolchain moves — manifest to `jsr.json`, `bun check`, dprint, the release scripts and controls on
+`node:` builtins, a CI gate that does not exist yet — while `deno publish` stays for JSR. The owner's
+five decisions (2026-10-26) are at the end of that file: Biome for lint, `bun fmt` for format, the
+pdfmake spike retired, a new `node:test` suite, no npm; push and settle the purge first.
