@@ -3,26 +3,20 @@
  * package.json + src/report_core.ts (by importing sync-version.ts, which runs after
  * deno.json has already been written here).
  *
- * Run via:  bun run bump            # rightmost: 1.6.2 → 1.6.3
- *           bun run bump minor      # middle:    1.6.2 → 1.7.0
- *           bun run bump major      # leftmost:  1.6.2 → 2.0.0
+ * Run via:  bun run bump            # patch: 1.6.2 → 1.6.3   (fixes only)
+ *           bun run bump minor      # minor: 1.6.2 → 1.7.0   (backward-compatible additions)
+ *           bun run bump major      # major: 1.6.2 → 2.0.0   (anything breaking)
  *
- * VERSIONS ARE A SEQUENTIAL COUNTER, NOT A COMPATIBILITY SIGNAL (owner directive, carried over
- * from the sibling `wasmtk` project). `patch` / `minor` / `major` name the POSITION to increment —
- * rightmost, middle, leftmost — and carry no semver meaning on their own.
+ * SEMANTIC VERSIONING 2.0.0 (🔒 workspace owner rule, 2026-09-20; letter H6). The bumped
+ * component increases by one and every component to its right resets to 0. Components are
+ * unbounded and nothing ever carries: 1.9.9 --patch--> 1.9.10, 1.9.9 --minor--> 1.10.0.
  *
- * ODOMETER SEQUENCING: the minor and patch components are single digits and MUST NOT exceed 9.
- * Reaching 9 rolls the component back to 0 and carries 1 into the component to its left:
+ * (Until 2026-10-26 this was an "odometer" carried over from the sibling `wasmtk`: minor and
+ * patch capped at 9, carrying into the component on the left, and refusing to bump from a wider
+ * version. The workspace retired every such cap on 2026-09-20.)
  *
- *     1.2.9  --patch-->  1.3.0        patch rolls over, minor carries
- *     1.9.9  --patch-->  2.0.0        both roll over, major carries
- *     1.9.4  --minor-->  2.0.0        minor rolls over, major carries
- *
- * Only `major` is unbounded — it just keeps counting (9 → 10 → 11 …).
- *
- * This is intentionally NARROWER than semver, which permits multi-digit components. A version
- * carrying a minor or patch above 9 cannot be produced by this script, so it REFUSES to bump from
- * one rather than guessing — no carry rule reproduces the intended next version.
+ * Choosing the right component is the owner's call, made per release; this script does not
+ * judge it (the workspace's surface-snapshot bump gate does not exist here yet — roadmap).
  *
  * Unlike `update-version` (which only COPIES the existing deno.json version outward), this RAISES
  * it first. Must be run from the project root (bun run does this automatically).
@@ -32,9 +26,6 @@ import { readFile, writeFile } from "node:fs/promises";
 
 /** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
 const readText = (p: string) => readFile(p, "utf8");
-
-/** Highest permitted value for the minor and patch components. */
-const MAX_COMPONENT = 9;
 
 const root = process.cwd();
 const denoJsonPath = `${root}/deno.json`;
@@ -55,19 +46,6 @@ if (!m) {
 let [major, minor, patch] = [Number(m[2]), Number(m[3]), Number(m[4])];
 const from = `${major}.${minor}.${patch}`;
 
-// Refuse to bump from a version this scheme could never have produced. Carrying from, say,
-// 1.11.12 is ambiguous (1.12.0? 2.0.0? 2.2.3?), and every answer is a guess that would silently
-// pick the wrong release number — so stop and make the owner state the intent.
-if (minor > MAX_COMPONENT || patch > MAX_COMPONENT) {
-  console.error(
-    `❌ bump: ${from} has a minor/patch component above ${MAX_COMPONENT}, which the odometer ` +
-      `sequencing rule cannot carry from unambiguously.\n` +
-      `   Edit "version" in deno.json by hand to the intended next release, run ` +
-      `\`bun run update-version\`, then use \`bun run bump\` from there.`,
-  );
-  process.exit(1);
-}
-
 if (kind === "major") {
   major += 1;
   minor = 0;
@@ -77,17 +55,6 @@ if (kind === "major") {
   patch = 0;
 } else {
   patch += 1;
-}
-
-// Odometer carry: a component that reaches 10 rolls to 0 and adds 1 to the one on its left.
-// Applied patch-first so a patch bump from x.9.9 carries all the way through to (x+1).0.0.
-if (patch > MAX_COMPONENT) {
-  patch = 0;
-  minor += 1;
-}
-if (minor > MAX_COMPONENT) {
-  minor = 0;
-  major += 1;
 }
 
 const to = `${major}.${minor}.${patch}`;
