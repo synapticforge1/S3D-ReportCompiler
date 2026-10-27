@@ -50,7 +50,7 @@ async function fetchVersion(): Promise<VersionInfo | null> {
       await res.body?.cancel();
       return null;
     }
-    return await res.json() as VersionInfo;
+    return (await res.json()) as VersionInfo;
   } catch (e) {
     if (e instanceof Deno.errors.NotCapable) {
       console.error(`❌ Needs --allow-net=api.jsr.io to check anything. Refusing to`);

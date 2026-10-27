@@ -75,7 +75,24 @@ Node and Bun with the baked HTML's sha256 unchanged, plus the step's own done-co
    named the package `compiled-reports` 1.0.0 — it is a FOURTH version copy that `sync-version.ts`
    does not write; `npm install` refreshed the root fields only (no resolution moved). Step 7's
    one version source must cover it.
-3. **Format: `bun fmt`; lint: Biome.** 🔒 Owner rule, 2026-10-26: use a tool "unless bun can
+3. ✅ **DONE 2026-10-26** (branch `bun/3-fmt-lint`: `d37ca4e` setup + lint fixes, `3a21e89` the
+   reformat alone). **Format** = `bun run format` / `format:check` (`bun fmt`, `printWidth = 100`
+   in `bunfig.toml`, scope `main.ts src scripts` named in ONE place); `deno.json`'s `fmt` block
+   removed. The reformat (8 files, 68 lines) was compared with all whitespace removed: only
+   trailing commas and three parenthesis pairs around `await` / `as` changed. **Lint** = `bun run
+   lint` = `bunx @biomejs/biome@2.5.15 lint --error-on-warnings`, linter only (Biome's formatter
+   and assist OFF — one formatter, Bun's). Why `bunx` and not a devDependency: Biome's binaries are
+   OPTIONAL dependencies and `.npmrc` `omit=optional` (kept, for `pdfjs-dist`'s `canvas`) dropped
+   them — the installed wrapper failed `Cannot find module '@biomejs/cli-win32-x64/biome.exe'`.
+   Why 2.5.15: the newest release older than two weeks (2.6.0–2.6.3 were 2–5 days old). Biome's 7
+   findings FIXED, none suppressed (the `exec` loop kept as `exec` in a `for` header — `matchAll`
+   iterates a copy of the regex). Canaries: `check-format-canary.ts` (scope guards; misformat,
+   CRLF, width+1 reported, width not; inverted: path typo, `cmem` in scope) and
+   `check-lint-canary.ts` (6 rules must fire, a warning must fail; inverted: `"preset": "none"` →
+   4 reported missing). Gate: all checks green; samples byte-identical on all six runtimes; the
+   48-report set 380 pages / 8,286 / 0 failed, baked HTML byte-identical before and after
+   (`A19E5AD15E3F…`, the 2026-08-08 hash). Original plan text follows.
+   **Format: `bun fmt`; lint: Biome.** 🔒 Owner rule, 2026-10-26: use a tool "unless bun can
    perform the same task". Measured on Bun 1.4.4 the same day: **`bun fmt` exists** (native,
    "like Prettier"; JS/TS, CSS, HTML, JSON, YAML, Markdown; `--check` exits 1) — it shipped after
    binaryang chose dprint — and **`bun lint` does not** (`Script not found "lint"`). So:

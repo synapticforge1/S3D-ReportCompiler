@@ -117,9 +117,8 @@ const MAX_MATH_BODY = 2000;
  * `"["` -- which is why the degenerate-delimiter check below exists.
  */
 function decodeJsString(literal: string): string {
-  return literal.replace(
-    /\\(.)/g,
-    (_m, c) => c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c,
+  return literal.replace(/\\(.)/g, (_m, c) =>
+    c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c,
   );
 }
 
@@ -191,10 +190,7 @@ function readPairs(src: string, key: string, display: boolean): Delim[] {
  * {@link skippedDelims}.
  */
 export function parseDelimiters(src: string): Delim[] {
-  const found = [
-    ...readPairs(src, "displayMath", true),
-    ...readPairs(src, "inlineMath", false),
-  ];
+  const found = [...readPairs(src, "displayMath", true), ...readPairs(src, "inlineMath", false)];
   if (found.length === 0) return FALLBACK_DELIMS;
 
   // Longest opener first, so $$ is tried before $ and [mathin] before any
@@ -213,9 +209,10 @@ export function buildMathRegex(delims: Delim[]): RegExp {
   const parts = delims.map((d) => {
     // A one-character delimiter that opens and closes an expression can only be
     // paired unambiguously if the body excludes it.
-    const body = d.open === d.close && d.open.length === 1
-      ? `[^${esc(d.open)}]{1,${MAX_MATH_BODY}}?`
-      : `[\\s\\S]{1,${MAX_MATH_BODY}}?`;
+    const body =
+      d.open === d.close && d.open.length === 1
+        ? `[^${esc(d.open)}]{1,${MAX_MATH_BODY}}?`
+        : `[\\s\\S]{1,${MAX_MATH_BODY}}?`;
     return `${esc(d.open)}(${body})${esc(d.close)}`;
   });
 
@@ -366,7 +363,10 @@ export function scopeCss(css: string, scope: string, prefix: string): string {
     }
 
     if (prelude.startsWith("@")) {
-      const name = prelude.slice(1).split(/[\s({]/)[0].toLowerCase();
+      const name = prelude
+        .slice(1)
+        .split(/[\s({]/)[0]
+        .toLowerCase();
       // We define page geometry ourselves; a report's own @page would fight it.
       if (name === "page") continue;
       if (["media", "supports", "layer", "container"].includes(name)) {
@@ -380,7 +380,10 @@ export function scopeCss(css: string, scope: string, prefix: string): string {
 
     const selectors = [
       ...new Set(
-        prelude.split(",").map((s) => scopeSelector(s, scope, prefix)).filter(Boolean),
+        prelude
+          .split(",")
+          .map((s) => scopeSelector(s, scope, prefix))
+          .filter(Boolean),
       ),
     ];
     if (selectors.length > 0) out.push(`${selectors.join(", ")} {${block}}`);
@@ -437,7 +440,10 @@ export function portableSvg(html: string): string {
 
       if (decls.length === 0) continue;
 
-      for (const selector of selectorList.split(",").map((s) => s.trim()).filter(Boolean)) {
+      for (const selector of selectorList
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)) {
         if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(selector)) {
           svgStyleWarnings.add(selector);
           allHoisted = false;
@@ -463,10 +469,7 @@ export function portableSvg(html: string): string {
  * nested tags of the same name.
  */
 function removeElementById(html: string, id: string): string {
-  const openTag = new RegExp(
-    `<([a-zA-Z][\\w-]*)[^>]*\\bid\\s*=\\s*["']${id}["'][^>]*>`,
-    "i",
-  );
+  const openTag = new RegExp(`<([a-zA-Z][\\w-]*)[^>]*\\bid\\s*=\\s*["']${id}["'][^>]*>`, "i");
   const m = html.match(openTag);
   if (!m || m.index === undefined) return html;
 
@@ -475,8 +478,7 @@ function removeElementById(html: string, id: string): string {
   scan.lastIndex = m.index + m[0].length;
 
   let depth = 1;
-  let hit: RegExpExecArray | null;
-  while ((hit = scan.exec(html)) !== null) {
+  for (let hit = scan.exec(html); hit !== null; hit = scan.exec(html)) {
     depth += hit[1] ? -1 : 1;
     if (depth === 0) {
       const end = html.indexOf(">", hit.index);
@@ -531,10 +533,7 @@ function tex2html(latex: string, display: boolean): string {
     // Leave the source visible rather than silently dropping a calculation.
     // It must be escaped: expressions routinely contain "<" (e.g. \lambda < 200),
     // which would otherwise be injected into the document as markup.
-    const escaped = latex
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+    const escaped = latex.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     return `<code>${escaped}</code>`;
   }
 }
@@ -579,10 +578,7 @@ export function bakeBody(src: string, prefix: string): string {
 
   // Namespace every id rather than the two this template happens to use, so
   // many documents can share one page without colliding.
-  body = body.replace(
-    /\bid\s*=\s*(["'])([^"']*)\1/gi,
-    (_m, q, id) => `id=${q}${prefix}${id}${q}`,
-  );
+  body = body.replace(/\bid\s*=\s*(["'])([^"']*)\1/gi, (_m, q, id) => `id=${q}${prefix}${id}${q}`);
   body = body.replace(
     /\bhref\s*=\s*(["'])#([^"']*)\1/gi,
     (_m, q, id) => `href=${q}#${prefix}${id}${q}`,
@@ -593,7 +589,8 @@ export function bakeBody(src: string, prefix: string): string {
   body = body.replace(buildMathRegex(delims), (...args) => {
     const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
     const i = groups.findIndex((g) => g !== undefined);
-    return i < 0 ? args[0] as string : tex2html(groups[i]!, delims[i].display);
+    const inner = groups[i]; // undefined when i < 0: no pair matched
+    return inner === undefined ? (args[0] as string) : tex2html(inner, delims[i].display);
   });
 
   return portableSvg(body);
@@ -644,11 +641,7 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
 }
 
 /** Wrap baked bodies and their scoped stylesheets into one printable document. */
-export function assembleDocument(
-  bodies: string[],
-  styles: string[],
-  mathCss: string,
-): string {
+export function assembleDocument(bodies: string[], styles: string[], mathCss: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -877,9 +870,7 @@ export function compareAgainstPdf(
   // the backslash-command pattern: it catches unrendered TeX whatever delimiter
   // was wrapped around it, including one this code has never heard of.
   const leftoverLatex = pdf.text.match(/\\[a-zA-Z]{2,}|\[math\]|\[mathin\]/g) ?? [];
-  const splitDiagrams = pdf.diagramTitlePages.filter(
-    (p) => !pdf.diagramAxisPages.includes(p),
-  );
+  const splitDiagrams = pdf.diagramTitlePages.filter((p) => !pdf.diagramAxisPages.includes(p));
 
   const failures: string[] = [];
   if (missingWords.length || missingNumbers.length) failures.push("content missing from the PDF");

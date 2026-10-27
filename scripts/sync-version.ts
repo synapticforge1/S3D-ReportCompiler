@@ -19,16 +19,13 @@ const pkgPath = `${root}/package.json`;
 const pkg = JSON.parse(await Deno.readTextFile(pkgPath));
 pkg.name = name;
 pkg.version = version;
-await Deno.writeTextFile(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+await Deno.writeTextFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 console.log(`✅ package.json       → ${version}`);
 
 // ── src/report_core.ts ───────────────────────────────────────────────────────
 const corePath = `${root}/src/report_core.ts`;
 const core = await Deno.readTextFile(corePath);
-const updated = core.replace(
-  /(export const VERSION\s*=\s*)"[^"]*"/,
-  `$1"${version}"`,
-);
+const updated = core.replace(/(export const VERSION\s*=\s*)"[^"]*"/, `$1"${version}"`);
 if (updated === core) {
   // Either already current, or the pattern is gone — those need different fixes,
   // so do not report them the same way.

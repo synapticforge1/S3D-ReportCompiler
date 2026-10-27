@@ -91,7 +91,9 @@ try {
     const detected = (text.match(/Compiling \d+ report\(s\) on (\S+)/) ?? [])[1] ?? "?";
     const html = join(work, String(i), "combined_report.html");
     const expected = run.name.split(" ")[0];
-    const pass = r.status === 0 && /PASS: every source word and number present/.test(text) &&
+    const pass =
+      r.status === 0 &&
+      /PASS: every source word and number present/.test(text) &&
       existsSync(html) &&
       detected === expected;
     if (!pass) {
@@ -99,13 +101,13 @@ try {
       const hint = /Can't find version|Requested version .* is not currently installed/i.test(text)
         ? ` — run: fnm install ${run.cmd[2]?.slice(8)}`
         : r.error
-        ? ` — ${r.error.message}`
-        : detected !== expected && r.status === 0
-        ? ` — the CLI reported running on ${detected}, not ${expected}`
-        : ` — ${
-          (text.match(/\b(ERR_[A-Z_]+|[A-Za-z]*Error): [^\n]*/) ??
-            text.trim().split("\n").slice(-1))[0]
-        }`;
+          ? ` — ${r.error.message}`
+          : detected !== expected && r.status === 0
+            ? ` — the CLI reported running on ${detected}, not ${expected}`
+            : ` — ${
+                (text.match(/\b(ERR_[A-Z_]+|[A-Za-z]*Error): [^\n]*/) ??
+                  text.trim().split("\n").slice(-1))[0]
+              }`;
       console.log(`❌ ${run.name.padEnd(28)} exit=${r.status}${hint}`);
       continue;
     }

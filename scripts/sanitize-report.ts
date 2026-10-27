@@ -127,7 +127,7 @@ for (const file of files) {
   // quiet the false positives. Widening the ignore list to fix a sloppy matcher
   // is how a redaction check ends up unable to fail.
   const survivors = tokens.filter((t) =>
-    new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(out)
+    new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(out),
   );
 
   if (survivors.length > 0) {

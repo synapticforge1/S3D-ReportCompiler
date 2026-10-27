@@ -259,7 +259,7 @@ const nestedInput = rt.joinPath(workingDir, INPUT_DIR);
 // defaults were never exposed to this (they are built from an absolute cwd),
 // which is exactly why it would have gone unnoticed.
 const htmlDir = await rt.resolvePath(
-  positional[0] ?? (await rt.dirExists(nestedInput) ? nestedInput : workingDir),
+  positional[0] ?? ((await rt.dirExists(nestedInput)) ? nestedInput : workingDir),
 );
 
 const outputPdf = await rt.resolvePath(
@@ -313,9 +313,7 @@ async function fontBytes(url: string, cacheDir: string): Promise<Uint8Array> {
  * suffix of another would be rewritten inside its neighbour's URL too.
  */
 async function inlineFonts(css: string, cacheDir: string): Promise<string> {
-  const refs = [
-    ...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map((m) => m[1])),
-  ];
+  const refs = [...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map((m) => m[1]))];
 
   // Resolve every reference first, then rewrite in a single pass. Substituting
   // one reference at a time by substring is unsafe: any font name that is a
@@ -389,11 +387,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations> {
     }
 
     // Items are text runs or marked-content markers; only the former have text.
-    const text = (await page.getTextContent()).items
-      .map((i) => ("str" in i ? i.str : ""))
-      .join("");
+    const text = (await page.getTextContent()).items.map((i) => ("str" in i ? i.str : "")).join("");
 
-    obs.text += text + "\n";
+    obs.text += `${text}\n`;
     if (text.trim().length === 0 && !drew) obs.blankPages.push(p);
 
     // These two patterns are specific to the SkyCiv diagram, which prints its
@@ -429,7 +425,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations> {
 // CompiledPDF/ is ever visible to it, and this guard catches the baked document
 // by name if the two directories are ever pointed at the same place.
 const TOOL_OWNED = new Set([
-  rt.baseName(outputPdf.replace(/\.pdf$/i, "") + ".html").toLowerCase(),
+  rt.baseName(`${outputPdf.replace(/\.pdf$/i, "")}.html`).toLowerCase(),
   "browser_example.html",
 ]);
 
@@ -441,8 +437,7 @@ const TOOL_OWNED = new Set([
 // call, which is not worth depending on.
 let allHtml: string[] = [];
 try {
-  allHtml = (await rt.listFiles(htmlDir))
-    .filter((n) => n.toLowerCase().endsWith(".html"));
+  allHtml = (await rt.listFiles(htmlDir)).filter((n) => n.toLowerCase().endsWith(".html"));
 } catch {
   console.error(`No such folder:\n  ${htmlDir}\n`);
   if (positional[0]) {
@@ -458,9 +453,7 @@ try {
   rt.exit(1);
 }
 
-const entries = sortReportNames(
-  allHtml.filter((n) => !TOOL_OWNED.has(n.toLowerCase())),
-);
+const entries = sortReportNames(allHtml.filter((n) => !TOOL_OWNED.has(n.toLowerCase())));
 
 if (entries.length === 0) {
   // Reaching here without positional[0] means the working directory had no
@@ -588,7 +581,7 @@ try {
   // Both outputs live in the output directory: the baked HTML is the exact
   // input Chrome was given, so keeping it next to the PDF is what makes a
   // result reproducible and inspectable after the fact.
-  const htmlPath = outputPdf.replace(/\.pdf$/i, "") + ".html";
+  const htmlPath = `${outputPdf.replace(/\.pdf$/i, "")}.html`;
 
   // Encode once: String.length counts UTF-16 code units, not bytes, so
   // reporting it as a size would understate anything non-ASCII.
@@ -679,8 +672,8 @@ try {
         (observed.diagramTitlePages.length === 0
           ? " (none recognised -- diagram check did not run)"
           : check.splitDiagrams.length === 0
-          ? ", intact"
-          : ", SPLIT"),
+            ? ", intact"
+            : ", SPLIT"),
     );
     console.log(
       `  latex:    ${check.leftoverLatex.length} surviving, ` +

@@ -1,4 +1,5 @@
-# `deno fmt` emits LF and reports a CRLF file as "Text differed by line endings", while a git
+# The formatter (`deno fmt` then, `bun fmt` since 2026-10-26) emits LF and reports a CRLF file as
+# needing formatting, while a git
 # running with core.autocrlf=true (this machine's, when this was written) hands out CRLF on every
 # checkout. Those two
 # fight each other: formatting the tree fixes `deno fmt --check` only until the next checkout
