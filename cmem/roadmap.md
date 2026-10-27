@@ -227,7 +227,7 @@ The transcript and file-history entries were migrated into `cmem/` and deleted. 
 After the final session, re-export and delete:
 
 ```bash
-deno run -A tests/controls/export-transcript.ts `
+bun tests/controls/export-transcript.ts `
   "$env:USERPROFILE\.claude\projects\<slug>\<session-id>.jsonl" `
   cmem/transcript/session-transcript.md
 Remove-Item "$env:USERPROFILE\.claude\projects\<slug>\<session-id>.jsonl"
@@ -345,27 +345,31 @@ nothing installed, which is what CI actually is. That procedure is now in
 
 ### Release path
 
+Since 2026-10-26 the release tooling runs on Bun from `package.json` (bun-migration step 4); the
+accounts above of 1.0.3 and 1.0.4 keep the `deno task` names they were run with.
+
 ```bash
-deno task bump          # or edit "version" in deno.json
-deno task release       # syncs version, commits, tags, pushes → triggers publish.yml
+bun run bump            # or edit "version" in deno.json
+bun run release         # syncs version, commits, tags, pushes → triggers publish.yml
 ```
 
 ⚠️ **Never run `deno publish` from a workstation.** JSR only records a provenance attestation for a
 publish arriving through its native GitHub Actions OIDC integration. A local publish succeeds and
 produces an *unattested* release, which cannot be undone for that version number.
 
-⚠️ **`deno task release` force-pushes the tag.** That is what makes a failed release retryable, and it
+⚠️ **`bun run release` force-pushes the tag.** That is what makes a failed release retryable, and it
 is only safe while the version is unpublished. Once a version exists on JSR it is immutable — moving
 its tag would leave the GitHub release pointing somewhere the published code does not. **Bump instead
 of retrying.** The script now enforces this rather than merely warning: it queries JSR and refuses if
 the version already exists.
 
-### What `deno task release` checks before it tags
+### What `bun run release` checks before it tags
 
 All three exist because of a release that went wrong; none is theoretical:
 
 | Refuses when | Because |
 |---|---|
+| `deno.json`, `package.json` or `src/report_core.ts` differ from `HEAD` beyond their version line (since 2026-10-26) | the release `git add`s those three, so anything else in them would ship under "bump version" — known-issues #30 |
 | the working tree has uncommitted tracked changes | they are not in the commit being tagged, so they are not in the release |
 | HEAD is behind its upstream | commits from elsewhere would be missing from the release |
 | the version is already on JSR | versions are immutable; forcing the tag would desync the GitHub release from the published code |
@@ -375,27 +379,41 @@ caught bug #25 — v1.0.1 was cut one commit before the fix it was meant to ship
 
 ### After the tag: the release is not done until provenance is confirmed
 
-`deno task release` now waits for the workflow to publish and then checks the attestation, via
+`bun run release` now waits for the workflow to publish and then checks the attestation, via
 [`scripts/verify-release.ts`](../scripts/verify-release.ts). It exits non-zero if the version landed
-without one, so an unattested release cannot pass quietly.
+without one, so an unattested release cannot pass quietly. 🔁 Corrected 2026-10-26: until then the
+check's progress and verdict were CAPTURED and never printed (Deno's `Command.output()`), so the
+wait was silent and only the exit code told — measured by the step-4 equivalence run, fixed in
+step 4 part 3 (`stdio: "inherit"`).
 
 ```bash
-deno task verify-release            # the version in deno.json
-deno task verify-release 1.0.1      # audit any version
+bun run verify-release              # the version in deno.json
+bun run verify-release 1.0.1        # audit any version
 ```
 
 Exit codes: **0** attested · **1** published but not attested · **2** not published yet. Verified
-against all three real cases. `deno task release --no-wait` skips the wait if you do not want to hold
-the terminal.
+against all three real cases (again on Deno, Bun and Node, 2026-10-26). `bun run release --no-wait`
+skips the wait if you do not want to hold the terminal.
 
-⚠️ **This detects, it does not prevent.** Deno has no pre-publish hook and a task cannot shadow a
-subcommand, so `deno publish` typed directly still works and still loses the attestation. What
+⚠️ **This detects, it does not prevent.** Deno has no pre-publish hook and nothing here can shadow
+its subcommand, so `deno publish` typed directly still works and still loses the attestation. There
+is still deliberately no `publish` script: `bun run publish` answers `Script not found "publish"`
+(measured 2026-10-26).
+
+⚠️ **`deno task release` is NOT dead — it runs the real release.** With no `tasks` in `deno.json`,
+`deno task <name>` falls back to `package.json` scripts, so `deno task release` runs
+`bun scripts/publish.ts`. Found the hard way on 2026-10-26: typed as a "does the old name still
+resolve?" probe, it synced the version and committed `bump version to v1.0.4` on the step-4 branch,
+sweeping the uncommitted edits in `deno.json` / `package.json` / `src/report_core.ts` into it (the
+defect below), and stopped only at the dirty-tree pre-flight — no tag, no push; undone with
+`git reset --soft`. **Never probe a release command by running it.** Read the script table instead
+(`bun run` with no arguments lists the scripts). What
 changed is that the loss is now loud and immediate instead of found days later.
 
 ⚠️ **None of it helps if `deno publish` is run directly**, which is how 1.0.2 lost its attestation
 (#26). The script is the whole release procedure, not a convenience wrapper around part of it:
 
-| | `deno task release` | `deno publish` |
+| | `bun run release` | `deno publish` |
 |---|---|---|
 | Provenance / Rekor entry | ✅ | ❌ **none** |
 | Git tag + `release/vX.Y.Z` branch | ✅ | ❌ |

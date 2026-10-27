@@ -2,8 +2,8 @@
  * Produces the committed sample reports in tests/HTMLFilesToBeCompiled/ from the
  * real client set in local/HTMLFilesToBeCompiled/ (which is git-ignored).
  *
- *   deno run -A scripts/sanitize-report.ts member_0_report.html member_1_report.html
- *   deno run -A scripts/sanitize-report.ts --check <files>   # report only, writes nothing
+ *   bun scripts/sanitize-report.ts member_0_report.html member_1_report.html
+ *   bun scripts/sanitize-report.ts --check <files>   # report only, writes nothing
  *
  * WHAT IS SCRUBBED, and why only this much
  * ----------------------------------------
@@ -35,6 +35,11 @@
  * failure rather than a warning.
  */
 
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+
+/** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
+const readText = (p: string) => readFile(p, "utf8");
+
 const REPLACEMENTS: Array<{ label: string; value: string }> = [
   { label: "Project Name", value: "Example Structure" },
   { label: "Designer", value: "Example Engineer" },
@@ -49,7 +54,7 @@ const REPLACEMENTS: Array<{ label: string; value: string }> = [
  */
 const IGNORE_TOKENS = new Set(["design"]);
 
-const args = [...Deno.args];
+const args = process.argv.slice(2);
 const checkOnly = args.includes("--check");
 const files = args.filter((a) => !a.startsWith("--"));
 
@@ -57,7 +62,7 @@ if (files.length === 0) {
   console.error("usage: sanitize-report.ts [--check] <report.html> [...]");
   console.error("Files are read from local/HTMLFilesToBeCompiled/ and written to");
   console.error("tests/HTMLFilesToBeCompiled/ with the same name.");
-  Deno.exit(1);
+  process.exit(1);
 }
 
 const SRC_DIR = "local/HTMLFilesToBeCompiled";
@@ -84,7 +89,7 @@ for (const file of files) {
 
   let html: string;
   try {
-    html = await Deno.readTextFile(srcPath);
+    html = await readText(srcPath);
   } catch {
     console.error(`❌ ${name}: not found at ${srcPath}`);
     failures++;
@@ -143,13 +148,13 @@ for (const file of files) {
   if (checkOnly) {
     console.log(`✓ ${name}: would remove ${summary}; ${tokens.length} token(s) verified absent`);
   } else {
-    await Deno.mkdir(OUT_DIR, { recursive: true });
-    await Deno.writeTextFile(`${OUT_DIR}/${name}`, out);
+    await mkdir(OUT_DIR, { recursive: true });
+    await writeFile(`${OUT_DIR}/${name}`, out);
     console.log(`✅ ${name}: removed ${summary}; ${tokens.length} token(s) verified absent`);
   }
 }
 
 if (failures > 0) {
   console.error(`\n${failures} file(s) failed. Nothing partial was shipped for them.`);
-  Deno.exit(1);
+  process.exit(1);
 }

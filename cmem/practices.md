@@ -326,9 +326,11 @@ files for it.
 
 **Scope:** this applies only to scripts that would otherwise be shell scripts. Regular project files
 are not covered: `main.ts`, `src/`, tests and everything else that is part of the program keep
-running on Deno, Node and Bun as before. It also does not change the existing Deno tooling in [`scripts/`](../scripts/) (`bump`, `sync-version`, `publish`,
-`verify-release`, `sanitize-report`). Those are Deno scripts by design, run with scoped permissions,
-and they stay that way.
+running on Deno, Node and Bun as before. 🔁 *Superseded 2026-10-26:* this paragraph exempted the
+Deno tooling in [`scripts/`](../scripts/) ("Deno scripts by design … they stay that way"). The owner
+then ordered the toolchain off Deno ([bun-migration.md](bun-migration.md)), and on 2026-10-26 all of
+`scripts/` and `tests/controls/` moved to `node:` builtins run by Bun — each proved equivalent to its
+Deno original first (bun-migration step 4). The scoped `--allow-net` permissions went with Deno.
 
 This rule was set by the project owner as a convention. It does not come from a specific incident.
 It follows from the project running on Windows, macOS and Linux: one TypeScript file works on every

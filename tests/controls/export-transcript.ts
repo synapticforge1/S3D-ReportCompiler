@@ -4,7 +4,7 @@
 // change was made travels with the repository instead of living in one user's
 // profile directory.
 //
-//   deno run -A cmem/controls/export-transcript.ts <session.jsonl> <out.md>
+//   bun tests/controls/export-transcript.ts <session.jsonl> <out.md>
 //
 // Session logs live in ~/.claude/projects/<slug>/<session-id>.jsonl
 //
@@ -18,12 +18,17 @@
 //
 // Internal reasoning is not exported.
 
-const src = Deno.args[0];
-const out = Deno.args[1];
+import { readFile, writeFile } from "node:fs/promises";
+
+/** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
+const readText = (p: string) => readFile(p, "utf8");
+
+const src = process.argv[2];
+const out = process.argv[3];
 
 if (!src || !out) {
   console.error("usage: export-transcript.ts <session.jsonl> <out.md>");
-  Deno.exit(1);
+  process.exit(1);
 }
 
 const RESULT_CAP = 1200;
@@ -72,7 +77,7 @@ function textOf(content: unknown): string {
   return parts.join("\n");
 }
 
-const lines = (await Deno.readTextFile(src)).split("\n").filter((l) => l.trim());
+const lines = (await readText(src)).split("\n").filter((l) => l.trim());
 const md: string[] = [];
 let turns = 0;
 
@@ -112,8 +117,8 @@ Regenerate with [export-transcript.ts](../controls/export-transcript.ts).
 `;
 
 const text = header + md.join("");
-await Deno.writeTextFile(out, text);
+await writeFile(out, text);
 
 console.log(`turns:  ${turns}`);
-console.log(`source: ${(new TextEncoder().encode(await Deno.readTextFile(src)).length / 1e6).toFixed(2)} MB`);
+console.log(`source: ${(new TextEncoder().encode(await readText(src)).length / 1e6).toFixed(2)} MB`);
 console.log(`output: ${(new TextEncoder().encode(text).length / 1e6).toFixed(2)} MB`);

@@ -4,8 +4,8 @@
 // so a public repository does not carry the author's username and directory
 // layout. Roadmap task 1.
 //
-//   deno run -A tests/controls/redact-paths.ts [file] [--check] [--user=NAME]
-//                                                     [--folder=NAME]
+//   bun tests/controls/redact-paths.ts [file] [--check] [--user=NAME]
+//                                              [--folder=NAME]
 //
 // Defaults to cmem/transcript/session-transcript.md, resolved relative to this
 // script. --check reports what would change without writing.
@@ -23,21 +23,26 @@
 // pattern that only matches a single backslash silently misses every escaped
 // occurrence -- which is most of them. Hence SEP below.
 
-const args = Deno.args.filter((a) => !a.startsWith("--"));
-const check = Deno.args.includes("--check");
+import { readFile, writeFile } from "node:fs/promises";
+
+/** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
+const readText = (p: string | URL) => readFile(p, "utf8");
+
+const argv = process.argv.slice(2);
+const args = argv.filter((a) => !a.startsWith("--"));
+const check = argv.includes("--check");
 
 const flagValue = (name: string): string | undefined =>
-  Deno.args.find((a) => a.startsWith(`--${name}=`))?.split("=").slice(1).join("=");
+  argv.find((a) => a.startsWith(`--${name}=`))?.split("=").slice(1).join("=");
 
 // Whose name to count, and which work folder to collapse. Both are discovered
 // rather than baked in, so this runs for anyone and names nobody in the source.
-const USER = flagValue("user") ??
-  Deno.env.get("USERNAME") ?? Deno.env.get("USER") ?? "";
+const USER = flagValue("user") ?? process.env.USERNAME ?? process.env.USER ?? "";
 const WORK_FOLDER = flagValue("folder");
 
 if (!USER) {
   console.error("Could not determine the username; pass --user=NAME.");
-  Deno.exit(1);
+  process.exit(1);
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -74,7 +79,7 @@ const defaultTarget = new URL("../../cmem/transcript/session-transcript.md", imp
 const target = args[0] ?? defaultTarget;
 const targetLabel = args[0] ?? defaultTarget.href;
 
-const original = await Deno.readTextFile(target);
+const original = await readText(target);
 let text = original;
 const applied: string[] = [];
 
@@ -103,13 +108,13 @@ if (after > 0) {
 
 if (check) {
   console.log("\n--check: nothing written.");
-  Deno.exit(0);
+  process.exit(0);
 }
 
 if (text === original) {
   console.log("nothing to redact.");
-  Deno.exit(0);
+  process.exit(0);
 }
 
-await Deno.writeTextFile(target, text);
+await writeFile(target, text);
 console.log("redacted.");

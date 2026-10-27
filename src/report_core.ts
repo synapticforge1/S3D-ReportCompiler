@@ -65,7 +65,7 @@ import { RegisterHTMLHandler } from "mathjax-full/js/handlers/html.js";
 import { AllPackages } from "mathjax-full/js/input/tex/AllPackages.js";
 
 /**
- * Package version. Written by `deno task update-version` from deno.json, which
+ * Package version. Written by `bun run update-version` from deno.json, which
  * is the single source of truth -- do not edit this by hand.
  */
 export const VERSION = "1.0.4";

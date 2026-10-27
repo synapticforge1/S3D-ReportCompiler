@@ -1,14 +1,14 @@
 /**
  * Confirms a published version actually went out the attested path.
  *
- *   deno task verify-release            # the version in deno.json
- *   deno task verify-release 1.0.2      # a specific version
- *   deno task verify-release --wait     # poll while JSR ingests (after a release)
+ *   bun run verify-release            # the version in deno.json
+ *   bun run verify-release 1.0.2      # a specific version
+ *   bun run verify-release --wait     # poll while JSR ingests (after a release)
  *
  * WHY THIS EXISTS
  * ---------------
  * 1.0.2 was published by running `deno publish` from a workstation instead of
- * `deno task release`. The package was fine and JSR scored it 100 — but it has
+ * `bun run release`. The package was fine and JSR scored it 100 — but it has
  * no provenance, no git tag and no GitHub release, and JSR versions are
  * immutable, so it could not be corrected.
  *
@@ -19,16 +19,22 @@
  *
  * ⚠️ This cannot PREVENT a direct `deno publish` — Deno has no pre-publish hook,
  * and a subcommand cannot be shadowed by a task. It closes the loop instead: run
- * automatically at the end of `deno task release`, it turns a silent loss into an
+ * automatically at the end of `bun run release`, it turns a silent loss into an
  * immediate, loud one.
  *
  * Exit codes: 0 attested · 1 published but NOT attested · 2 not published yet.
  */
 
-import denoJson from "../deno.json" with { type: "json" };
+import { readFileSync } from "node:fs";
 
-const args = Deno.args.filter((a) => !a.startsWith("-"));
-const wait = Deno.args.includes("--wait");
+const denoJson = JSON.parse(readFileSync(new URL("../deno.json", import.meta.url), "utf8")) as {
+  name: string;
+  version: string;
+};
+
+const argv = process.argv.slice(2);
+const args = argv.filter((a) => !a.startsWith("-"));
+const wait = argv.includes("--wait");
 const version = args[0] ?? denoJson.version;
 
 const [scope, name] = denoJson.name.replace(/^@/, "").split("/");
@@ -39,9 +45,9 @@ type VersionInfo = { rekorLogId?: string | null; yanked?: boolean };
 /**
  * The JSR record for this version, or `null` if it is not published yet.
  *
- * ⚠️ A missing `--allow-net` permission exits rather than returning `null`: that
- * is a broken check, not an absent version, and reporting the two the same way
- * is how a guard ends up unable to fail.
+ * (Under Deno a missing `--allow-net` permission exited here rather than
+ * returning `null`. Bun and Node have no permission system, so that case no
+ * longer exists; a network failure still reads as "not published yet".)
  */
 async function fetchVersion(): Promise<VersionInfo | null> {
   try {
@@ -51,12 +57,7 @@ async function fetchVersion(): Promise<VersionInfo | null> {
       return null;
     }
     return (await res.json()) as VersionInfo;
-  } catch (e) {
-    if (e instanceof Deno.errors.NotCapable) {
-      console.error(`❌ Needs --allow-net=api.jsr.io to check anything. Refusing to`);
-      console.error(`   report success from a check that cannot run.`);
-      Deno.exit(1);
-    }
+  } catch {
     return null;
   }
 }
@@ -82,23 +83,23 @@ if (!info) {
   console.error(`\n⚠️  ${version} is not on JSR${wait ? " yet" : ""}.`);
   console.error(`   If a release is in flight, watch it at:`);
   console.error(`   https://github.com/synapticforge1/S3D-ReportCompiler/actions`);
-  Deno.exit(2);
+  process.exit(2);
 }
 
 if (info.rekorLogId) {
   console.log(`\n✅ ${version} is published AND attested.`);
   console.log(`   Rekor log ID: ${info.rekorLogId}`);
-  Deno.exit(0);
+  process.exit(0);
 }
 
 console.error(`\n❌ ${version} is published but has NO provenance attestation.`);
 console.error(`   No Sigstore/Rekor entry — JSR cannot show where this build came from.\n`);
 console.error(`   This is what a workstation \`deno publish\` produces. Releases must go`);
-console.error(`   through \`deno task release\`, which tags and lets GitHub Actions publish`);
+console.error(`   through \`bun run release\`, which tags and lets GitHub Actions publish`);
 console.error(`   with an OIDC token; that token is the only source of provenance.\n`);
 console.error(`   JSR versions are IMMUTABLE, so ${version} cannot be fixed. Bump and`);
 console.error(`   release again:\n`);
-console.error(`     deno task bump`);
-console.error(`     deno task release\n`);
+console.error(`     bun run bump`);
+console.error(`     bun run release\n`);
 console.error(`   ⚠️  jsr.io may still show score 100 — provenance is not scored.`);
-Deno.exit(1);
+process.exit(1);

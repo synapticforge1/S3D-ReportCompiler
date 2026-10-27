@@ -178,7 +178,7 @@ The only way to see the difference is to ask for `rekorLogId` directly, or to no
 no release branch were created.
 
 ⚠️ A local `deno publish` is not blocked by anything and produces a perfectly good package. The rule
-"always release with `deno task release`" is enforced only by habit — `deno publish` typed directly
+"always release with `bun run release`" (`deno task release` until 2026-10-26) is enforced only by habit — `deno publish` typed directly
 still works, and silently costs the attestation.
 
 ### Not a bug, but it will look like one — Deno's minimum dependency age
@@ -218,6 +218,19 @@ Also measured, not a bug: the README said "Node 22.6+". That holds for the INSTA
 serves compiled JavaScript; 22.6.0 PASSES) but not for a clone, whose `main.ts` needs Node's
 unflagged type stripping — 22.6.0 and 22.17.1 fail with `ERR_UNKNOWN_FILE_EXTENSION`, 22.18.0
 passes. `engines.node` is now `>=22.18.0`, and `bun run runtimes` checks that floor.
+
+### The release sweeps uncommitted edits into its commit (found 2026-10-26)
+
+| # | Bug | Silent? |
+|---|---|---|
+| 30 | **The release commits whatever is uncommitted in `deno.json`, `package.json` and `src/report_core.ts`** — step 2 of `scripts/publish.ts` runs `git add` on exactly those three files before the dirty-tree pre-flight looks, so an unfinished edit to the core module is swept into the "bump version" commit and released. Pinned by the step-4 equivalence case `pub-sweeps-core` (original and port alike); then it FIRED for real on 2026-10-26 (bun-migration, roadmap § Release path) — stopped only because other files were dirty too | **yes** — the commit is titled "bump version", so nothing says code went with it |
+
+✅ **#30 fixed 2026-10-26** (step 4, part 3): `publish.ts` step 0 compares those three files with
+`HEAD` (staged and unstaged) and refuses unless every changed line is a version line — the exact
+output of `bun run bump`. Proved on Bun and Node: refuses a code edit in `report_core.ts`, a staged
+`package.json` edit and a non-version `deno.json` edit (no commit, no tag); still releases after a
+real `bump`, with the release commit touching exactly the three files. Inverted: guard disabled →
+all three refusal cases fail.
 
 ⚠️ **Bug 23 is a gap between two decisions that were each right.** `nodeModulesDir: "manual"` was
 chosen so Deno reads the same `node_modules` as Node and Bun, which is what preserves `.npmrc`'s
