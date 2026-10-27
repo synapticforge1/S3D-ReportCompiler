@@ -1,14 +1,14 @@
 /**
  * Confirms a published version actually went out the attested path.
  *
- *   deno task verify-release            # the version in deno.json
- *   deno task verify-release 1.0.2      # a specific version
- *   deno task verify-release --wait     # poll while JSR ingests (after a release)
+ *   bun run verify-release            # the version in deno.json
+ *   bun run verify-release 1.0.2      # a specific version
+ *   bun run verify-release --wait     # poll while JSR ingests (after a release)
  *
  * WHY THIS EXISTS
  * ---------------
  * 1.0.2 was published by running `deno publish` from a workstation instead of
- * `deno task release`. The package was fine and JSR scored it 100 — but it has
+ * `bun run release`. The package was fine and JSR scored it 100 — but it has
  * no provenance, no git tag and no GitHub release, and JSR versions are
  * immutable, so it could not be corrected.
  *
@@ -19,7 +19,7 @@
  *
  * ⚠️ This cannot PREVENT a direct `deno publish` — Deno has no pre-publish hook,
  * and a subcommand cannot be shadowed by a task. It closes the loop instead: run
- * automatically at the end of `deno task release`, it turns a silent loss into an
+ * automatically at the end of `bun run release`, it turns a silent loss into an
  * immediate, loud one.
  *
  * Exit codes: 0 attested · 1 published but NOT attested · 2 not published yet.
@@ -95,11 +95,11 @@ if (info.rekorLogId) {
 console.error(`\n❌ ${version} is published but has NO provenance attestation.`);
 console.error(`   No Sigstore/Rekor entry — JSR cannot show where this build came from.\n`);
 console.error(`   This is what a workstation \`deno publish\` produces. Releases must go`);
-console.error(`   through \`deno task release\`, which tags and lets GitHub Actions publish`);
+console.error(`   through \`bun run release\`, which tags and lets GitHub Actions publish`);
 console.error(`   with an OIDC token; that token is the only source of provenance.\n`);
 console.error(`   JSR versions are IMMUTABLE, so ${version} cannot be fixed. Bump and`);
 console.error(`   release again:\n`);
-console.error(`     deno task bump`);
-console.error(`     deno task release\n`);
+console.error(`     bun run bump`);
+console.error(`     bun run release\n`);
 console.error(`   ⚠️  jsr.io may still show score 100 — provenance is not scored.`);
 process.exit(1);

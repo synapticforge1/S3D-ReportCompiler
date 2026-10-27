@@ -8,8 +8,8 @@ Each builds a small input folder; point the build at it and check the outcome ag
 [../../cmem/testing.md](../../cmem/testing.md).
 
 ```bash
-deno run -A tests/controls/control-unknown-delimiter.ts /tmp/ctl
-deno run -A main.ts /tmp/ctl /tmp/ctl/out.pdf     # must fail, exit 1
+bun tests/controls/control-unknown-delimiter.ts /tmp/ctl
+bun main.ts /tmp/ctl /tmp/ctl/out.pdf     # must fail, exit 1 (node / deno run -A work too)
 ```
 
 ⚠️ Pass **both** paths explicitly. The build's defaults resolve from the current working directory,

@@ -145,10 +145,10 @@ execute a build — so the fix is the extra export rather than pointing `.` at `
 
 | Task | Installs from | Use when |
 |---|---|---|
-| `deno task install` | this working tree | developing, or you keep a clone — no publish, no registry lag |
-| `deno task install:jsr` | the published package | you want exactly what users get |
+| `bun run cli:install` | this working tree | developing, or you keep a clone — no publish, no registry lag |
+| `bun run cli:install-jsr` | the published package | you want exactly what users get |
 
-⚠️ **`deno task install` deliberately omits `--config deno.json`.** Passing it breaks the install:
+⚠️ **`bun run cli:install` deliberately omits `--config deno.json`.** Passing it breaks the install:
 
 ```
 error: Failed to resolve the specifier "mathjax-full/js/input/tex/AllPackages.js" as its
@@ -192,6 +192,6 @@ harmless. Chasing it leads straight back to installing a vulnerable dependency t
 
 ## Browser bundle
 
-`deno task bundle:browser` → `bun build --target=browser` → `tests/report_core.browser.js` (1.57 MB,
+`bun run bundle:browser` → `bun build --target=browser` → `tests/report_core.browser.js` (1.57 MB,
 285 modules, mostly MathJax). Generated, and git-ignored. It is emitted into `tests/` because
 `tests/browser_example.html` imports it as a sibling.

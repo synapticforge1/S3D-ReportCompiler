@@ -7,9 +7,9 @@
  * the native OIDC integration. A local `deno publish` would succeed and produce
  * an unattested release.
  *
- * Usage: deno task release      (this file; there is no `publish` task)
+ * Usage: bun run release      (this file; there is no `publish` task)
  *
- * ⚠️ **`deno task release`, never `deno publish`.** Those two differ by one word
+ * ⚠️ **`bun run release`, never `deno publish`.** Those two differ by one word
  * and do completely different things: this one tags and lets GitHub Actions
  * publish with an OIDC token, which is the only source of provenance;
  * `deno publish` uploads straight from the workstation and produces an
@@ -129,8 +129,8 @@ if (diffCode !== 0) {
       await res.body?.cancel();
       console.error(`\n❌ ${denoJson.name}@${version} is ALREADY published on JSR.`);
       console.error(`   JSR versions are immutable — bump instead:\n`);
-      console.error(`     deno task bump      # ${version} -> next patch`);
-      console.error(`     deno task release\n`);
+      console.error(`     bun run bump      # ${version} -> next patch`);
+      console.error(`     bun run release\n`);
       process.exit(1);
     }
     await res.body?.cancel();
@@ -179,13 +179,13 @@ console.log(`Watch progress at: https://github.com/synapticforge1/S3D-ReportComp
 // everywhere except one field on the JSR API (see cmem/known-issues.md #26).
 //
 // Skip with --no-wait when you do not want to hold the terminal; the check is
-// then `deno task verify-release` whenever you like.
+// then `bun run verify-release` whenever you like.
 if (process.argv.slice(2).includes("--no-wait")) {
-  console.log(`\n--no-wait: not waiting. Confirm with:  deno task verify-release`);
+  console.log(`\n--no-wait: not waiting. Confirm with:  bun run verify-release`);
 } else {
   console.log(`\nWaiting for the workflow to publish, then checking provenance…`);
   console.log(
-    `(Ctrl-C is safe — the release continues; check later with deno task verify-release)\n`,
+    `(Ctrl-C is safe — the release continues; check later with bun run verify-release)\n`,
   );
 
   const check = spawnSync(self[0], [

@@ -122,12 +122,12 @@ node_modules/@jrmarcum/s3d-reportcompiler/main.js" }` — and run `npm run compi
 #### From a checkout
 
 ```bash
-deno task install       # global command built from THIS working tree
-deno task install:jsr   # global command from the published registry
-deno task uninstall
+bun run cli:install       # global command built from THIS working tree
+bun run cli:install-jsr   # global command from the published registry
+bun run cli:uninstall
 ```
 
-`deno task install` is the one to use while developing or if you keep a clone: it
+`bun run cli:install` is the one to use while developing or if you keep a clone: it
 installs whatever is in your working tree, so there is no publish step and no
 waiting on the registry. `install:jsr` installs the released package and passes
 `--min-dep-age=0`, so it also works within 24 hours of a release.

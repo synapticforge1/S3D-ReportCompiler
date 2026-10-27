@@ -90,7 +90,7 @@ committed to this repository, but both are worth knowing about before shipping o
 
 ### 1. The browser bundle
 
-`deno task bundle:browser` produces `tests/report_core.browser.js`, which **bundles MathJax**
+`bun run bundle:browser` produces `tests/report_core.browser.js`, which **bundles MathJax**
 (Apache-2.0) — roughly 285 modules. It is generated and git-ignored.
 
 If that file is ever distributed, Apache-2.0 §4 applies: include a copy of the licence and retain the

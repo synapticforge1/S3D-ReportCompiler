@@ -39,7 +39,7 @@ CLAUDE.md
 # re-included. See cmem/roadmap.md task 3b.
 CompiledPDF/
 
-# Generated browser bundle — rebuild with `deno task bundle:browser`
+# Generated browser bundle — rebuild with `bun run bundle:browser`
 /tests/report_core.browser.js
 
 # Font cache, populated on first run so later builds work offline. Not anchored

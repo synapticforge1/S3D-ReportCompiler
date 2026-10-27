@@ -2,8 +2,8 @@
  * Produces the committed sample reports in tests/HTMLFilesToBeCompiled/ from the
  * real client set in local/HTMLFilesToBeCompiled/ (which is git-ignored).
  *
- *   deno run -A scripts/sanitize-report.ts member_0_report.html member_1_report.html
- *   deno run -A scripts/sanitize-report.ts --check <files>   # report only, writes nothing
+ *   bun scripts/sanitize-report.ts member_0_report.html member_1_report.html
+ *   bun scripts/sanitize-report.ts --check <files>   # report only, writes nothing
  *
  * WHAT IS SCRUBBED, and why only this much
  * ----------------------------------------

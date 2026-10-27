@@ -5,8 +5,8 @@
  *
  * deno.json is the single source of truth for both; everything else is a copy.
  *
- * Run via:  deno task update-version
- * Must be invoked from the project root (deno task does this automatically).
+ * Run via:  bun run update-version
+ * Must be invoked from the project root (bun run does this automatically).
  */
 
 import { readFile, writeFile } from "node:fs/promises";

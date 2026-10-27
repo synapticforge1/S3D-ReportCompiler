@@ -8,14 +8,14 @@ longer reproduces its sources, so running the build *is* the test.
 Defaults resolve from the **working directory**, so which folder you stand in selects the input set:
 
 ```bash
-bun run check                            # types (bun check; `deno task check` agrees until step 7)
+bun run check                            # types (bun check; `bun run check:deno` agrees until step 7)
 bun run format:check                     # formatting (main.ts, src/, scripts/) + its canary
 bun run lint                             # Biome + its canary
 bun run runtimes                         # every Node LTS line, Bun, Deno — one baked document
 deno doc --lint src/*.ts                 # docs coverage — a scored JSR criterion
 deno check --doc src/*.ts                # the JSDoc examples actually compile
 deno publish --dry-run --allow-dirty     # JSR validation, incl. slow types
-deno task verify-release <version>       # after a release: did it get an attestation?
+bun run verify-release <version>       # after a release: did it get an attestation?
 
 cd tests && deno run -A ../main.ts       # the 2 committed samples
 cd local && deno run -A ../main.ts       # the real 48-report set
@@ -166,7 +166,7 @@ the field rewrite will not reach:
 
 ```bash
 # copy a report, append the real project name to its MEMBER heading, then:
-deno run -A scripts/sanitize-report.ts --check negctl_report.html
+bun scripts/sanitize-report.ts --check negctl_report.html
 # ❌ negctl_report.html: 2 removed term(s) still present: …
 # exit=1
 ```
@@ -218,7 +218,7 @@ whatever `deno upgrade lts` names. Node lines leave the matrix when the schedule
 ## Browser
 
 ```bash
-deno task bundle:browser
+bun run bundle:browser
 npm run serve          # file:// blocks fetch
 ```
 

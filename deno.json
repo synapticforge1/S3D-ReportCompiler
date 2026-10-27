@@ -26,18 +26,5 @@
     "pdf-lib": "npm:pdf-lib@1.17.1",
     "pdfjs-dist/": "npm:pdfjs-dist@4.6.82/"
   },
-  "nodeModulesDir": "manual",
-  "tasks": {
-    "build": "deno run -A main.ts",
-    "build:sample": "cd tests && deno run -A ../main.ts",
-    "check": "deno check main.ts src/report_core.ts src/report_runtime.ts",
-    "install": "deno install -g -A --force -n s3d-reportcompiler main.ts",
-    "install:jsr": "deno install -g -A --force --min-dep-age=0 -n s3d-reportcompiler jsr:@jrmarcum/s3d-reportcompiler/cli",
-    "uninstall": "deno uninstall -g s3d-reportcompiler",
-    "bundle:browser": "bun build ./src/report_core.ts --target=browser --outfile=tests/report_core.browser.js",
-    "update-version": "deno run --allow-read --allow-write scripts/sync-version.ts",
-    "bump": "deno run --allow-read --allow-write scripts/bump.ts",
-    "release": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net=api.jsr.io scripts/publish.ts",
-    "verify-release": "deno run --allow-read --allow-net=api.jsr.io scripts/verify-release.ts"
-  }
+  "nodeModulesDir": "manual"
 }

@@ -3,9 +3,9 @@
  * package.json + src/report_core.ts (by importing sync-version.ts, which runs after
  * deno.json has already been written here).
  *
- * Run via:  deno task bump            # rightmost: 1.6.2 → 1.6.3
- *           deno task bump minor      # middle:    1.6.2 → 1.7.0
- *           deno task bump major      # leftmost:  1.6.2 → 2.0.0
+ * Run via:  bun run bump            # rightmost: 1.6.2 → 1.6.3
+ *           bun run bump minor      # middle:    1.6.2 → 1.7.0
+ *           bun run bump major      # leftmost:  1.6.2 → 2.0.0
  *
  * VERSIONS ARE A SEQUENTIAL COUNTER, NOT A COMPATIBILITY SIGNAL (owner directive, carried over
  * from the sibling `wasmtk` project). `patch` / `minor` / `major` name the POSITION to increment —
@@ -25,7 +25,7 @@
  * one rather than guessing — no carry rule reproduces the intended next version.
  *
  * Unlike `update-version` (which only COPIES the existing deno.json version outward), this RAISES
- * it first. Must be run from the project root (deno task does this automatically).
+ * it first. Must be run from the project root (bun run does this automatically).
  */
 
 import { readFile, writeFile } from "node:fs/promises";
@@ -63,7 +63,7 @@ if (minor > MAX_COMPONENT || patch > MAX_COMPONENT) {
     `❌ bump: ${from} has a minor/patch component above ${MAX_COMPONENT}, which the odometer ` +
       `sequencing rule cannot carry from unambiguously.\n` +
       `   Edit "version" in deno.json by hand to the intended next release, run ` +
-      `\`deno task update-version\`, then use \`deno task bump\` from there.`,
+      `\`bun run update-version\`, then use \`bun run bump\` from there.`,
   );
   process.exit(1);
 }
