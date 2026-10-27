@@ -57,11 +57,24 @@ Node and Bun with the baked HTML's sha256 unchanged, plus the step's own done-co
 1. **`jsr.json` becomes the one manifest (F1) — MEASURED 2026-10-26: it cannot land before step 7
    here.** binaryang's recipe (manifest in `jsr.json`, `--config jsr.json` while `deno.json` lives)
    **silently corrupts this package.** See § "Step 1, measured" below; the revised order follows it.
-2. **`tsconfig.json` + `bun check`.** `strict` (Deno's default), `types: ["node"]`, `@types/node`
-   pinned to the Node floor (not `^22.10.2`), `erasableSyntaxOnly: true` to prove F7. `bun check`
-   (Bun ≥ 1.4.3; mind the `check` script-shadowing trap). **Done when** it accepts what `deno check`
-   accepts and reports the same error on a planted fault. `deno doc --lint` / `deno check --doc` are
-   JSR-score checks: they stay on Deno with the publish (owner: "the jsr items").
+2. ✅ **`bun check` — DONE 2026-10-26** (branch `bun/2-bun-check`). `bun run check` =
+   `bun check -p tsconfig.check.json` over the same three entry files `deno task check` covers:
+   `strict`, `types: ["node"]`, `erasableSyntaxOnly: true` (passes: F7 proved), `@types/node` pinned
+   exact at the installed `22.20.1` (was `^22.10.2`). Measured against `deno check`: both clean;
+   both report the same TS2322 at the same line:column for a planted wrong assignment in
+   `report_core.ts` and a wrong use of `pdf-lib`'s real types in `main.ts` (so npm types RESOLVE);
+   both refuse a planted `Deno.cwd()` (TS2304) and `Bun.file()` (TS2868). The existing
+   `typeof Deno` passes in both because `report_runtime.ts:38-39` declares the shapes it reads.
+   ⚠️ **Why the file is NOT `tsconfig.json`:** Deno reads a `tsconfig.json` beside `package.json`,
+   and with it `deno doc --lint` printed 64 "Failed resolving types" warnings (it follows
+   `types: ["node"]` into `@types/node` and cannot resolve its references); with the name Deno does
+   not discover, 0. It also keeps `deno publish` on Deno's own defaults after step 7 (binaryang's
+   B7 trap). Gate after the change: every check green; sample build PASS on Deno, Bun and Node 24
+   with the baked HTML identical (`7F283563003F`). `deno doc --lint` / `deno check --doc` stay on
+   Deno with the publish (owner: "the jsr items"). Found on the way: `package-lock.json` still
+   named the package `compiled-reports` 1.0.0 — it is a FOURTH version copy that `sync-version.ts`
+   does not write; `npm install` refreshed the root fields only (no resolution moved). Step 7's
+   one version source must cover it.
 3. **Format: `bun fmt`; lint: Biome.** 🔒 Owner rule, 2026-10-26: use a tool "unless bun can
    perform the same task". Measured on Bun 1.4.4 the same day: **`bun fmt` exists** (native,
    "like Prettier"; JS/TS, CSS, HTML, JSON, YAML, Markdown; `--check` exits 1) — it shipped after
