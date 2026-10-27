@@ -13,6 +13,7 @@
     "build:bun": "bun run main.ts",
     "bundle:browser": "bun build ./src/report_core.ts --target=browser --outfile=tests/report_core.browser.js",
     "check": "bun check -p tsconfig.check.json",
+    "runtimes": "bun scripts/check-runtimes.ts",
     "serve": "npx --yes serve ."
   },
   "dependencies": {
@@ -24,6 +25,6 @@
     "@types/node": "22.20.1"
   },
   "engines": {
-    "node": ">=22.6"
+    "node": ">=22.18.0"
   }
 }

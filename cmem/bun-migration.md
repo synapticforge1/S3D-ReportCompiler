@@ -112,9 +112,11 @@ Node and Bun with the baked HTML's sha256 unchanged, plus the step's own done-co
    it the test fails and is re-recorded (★ 2.6). Guard "ran nothing": every control file must be
    exercised. Each assertion inverted once before it counts. Needs Chrome, so it is a CI job with a
    browser, not a unit test. May land before step 4 if it runs the controls through Deno at first.
-6. **CI and the release path.** Add a `ci.yml` gate (none exists): `bun check`, dprint, the sample
-   build on Bun, Node LTS lines from Node's schedule (22, 24 today; **26 becomes LTS on
-   2026-10-28**) and a Deno leg while consumers use Deno — Chrome is on GitHub's Ubuntu runners
+6. **CI and the release path.** Add a `ci.yml` gate (none exists): `bun check`, the formatter, and
+   **`bun run runtimes`** (exists since 2026-10-26 — the floor, every Node LTS line from the
+   schedule, Bun and Deno, one baked document; on the runner it needs fnm installed, or a
+   `setup-node` matrix feeding the same checks), plus the INSTALLED-package matrix of
+   `testing.md` § "Runtime matrix" before a tag (it is what caught known-issues #27–#29) — Chrome is on GitHub's Ubuntu runners
    (UNMEASURED with this build). `publish.yml`: keep `setup-deno` + `deno publish --config jsr.json`
    (F2: never `npx jsr publish`; a `package.json` makes it skip the type check); move the `deno eval`
    report logic into a TS script run by a pinned `setup-bun`. **Proved only by one real release**
