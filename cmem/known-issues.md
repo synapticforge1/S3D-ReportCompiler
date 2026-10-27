@@ -202,6 +202,23 @@ deno install -g -n s3d-reportcompiler -A --min-dep-age=0 jsr:@jrmarcum/s3d-repor
 Worth knowing before diagnosing a phantom packaging bug: the message points at the wrong version, and
 everything about it looks like a broken publish.
 
+### Consumer installs off Deno — three README claims that did not hold (measured 2026-10-26)
+
+Found by installing the PUBLISHED 1.0.4 into a scratch project and running it on every runtime
+([testing.md](testing.md) § "Runtime matrix"). All three were in the README; all three are fixed
+there.
+
+| # | Claim | What actually happens | Silent? |
+|---|---|---|---|
+| 27 | `npx jsr add @jrmarcum/s3d-reportcompiler` installs on Node | **npm 12.2.0, bundled with Node 24.21.0, refuses it**: `EALLOWREMOTE: Fetching packages of type "remote" have been disabled`, because JSR's npm registry serves the tarball from a URL npm 12 classes as remote and `allow-remote` defaults to `none`. npm 10.9.9 (Node 22) has no such setting; npm 11.20.0 (Node 26) defaults to `all`. Fix: `npm_config_allow_remote=all` for the install (measured: installs, runs) | no — loud, but on the current LTS's default npm |
+| 28 | `bunx jsr add @jrmarcum/s3d-reportcompiler` installs with Bun | the jsr CLI picks the package manager from the lockfile; a fresh project has none, so it ran `npm install` (here: "'npm' is not recognized"). **`bunx jsr add --bun`** installs through Bun and writes the project `.npmrc` itself; the README's `~/.bun/bin/.npmrc` step is not needed | no |
+| 29 | `bun install -g @jsr/jrmarcum__s3d-reportcompiler` and `bunx @jrmarcum/s3d-reportcompiler` give a command | **JSR's npm packages carry no `bin`** (1.0.4's manifest keys: name, version, homepage, type, dependencies, exports, `_jsr_revision`), so there is nothing to run; `bunx` exits 1. binaryang's guide F4 said so. Node and Bun run `node_modules/@jrmarcum/s3d-reportcompiler/main.js` instead; a global command exists only through Deno or a clone | **yes** for `bun install -g` — it installs and gives no command |
+
+Also measured, not a bug: the README said "Node 22.6+". That holds for the INSTALLED package (JSR
+serves compiled JavaScript; 22.6.0 PASSES) but not for a clone, whose `main.ts` needs Node's
+unflagged type stripping — 22.6.0 and 22.17.1 fail with `ERR_UNKNOWN_FILE_EXTENSION`, 22.18.0
+passes. `engines.node` is now `>=22.18.0`, and `bun run runtimes` checks that floor.
+
 ⚠️ **Bug 23 is a gap between two decisions that were each right.** `nodeModulesDir: "manual"` was
 chosen so Deno reads the same `node_modules` as Node and Bun, which is what preserves `.npmrc`'s
 `omit=optional` and the identical-output property. The workflow was copied from a sibling project that

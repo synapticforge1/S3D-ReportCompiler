@@ -47,16 +47,36 @@ Deno:
 deno add jsr:@jrmarcum/s3d-reportcompiler
 ```
 
-Bun:
+Bun — note the **`--bun`**, or `jsr add` hands the install to npm:
 
 ```bash
-bunx jsr add @jrmarcum/s3d-reportcompiler
+bunx jsr add --bun @jrmarcum/s3d-reportcompiler
 ```
 
 Node:
 
 ```bash
 npx jsr add @jrmarcum/s3d-reportcompiler
+```
+
+⚠️ **npm 12 (bundled with Node 24.21) refuses JSR packages by default** —
+`EALLOWREMOTE: Fetching packages of type "remote" have been disabled`, because JSR's npm
+registry serves tarballs from a URL npm 12 classes as remote (`allow-remote` defaults to
+`none`; npm 10 and 11 allow it). Allow it for the install:
+
+```bash
+npm_config_allow_remote=all npx jsr add @jrmarcum/s3d-reportcompiler
+```
+
+```powershell
+$env:npm_config_allow_remote = "all"; npx jsr add @jrmarcum/s3d-reportcompiler
+```
+
+Either way, `jsr add` writes `@jsr:registry=https://npm.jsr.io` to the project's `.npmrc` and
+the dependency to `package.json` — commit both. Then one import line works on every runtime:
+
+```ts
+import { assembleDocument, bakeBody, bakeStyle } from "@jrmarcum/s3d-reportcompiler";
 ```
 
 #### As a global CLI tool
@@ -86,27 +106,18 @@ Either wait a day, or opt out for this install:
 deno install -g -n s3d-reportcompiler -A --min-dep-age=0 jsr:@jrmarcum/s3d-reportcompiler/cli
 ```
 
-Bun:
+Bun and Node: **there is no global command from JSR.** JSR's npm packages carry no `bin`
+entry (measured on 1.0.4: the package manifest has none), so `bun install -g` and `bunx` find
+nothing to run. Install the package into a project as above and run its compiled CLI:
 
 ```bash
-bun install -g @jsr/jrmarcum__s3d-reportcompiler
+node node_modules/@jrmarcum/s3d-reportcompiler/main.js [reports-dir] [output.pdf]
+bun  node_modules/@jrmarcum/s3d-reportcompiler/main.js [reports-dir] [output.pdf]
 ```
 
-Bun installs global binaries to `~/.bun/bin`. Ensure that directory is on your `PATH`:
-
-macOS / Linux — add to `~/.bashrc`, `~/.zshrc`, or your shell's profile:
-
-```bash
-export PATH="$HOME/.bun/bin:$PATH"
-```
-
-Windows (PowerShell), user level — no admin required:
-
-```powershell
-[System.Environment]::SetEnvironmentVariable("PATH", "$env:USERPROFILE\.bun\bin;" + [System.Environment]::GetEnvironmentVariable("PATH", "User"), "User")
-```
-
-Restart your terminal afterwards.
+or name it once in that project's `package.json` — `"scripts": { "compile": "node
+node_modules/@jrmarcum/s3d-reportcompiler/main.js" }` — and run `npm run compile` /
+`bun run compile`. A global command is Deno's (above) or a clone's (below).
 
 #### From a checkout
 
@@ -132,29 +143,25 @@ Deno:
 deno run -A jsr:@jrmarcum/s3d-reportcompiler/cli
 ```
 
-Bun requires a one-time registry configuration so it can resolve JSR packages, in `~/.bun/bin/.npmrc`:
-
-```bash
-echo '@jsr:registry=https://npm.jsr.io' >> ~/.bun/bin/.npmrc
-```
-
-Windows (PowerShell):
-
-```powershell
-Add-Content "$env:USERPROFILE\.bun\bin\.npmrc" '@jsr:registry=https://npm.jsr.io'
-```
-
-Then:
-
-```bash
-bunx @jrmarcum/s3d-reportcompiler
-```
+Bun and Node: there is no install-free form (no `bin`, see above) — `bunx` and `npx` on this
+package find nothing to run.
 
 ### Requirements
 
 - **Chrome or Edge** must be installed — it is the rendering engine, not an optional accelerator.
   Set `CHROME_PATH` if it is not in a standard location.
-- **Node 22.6+** if you are running on Node.
+- **A supported runtime** — every current Node LTS line, Bun, and Deno's LTS line, each measured
+  with the sample reports producing byte-identical output:
+
+  | runtime | the installed package | a clone of this repository |
+  |---|---|---|
+  | Node 22 | 22.6 or later | **22.18 or later** (the first 22.x that runs `.ts` with no flag) |
+  | Node 24, Node 26 | ✅ | ✅ |
+  | Bun | 1.4.4 (the version measured; Bun has no LTS line) | 1.4.4 |
+  | Deno | 2.9 LTS (2.9.8 measured) | 2.9 LTS |
+
+  `bun run runtimes` re-checks a clone against Node's own LTS schedule — see
+  [Supported runtimes](#supported-runtimes) below.
 
 ### First run
 
@@ -252,6 +259,34 @@ Their Project Name, Designer and Project Notes fields are replaced with syntheti
 [`scripts/sanitize-report.ts`](scripts/sanitize-report.ts); the calculations are untouched, so the
 samples exercise the real pipeline rather than a toy one.
 
+### Supported runtimes
+
+The same clone runs on any of them — only the launcher differs:
+
+```bash
+cd tests
+node ../main.ts            # Node 22.18+, 24, 26
+bun ../main.ts             # Bun
+deno run -A ../main.ts     # Deno
+```
+
+**`bun run runtimes`** checks that promise instead of trusting it. It reads Node's own release
+schedule, builds the samples on the `engines.node` floor, on every current Node LTS line and on a
+line that becomes LTS within 30 days (each through [fnm](https://github.com/Schniz/fnm), so nothing
+switches globally), then on Bun and Deno — and fails unless every build passes its verification
+**and** all of them bake a byte-identical document. A Node version fnm does not have fails with
+the `fnm install` that fixes it; it is never skipped.
+
+```
+✅ node 22.18.0 (floor)         PASS  html 7f283563003f
+✅ node 22                      PASS  html 7f283563003f
+✅ node 24                      PASS  html 7f283563003f
+✅ node 26 (LTS 2026-10-28)     PASS  html 7f283563003f
+✅ bun                          PASS  html 7f283563003f
+✅ deno                         PASS  html 7f283563003f
+✅ 6 runtime(s), one baked document (7f283563003f)
+```
+
 ---
 
 ## 📦 Programmatic API
@@ -268,7 +303,8 @@ import * as rt from "@jrmarcum/s3d-reportcompiler/runtime";
 
 ### Bun and Node
 
-Identical, once the package is added with `bunx jsr add` / `npx jsr add`:
+Identical, once the package is added with `bunx jsr add --bun` / `npx jsr add` (see
+[Installation](#installation) for npm 12):
 
 ```typescript
 import { assembleDocument, bakeBody, bakeStyle } from "@jrmarcum/s3d-reportcompiler";

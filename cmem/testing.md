@@ -174,6 +174,45 @@ and quieting those false positives means widening the ignore list until the chec
 The ignore list currently holds exactly one word (`design`), and every entry in it must be a word
 *observed* surviving for an innocent reason — not one guessed at in advance.
 
+## Runtime matrix — every Node LTS line, Bun, Deno
+
+🔒 Owner, 2026-10-26: "make sure this repo is able to be used by all LTS versions of node, and bun,
+and deno". Two ways to use it, and they have different floors — test both.
+
+**From a clone: `bun run runtimes`** ([`scripts/check-runtimes.ts`](../scripts/check-runtimes.ts)).
+Reads Node's release schedule (never a hand-kept list), builds the 13 samples on the
+`engines.node` floor, every current LTS line and a line becoming LTS within 30 days (each via
+`fnm exec --using=…`), then on Bun and Deno; fails unless every build PASSES its verification, the
+CLI reports the runtime that was meant to run, and every baked HTML is byte-identical. A Node
+fnm lacks FAILS with the `fnm install` (never skipped); a schedule fetch failure fails. Inverted
+2026-10-26: `--also=22.17.1` → ❌ `ERR_UNKNOWN_FILE_EXTENSION` (below the floor), `--also=20.0.0` →
+❌ "run: fnm install 20.0.0"; exit 1 for both, the six real rows still ✅.
+
+Measured 2026-10-26 (Windows 11, Chrome on PATH; LTS lines from the schedule: 22 Jod, 24 Krypton,
+26 from 2026-10-28):
+
+| runtime | from the clone | the published 1.0.4, installed |
+|---|---|---|
+| Node 22.6.0 | ❌ `ERR_UNKNOWN_FILE_EXTENSION` (`.ts` needs a flag) | ✅ CLI + library |
+| Node 22.17.1 | ❌ same | ✅ |
+| Node 22.18.0 (floor) | ✅ | ✅ |
+| Node 22.23.3 | ✅ | ✅ |
+| Node 24.21.0 | ✅ | ✅ (install needs `npm_config_allow_remote=all`, #27) |
+| Node 26.12.0 | ✅ | ✅ |
+| Bun 1.4.4 | ✅ | ✅ (`bunx jsr add --bun`, #28) |
+| Deno 2.9.8 (= `deno upgrade lts`) | ✅ | ✅ (`deno run -A jsr:…@1.0.4/cli`) |
+
+Every ✅ baked the same document, sha256 `7F283563003F…` — clone and package alike. The
+installed-package column is a procedure, not a committed script yet: a scratch project,
+`bunx jsr add --bun @jrmarcum/s3d-reportcompiler@<ver>` (or `npx jsr add` with the allow-remote
+variable), then `node|bun node_modules/@jrmarcum/s3d-reportcompiler/main.js <reports> <out.pdf>`
+and an `import` of `.` and `./runtime`. It belongs in the release path once there is one off
+Deno (bun-migration step 6) — it is the check that would have caught #27–#29.
+
+Not a support promise, by design: Bun has no LTS line (the version on PATH is tested); Deno's is
+whatever `deno upgrade lts` names. Node lines leave the matrix when the schedule ends them, and
+`engines.node` must be raised then too (22 ends 2027-04-30).
+
 ## Browser
 
 ```bash
