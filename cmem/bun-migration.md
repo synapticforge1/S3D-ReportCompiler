@@ -1,7 +1,9 @@
-# bun-migration.md — moving the toolchain off Deno, keeping JSR (SCOPE, not started)
+# bun-migration.md — moving the toolchain off Deno, keeping JSR (in progress: steps 2–4 done)
 
-**Status 2026-10-26: scoped, owner decisions taken (end of file); step 1 MEASURED and re-planned
-(§ "Step 1, measured" — binaryang's step 1 silently corrupts this package); next is step 2.** Requested by the owner 2026-10-26 ("scope this
+**Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
+`129fd0a`); step 1 MEASURED and folded into step 7 (§ "Step 1, measured" — binaryang's step 1
+silently corrupts this package). **Next: step 5** (the `node:test` suite), then 7 (`jsr.json`, no
+`deno.json`), then 6 (CI + one real release). Owner decisions at the end of file. Requested by the owner 2026-10-26 ("scope this
 repo's transition to bun per the guidelines in the binaryang project"). The guidelines are
 binaryang's `cmem/jsr-deno-exit-guide.md` (written for the `@jrmarcum` JSR packages, this one
 included; § 6 lists s3d-reportcompiler as "not surveyed — start with § 2, then § 4") and its full

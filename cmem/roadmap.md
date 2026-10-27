@@ -18,6 +18,9 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · **1.0.4 ✅** Rekor `2439323008` (`deno task verify-release 1.0.4`, 2026-10-26) |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
+| Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26) |
+| Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `release`; Deno only for `deno publish` + the JSR doc checks, and `deno.json` until task 12 step 7 (2026-10-26) |
+| `npm audit` | 1 high + 1 moderate, `@xmldom/xmldom` 0.9.10 under `mathjax-full` (task 13; 2026-10-26) |
 
 🔁 **Corrected 2026-10-26:** this memory said "1.0.4 is staged and unreleased" for two and a half
 months after 1.0.4 had shipped attested on 2026-08-12. Nothing re-read JSR in between.
@@ -526,7 +529,10 @@ See [verification.md](verification.md).
 npm warn deprecated mathjax-full@3.2.2: Version 4 replaces this package with the scoped package @mathjax/src
 ```
 
-**This is a deprecation notice, not a security advisory.** `npm audit` reports **0 vulnerabilities**.
+**This is a deprecation notice, not a security advisory.** `npm audit` reported **0 vulnerabilities**
+on 2026-08-08. 🔁 On 2026-10-26 it reports 1 high + 1 moderate, both `@xmldom/xmldom` 0.9.10 pinned
+exactly by `speech-rule-engine` 4.1.4 under `mathjax-full` — a fix exists (0.9.12), so it is an
+override (task 13), not a reason for v4.
 `mathjax-full@3.2.2` is Apache-2.0, exact-pinned, and typesets all 8,286 expressions with 0 failures.
 
 ### Why staying is the right default here
@@ -647,7 +653,16 @@ What remains:
 
 ---
 
-## 🔴 12. Move the toolchain off Deno, keep JSR — SCOPED 2026-10-26, not started
+## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–4 DONE 2026-10-26; next step 5
+
+Done and merged 2026-10-26: step 2 `bun check` (`a222adf`), step 3 `bun fmt` + Biome (`78f9ac8`),
+step 4 every script and control on Bun, with three release defects fixed (`129fd0a`). Remaining, in
+the revised order: **5** the `node:test` suite for the build and every control; **7** `jsr.json`
+as the one manifest with `deno.json` deleted (step 1 folded in — `--config jsr.json` corrupts this
+package); **6** the CI gate and one real release proving provenance. Details and every measurement:
+[bun-migration.md](bun-migration.md).
+
+The scope as first written:
 
 Owner, 2026-10-26: "scope this repo's transition to bun per the guidelines in the binaryang
 project". **The scope, the measurements and the seven steps: [bun-migration.md](bun-migration.md).**
@@ -656,3 +671,35 @@ toolchain moves — manifest to `jsr.json`, `bun check`, dprint, the release scr
 `node:` builtins, a CI gate that does not exist yet — while `deno publish` stays for JSR. The owner's
 five decisions (2026-10-26) are at the end of that file: Biome for lint, `bun fmt` for format, the
 pdfmake spike retired, a new `node:test` suite, no npm; push and settle the purge first.
+
+---
+
+## 🔴 13. Override `@xmldom/xmldom` to 0.9.12 — owner: "Override to 0.9.12" (2026-10-26)
+
+`npm audit` (2026-10-26): `@xmldom/xmldom` 0.9.10 **high** (a run of injection / ReDoS / quadratic
+advisories, affected range 0.9.0-beta.1 – 0.9.11) and `speech-rule-engine` **moderate** (through it).
+`speech-rule-engine` 4.1.4 — pulled in by `mathjax-full` 3.2.2 (`^4.0.6`) — pins `@xmldom/xmldom` at
+exactly `0.9.10`, so nothing upstream moves it; 0.9.12 is the fixed patch. Plan: first measure
+whether the build LOADS `speech-rule-engine` at all (nothing in `src/` imports it; `AllPackages` is
+TeX input only — UNMEASURED); then one `"overrides": { "@xmldom/xmldom": "0.9.12" }` in
+`package.json`, its own branch and commit, `npm audit` re-read, and the full gate including the
+48-report set (baked HTML must stay `A19E5AD15E3F…`).
+
+---
+
+## 🔴 14. Upgrade `pdfjs-dist` 4.6.82 → 6.x — owner: "upgrade pdfjs" (2026-10-26)
+
+Why: pdfjs 4.6.82 fills in `DOMMatrix` / `Path2D` from the optional `canvas` ^2.11.2, which this repo
+does not install (`.npmrc` `omit=optional` — it drags in `tar` critical + `node-pre-gyp` high), so
+Node and Bun print "Cannot polyfill `DOMMatrix`" and all three print "…`Path2D`" (known-issues
+§ "pdfjs polyfill warnings"). Installing `canvas` was measured and does not work: no prebuilt binary
+for Node 24 (`node-v137` 404), the source build needs Cairo, Deno cannot load it, npm 12 blocks its
+install script. pdfjs 6.x (6.4.299 on 2026-10-26; Node ≥ 22.13 or ≥ 24) uses `@napi-rs/canvas`
+instead — prebuilt N-API binaries, no `tar` chain. Plan, as its own task after 13:
+- it is the VERIFICATION engine: re-baseline every count the build reports (words, numbers, image
+  paints, diagrams) on the samples AND the 48-report set, and require the same verdicts; run the
+  negative controls (each must still fail for its own reason);
+- `@napi-rs/canvas` ships as OPTIONAL per-platform packages — `omit=optional` would drop them (the
+  Biome lesson), so the `.npmrc` line changes, and `canvas` must not come back through another path;
+- measure Bun (N-API) and Deno (npm N-API addons) loading it, and that the warnings are gone;
+- the two majors' breaking changes read first (`main.ts` `readPdf()`, `tests/controls/verify-pdf-text.ts`).

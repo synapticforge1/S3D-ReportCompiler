@@ -213,6 +213,33 @@ violated inside the check written to enforce it.
 
 Practices [§11](practices.md) through [§14](practices.md) all come from this phase.
 
+## Phase 9 — the workspace floor and the move off Deno (2026-10-26)
+
+One long day, summarized; the substance lives in [bun-migration.md](bun-migration.md),
+[history-purge-2026-10-26.md](history-purge-2026-10-26.md) and roadmap tasks 11–14.
+
+- **Compliance with the workspace floor** (`bd2599287`): origin to the org, the ★ block copied and
+  text-checked, the privacy rule, the status line moved to the roadmap. Then the drive path purged
+  from history and force-pushed with the three tags (`b7631ca`).
+- **The Deno exit, steps 2–4** (`a222adf`, `78f9ac8`, `129fd0a`): `bun check`, `bun fmt` + Biome,
+  every script and control on Bun — the ports proved equivalent to the Deno originals on 42 cases
+  before replacing them. Every Node LTS line, Bun and Deno now checked by `bun run runtimes`.
+
+Claims that turned out WRONG, kept so they are not believed again:
+
+| believed | measured |
+|---|---|
+| "1.0.4 is staged and unreleased" (memory, since 2026-08-12) | released and attested on 2026-08-12 |
+| binaryang's step 1 (`--config jsr.json`) is safe | it silently rewrites this package's npm imports to `./…` — "Successfully published" |
+| a moved `v*` tag stops at `deno publish` (version exists) | `deno publish` SKIPS with exit 0 and the workflow runs on |
+| `Deno.readTextFile` strips a BOM | it keeps it — the equivalence harness caught the first port's 3-byte difference |
+| `deno task release` is dead once `tasks` are gone | Deno falls back to `package.json` scripts — the probe ran a real release step |
+| installing `canvas` removes pdfjs's warnings | no Node 24 binary, needs Cairo, Deno cannot load it |
+| `npm audit` reports 0 | 1 high + 1 moderate in `@xmldom/xmldom` under MathJax (task 13) |
+
+The lesson under most of them: **a check you have not seen fail tells you nothing, and a probe of
+a live command is a run of it.**
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is

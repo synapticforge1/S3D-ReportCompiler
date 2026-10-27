@@ -127,9 +127,10 @@ bun run cli:install-jsr   # global command from the published registry
 bun run cli:uninstall
 ```
 
-`bun run cli:install` is the one to use while developing or if you keep a clone: it
-installs whatever is in your working tree, so there is no publish step and no
-waiting on the registry. `install:jsr` installs the released package and passes
+These three need **Deno** on your `PATH` — the global command they install is a Deno one (JSR's
+npm packages carry no `bin`, see above). `bun run cli:install` is the one to use while developing
+or if you keep a clone: it installs whatever is in your working tree, so there is no publish step
+and no waiting on the registry. `cli:install-jsr` installs the released package and passes
 `--min-dep-age=0`, so it also works within 24 hours of a release.
 
 Both install the command as `s3d-reportcompiler`, and `--force` means re-running
@@ -433,7 +434,7 @@ Two limits worth knowing before you rely on it:
 | ✅ | CLI | Defaults resolve from the working directory, so a global install is relocatable |
 | ✅ | Packaging | Published to JSR with GitHub Actions OIDC provenance |
 | ⏳ | Verification | **Per-report conservation.** Segment the PDF at report headings and compare each segment against its own source, closing the set-union gap above |
-| ⏳ | Maths | **MathJax 3 → 4.** Deferred deliberately: v4 replaced the font system, so glyph metrics, line breaking and page count all move. Deprecation is not an advisory — `npm audit` reports 0 vulnerabilities. Requires a measured no-degradation comparison first |
+| ⏳ | Maths | **MathJax 3 → 4.** Deferred deliberately: v4 replaced the font system, so glyph metrics, line breaking and page count all move. Deprecation is not an advisory. (`npm audit`, 2026-10-26: one high and one moderate advisory in `@xmldom/xmldom` 0.9.10, pinned by MathJax's `speech-rule-engine`; an override to the fixed 0.9.12 is planned, and v4 is not the remedy.) Requires a measured no-degradation comparison first |
 | ⏳ | CSS | **Scope the remaining blanket rewrites.** `visibility: hidden → visible` and `height: 100% → auto` are still textual. They are audited and counted, and they fail *visibly*, which is the safer class — narrowing them means evaluating the cascade |
 | ⏳ | Upstream | **Emit MathML from SkyCiv instead.** Their reports are generated from structured data; HTML → PDF is a lossy round-trip through a format that was never the source of truth |
 

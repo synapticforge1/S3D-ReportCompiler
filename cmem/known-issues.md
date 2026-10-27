@@ -219,6 +219,21 @@ serves compiled JavaScript; 22.6.0 PASSES) but not for a clone, whose `main.ts` 
 unflagged type stripping — 22.6.0 and 22.17.1 fail with `ERR_UNKNOWN_FILE_EXTENSION`, 22.18.0
 passes. `engines.node` is now `>=22.18.0`, and `bun run runtimes` checks that floor.
 
+### Not a bug: pdfjs polyfill warnings (measured 2026-10-26)
+
+The verification step prints pdfjs's own warnings, and they differ by runtime:
+
+| runtime | printed | verification |
+|---|---|---|
+| Deno 2.9.8 | `Cannot polyfill \`Path2D\`` | 173 words / 342 numbers; 13/13 images, 13 diagrams intact |
+| Bun 1.4.4, Node 24.21 | `…\`DOMMatrix\``, `…\`Path2D\`` | identical |
+
+pdfjs 4.6.82 fills both in from the optional `canvas` package, which is deliberately not installed
+(`.npmrc` `omit=optional`). Both are used only by pdfjs's canvas RENDERER and its in-browser ink
+editor — never by the text and operator-list reading the verification does, which is why every count
+and the baked document are identical on all three runtimes. Do not stub them or mute the warning
+(that turns a loud "rendering may be broken" into silence). The real fix is roadmap task 14.
+
 ### The release sweeps uncommitted edits into its commit (found 2026-10-26)
 
 | # | Bug | Silent? |
