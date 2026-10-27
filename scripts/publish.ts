@@ -22,6 +22,8 @@
  * name because that is what it does; only the entry point is named `release`.
  *
  * Steps:
+ *   0. Refuse if deno.json / package.json / src/report_core.ts differ from HEAD in anything
+ *      but their version lines (step 3 would otherwise commit those edits as a "bump")
  *   1. Read the current version from deno.json
  *   2. Run scripts/sync-version.ts to propagate it to package.json + src/report_core.ts
  *   3. git add + commit "bump version to vX.Y.Z"
@@ -71,6 +73,34 @@ function capture(cmd: string[]): string {
 }
 
 console.log(`Publishing ${tag} via GitHub Actions…`);
+
+// 0. The three files step 2 stages may differ from HEAD ONLY in their version lines — what
+//    `bun run bump` leaves behind. Anything else would be swept into the "bump version" commit
+//    and released under that title (cmem/known-issues.md #30: it happened on 2026-10-26). The
+//    dirty-tree check in step 4 cannot see it, because by then these files are committed.
+{
+  const VERSION_LINE: Record<string, RegExp> = {
+    "deno.json": /^"version"\s*:\s*"[^"]*",?$/,
+    "package.json": /^"version"\s*:\s*"[^"]*",?$/,
+    "src/report_core.ts": /^export const VERSION = "[^"]*";$/,
+  };
+  for (const [file, ok] of Object.entries(VERSION_LINE)) {
+    const diff = capture(["git", "diff", "HEAD", "--unified=0", "--", file]);
+    const changed = diff
+      .split("\n")
+      .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---) /.test(l))
+      .map((l) => l.slice(1).trim());
+    const other = changed.filter((l) => !ok.test(l));
+    if (other.length > 0) {
+      console.error(`\n❌ ${file} has uncommitted changes besides its version line.`);
+      console.error(`   The release would commit them as "bump version to ${tag}":\n`);
+      for (const l of other.slice(0, 5)) console.error(`     ${l}`);
+      if (other.length > 5) console.error(`     … ${other.length - 5} more`);
+      console.error(`\nCommit them on their own first, then re-run.`);
+      process.exit(1);
+    }
+  }
+}
 
 // 1. Sync the version out to package.json + src/report_core.ts
 run([...self, "scripts/sync-version.ts"]);
@@ -188,12 +218,14 @@ if (process.argv.slice(2).includes("--no-wait")) {
     `(Ctrl-C is safe — the release continues; check later with bun run verify-release)\n`,
   );
 
-  const check = spawnSync(self[0], [
-    ...self.slice(1),
-    "scripts/verify-release.ts",
-    version,
-    "--wait",
-  ]);
+  // `stdio: "inherit"`: the progress and the verdict are the point of this step. Until
+  // 2026-10-26 the output was captured and never printed (Deno's `.output()`), so a release
+  // showed nothing here and an unattested one was visible only as an exit code.
+  const check = spawnSync(
+    self[0],
+    [...self.slice(1), "scripts/verify-release.ts", version, "--wait"],
+    { stdio: "inherit" },
+  );
   const code = check.status ?? 1;
   // Propagate the verdict: an unattested release should not exit 0, or CI and
   // shell chains would treat it as a clean run.

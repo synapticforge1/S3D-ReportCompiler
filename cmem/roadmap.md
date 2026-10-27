@@ -369,6 +369,7 @@ All three exist because of a release that went wrong; none is theoretical:
 
 | Refuses when | Because |
 |---|---|
+| `deno.json`, `package.json` or `src/report_core.ts` differ from `HEAD` beyond their version line (since 2026-10-26) | the release `git add`s those three, so anything else in them would ship under "bump version" — known-issues #30 |
 | the working tree has uncommitted tracked changes | they are not in the commit being tagged, so they are not in the release |
 | HEAD is behind its upstream | commits from elsewhere would be missing from the release |
 | the version is already on JSR | versions are immutable; forcing the tag would desync the GitHub release from the published code |
@@ -380,7 +381,10 @@ caught bug #25 — v1.0.1 was cut one commit before the fix it was meant to ship
 
 `bun run release` now waits for the workflow to publish and then checks the attestation, via
 [`scripts/verify-release.ts`](../scripts/verify-release.ts). It exits non-zero if the version landed
-without one, so an unattested release cannot pass quietly.
+without one, so an unattested release cannot pass quietly. 🔁 Corrected 2026-10-26: until then the
+check's progress and verdict were CAPTURED and never printed (Deno's `Command.output()`), so the
+wait was silent and only the exit code told — measured by the step-4 equivalence run, fixed in
+step 4 part 3 (`stdio: "inherit"`).
 
 ```bash
 bun run verify-release              # the version in deno.json
