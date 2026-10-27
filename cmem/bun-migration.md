@@ -187,6 +187,27 @@ The manifest move and the `deno.json` deletion become ONE step, last before CI, 
 4. Scripts on `node:` builtins, run by `bun` from `package.json` scripts — takes `tasks` out of
    `deno.json` (`deno task release` becomes `bun run release`; `publish.ts` / `verify-release.ts`
    stop importing `../deno.json`).
+   ⏳ **2026-10-26, part 1 — the faithful ports, PROVED EQUIVALENT** (branch `bun/4-scripts`): the
+   5 release scripts and 9 controls on `node:fs` / `node:child_process` / `process.*`, messages and
+   logic unchanged. A one-time harness ran the Deno ORIGINAL (scratch clone at `78f9ac8`), the Bun
+   port and the port on Node 24.21 on identical fixture trees — 42 cases: every success path, every
+   refusal (bad kind, over-wide version, missing field, residue survivor, dirty tree, behind
+   upstream, already on JSR), BOM inputs, the real JSR API (1.0.4 attested / 1.0.2 not / 99.0.0
+   absent), and `publish.ts` against a git repo with a local bare `origin` (tags, pushed commit
+   subject and file contents compared) including the 5-minute provenance wait. Result: exit code,
+   stdout, stderr and every file written identical in all 42. Inverted: the bump carry limit 9 → 10
+   in the port → exactly the three boundary cases reported. `verify-pdf-text` on the built sample
+   PDF: identical pages / characters / headings; the one extra line on Bun and Node is pdfjs's own
+   "Cannot polyfill `DOMMatrix`" (Deno has a native `DOMMatrix`) — environment, not port.
+   **Measured on the way, and wrong in the plan before:** `Deno.readTextFile` KEEPS a leading BOM
+   (the first port stripped it via `TextDecoder`; the harness caught 3 bytes); a BOM in `deno.json`
+   or `package.json` stops Deno itself at startup ("Malformed package.json"); `Deno.errors.NotCapable`
+   (the `--allow-net` guard) has no Bun / Node equivalent and is gone. **Defects found in the
+   originals, kept faithfully in part 1 and fixed in their own commits:** `publish.ts` swallows
+   `verify-release`'s output in step 7 (`.output()` captures it — the wait case printed 0 bytes of
+   verdict); `publish.ts` step 2 `git add`s `src/report_core.ts`, so an uncommitted edit to it is
+   swept into the "bump version" commit and released (case `pub-sweeps-core`); `bump.ts` is the
+   retired odometer, not SemVer (workspace 🔒 2026-09-20, letter H6).
 5. The `node:test` suite.
 7. **One step: `jsr.json` = manifest + `imports` + `nodeModulesDir: "manual"`, `deno.json`
    deleted, `deno publish` with NO `--config`**, proved by the fake-registry capture equal to the

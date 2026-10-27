@@ -28,23 +28,28 @@
  * it first. Must be run from the project root (deno task does this automatically).
  */
 
+import { readFile, writeFile } from "node:fs/promises";
+
+/** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
+const readText = (p: string) => readFile(p, "utf8");
+
 /** Highest permitted value for the minor and patch components. */
 const MAX_COMPONENT = 9;
 
-const root = Deno.cwd();
+const root = process.cwd();
 const denoJsonPath = `${root}/deno.json`;
 
-const kind = (Deno.args[0] ?? "patch").toLowerCase();
+const kind = (process.argv[2] ?? "patch").toLowerCase();
 if (kind !== "patch" && kind !== "minor" && kind !== "major") {
   console.error(`❌ bump: unknown release kind "${kind}" — use patch | minor | major`);
-  Deno.exit(1);
+  process.exit(1);
 }
 
-const text = await Deno.readTextFile(denoJsonPath);
+const text = await readText(denoJsonPath);
 const m = text.match(/("version"\s*:\s*)"(\d+)\.(\d+)\.(\d+)"/);
 if (!m) {
   console.error('❌ bump: could not find a "version": "X.Y.Z" field in deno.json');
-  Deno.exit(1);
+  process.exit(1);
 }
 
 let [major, minor, patch] = [Number(m[2]), Number(m[3]), Number(m[4])];
@@ -60,7 +65,7 @@ if (minor > MAX_COMPONENT || patch > MAX_COMPONENT) {
       `   Edit "version" in deno.json by hand to the intended next release, run ` +
       `\`deno task update-version\`, then use \`deno task bump\` from there.`,
   );
-  Deno.exit(1);
+  process.exit(1);
 }
 
 if (kind === "major") {
@@ -89,7 +94,7 @@ const to = `${major}.${minor}.${patch}`;
 
 // Targeted replace so the rest of deno.json's formatting is untouched.
 const updated = text.replace(/("version"\s*:\s*)"\d+\.\d+\.\d+"/, `$1"${to}"`);
-await Deno.writeTextFile(denoJsonPath, updated);
+await writeFile(denoJsonPath, updated);
 console.log(`✅ deno.json          → ${to}  (${kind} bump from ${from})`);
 
 // Propagate the freshly-written version to package.json + src/report_core.ts.

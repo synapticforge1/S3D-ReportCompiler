@@ -9,22 +9,27 @@
  * Must be invoked from the project root (deno task does this automatically).
  */
 
-const root = Deno.cwd();
+import { readFile, writeFile } from "node:fs/promises";
 
-const denoJson = JSON.parse(await Deno.readTextFile(`${root}/deno.json`));
+/** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
+const readText = (p: string) => readFile(p, "utf8");
+
+const root = process.cwd();
+
+const denoJson = JSON.parse(await readText(`${root}/deno.json`));
 const { version, name } = denoJson as { version: string; name: string };
 
 // ── package.json ─────────────────────────────────────────────────────────────
 const pkgPath = `${root}/package.json`;
-const pkg = JSON.parse(await Deno.readTextFile(pkgPath));
+const pkg = JSON.parse(await readText(pkgPath));
 pkg.name = name;
 pkg.version = version;
-await Deno.writeTextFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 console.log(`✅ package.json       → ${version}`);
 
 // ── src/report_core.ts ───────────────────────────────────────────────────────
 const corePath = `${root}/src/report_core.ts`;
-const core = await Deno.readTextFile(corePath);
+const core = await readText(corePath);
 const updated = core.replace(/(export const VERSION\s*=\s*)"[^"]*"/, `$1"${version}"`);
 if (updated === core) {
   // Either already current, or the pattern is gone — those need different fixes,
@@ -35,6 +40,6 @@ if (updated === core) {
     console.warn("⚠️  src/report_core.ts VERSION constant not found — skipped");
   }
 } else {
-  await Deno.writeTextFile(corePath, updated);
+  await writeFile(corePath, updated);
   console.log(`✅ src/report_core.ts → ${version}`);
 }
