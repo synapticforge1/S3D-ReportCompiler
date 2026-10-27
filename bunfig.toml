@@ -1,0 +1,8 @@
+# `bun fmt` replaces `deno fmt` (cmem/bun-migration.md step 3). The width matches the old
+# deno.json `fmt.lineWidth`; everything else is Bun's default style.
+#
+# ⚠️ Run it through `bun run format` / `bun run format:check`, which name the paths. Bare
+# `bun fmt` formats every file type it knows — Markdown and HTML included — so it would rewrite
+# cmem/ and the byte-checked sample reports in tests/HTMLFilesToBeCompiled/.
+[fmt]
+printWidth = 100

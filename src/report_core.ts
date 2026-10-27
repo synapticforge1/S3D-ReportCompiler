@@ -475,8 +475,7 @@ function removeElementById(html: string, id: string): string {
   scan.lastIndex = m.index + m[0].length;
 
   let depth = 1;
-  let hit: RegExpExecArray | null;
-  while ((hit = scan.exec(html)) !== null) {
+  for (let hit = scan.exec(html); hit !== null; hit = scan.exec(html)) {
     depth += hit[1] ? -1 : 1;
     if (depth === 0) {
       const end = html.indexOf(">", hit.index);
@@ -593,7 +592,8 @@ export function bakeBody(src: string, prefix: string): string {
   body = body.replace(buildMathRegex(delims), (...args) => {
     const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
     const i = groups.findIndex((g) => g !== undefined);
-    return i < 0 ? args[0] as string : tex2html(groups[i]!, delims[i].display);
+    const inner = groups[i]; // undefined when i < 0: no pair matched
+    return inner === undefined ? args[0] as string : tex2html(inner, delims[i].display);
   });
 
   return portableSvg(body);

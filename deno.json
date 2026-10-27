@@ -39,12 +39,5 @@
     "bump": "deno run --allow-read --allow-write scripts/bump.ts",
     "release": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net=api.jsr.io scripts/publish.ts",
     "verify-release": "deno run --allow-read --allow-net=api.jsr.io scripts/verify-release.ts"
-  },
-  "fmt": {
-    "useTabs": false,
-    "lineWidth": 100,
-    "indentWidth": 2,
-    "semiColons": true,
-    "include": ["main.ts", "src/", "scripts/"]
   }
 }

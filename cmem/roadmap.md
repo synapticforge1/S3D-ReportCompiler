@@ -425,8 +425,9 @@ could tell those two apart.
 Pre-flight, all currently green:
 
 ```bash
-deno task check                          # types
-deno fmt --check                         # main.ts, src/, scripts/
+bun run check                            # types (see testing.md for the full list)
+bun run format:check                     # bun fmt over main.ts, src/, scripts/ (was deno fmt)
+bun run lint                             # Biome
 deno doc --lint src/report_core.ts src/report_runtime.ts    # docs coverage — a scored criterion
 deno check --doc src/report_core.ts src/report_runtime.ts   # the JSDoc EXAMPLES compile
 deno publish --dry-run --allow-dirty     # JSR validation incl. slow types

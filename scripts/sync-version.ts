@@ -19,7 +19,7 @@ const pkgPath = `${root}/package.json`;
 const pkg = JSON.parse(await Deno.readTextFile(pkgPath));
 pkg.name = name;
 pkg.version = version;
-await Deno.writeTextFile(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+await Deno.writeTextFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 console.log(`✅ package.json       → ${version}`);
 
 // ── src/report_core.ts ───────────────────────────────────────────────────────

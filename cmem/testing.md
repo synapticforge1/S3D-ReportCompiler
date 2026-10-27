@@ -8,8 +8,10 @@ longer reproduces its sources, so running the build *is* the test.
 Defaults resolve from the **working directory**, so which folder you stand in selects the input set:
 
 ```bash
-deno task check                          # types
-deno fmt --check                         # formatting (main.ts, src/, scripts/)
+bun run check                            # types (bun check; `deno task check` agrees until step 7)
+bun run format:check                     # formatting (main.ts, src/, scripts/) + its canary
+bun run lint                             # Biome + its canary
+bun run runtimes                         # every Node LTS line, Bun, Deno — one baked document
 deno doc --lint src/*.ts                 # docs coverage — a scored JSR criterion
 deno check --doc src/*.ts                # the JSDoc examples actually compile
 deno publish --dry-run --allow-dirty     # JSR validation, incl. slow types

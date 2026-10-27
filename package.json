@@ -13,6 +13,9 @@
     "build:bun": "bun run main.ts",
     "bundle:browser": "bun build ./src/report_core.ts --target=browser --outfile=tests/report_core.browser.js",
     "check": "bun check -p tsconfig.check.json",
+    "format": "bun fmt main.ts src scripts",
+    "format:check": "bun fmt --check main.ts src scripts && bun scripts/check-format-canary.ts",
+    "lint": "bunx @biomejs/biome@2.5.15 lint --error-on-warnings && bun scripts/check-lint-canary.ts",
     "runtimes": "bun scripts/check-runtimes.ts",
     "serve": "npx --yes serve ."
   },

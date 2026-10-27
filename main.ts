@@ -393,7 +393,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations> {
       .map((i) => ("str" in i ? i.str : ""))
       .join("");
 
-    obs.text += text + "\n";
+    obs.text += `${text}\n`;
     if (text.trim().length === 0 && !drew) obs.blankPages.push(p);
 
     // These two patterns are specific to the SkyCiv diagram, which prints its
@@ -429,7 +429,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations> {
 // CompiledPDF/ is ever visible to it, and this guard catches the baked document
 // by name if the two directories are ever pointed at the same place.
 const TOOL_OWNED = new Set([
-  rt.baseName(outputPdf.replace(/\.pdf$/i, "") + ".html").toLowerCase(),
+  rt.baseName(`${outputPdf.replace(/\.pdf$/i, "")}.html`).toLowerCase(),
   "browser_example.html",
 ]);
 
@@ -588,7 +588,7 @@ try {
   // Both outputs live in the output directory: the baked HTML is the exact
   // input Chrome was given, so keeping it next to the PDF is what makes a
   // result reproducible and inspectable after the fact.
-  const htmlPath = outputPdf.replace(/\.pdf$/i, "") + ".html";
+  const htmlPath = `${outputPdf.replace(/\.pdf$/i, "")}.html`;
 
   // Encode once: String.length counts UTF-16 code units, not bytes, so
   // reporting it as a size would understate anything non-ASCII.
