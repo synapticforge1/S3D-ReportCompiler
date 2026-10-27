@@ -187,7 +187,17 @@ The manifest move and the `deno.json` deletion become ONE step, last before CI, 
 4. Scripts on `node:` builtins, run by `bun` from `package.json` scripts — takes `tasks` out of
    `deno.json` (`deno task release` becomes `bun run release`; `publish.ts` / `verify-release.ts`
    stop importing `../deno.json`).
-   ⏳ **2026-10-26, part 1 — the faithful ports, PROVED EQUIVALENT** (branch `bun/4-scripts`): the
+   ✅ **DONE 2026-10-26** in four commits: `f8f6a3d` the faithful ports (part 1, below);
+   `6a589e1` the tasks moved — `deno.json` has no `tasks`, `package.json` runs `update-version`,
+   `bump`, `release`, `verify-release`, `build[:node|:deno|:sample]`, `check:deno` and the Deno
+   global installs as `cli:install` / `cli:install-jsr` / `cli:uninstall` (never `install`, which npm
+   runs on every `npm install`), live `deno task X` text renamed `bun run X`; `7472fe1` the release
+   prints its provenance verdict and refuses to sweep non-version edits into the bump (known-issues
+   #30); `ba8be2c` `bump` is SemVer 2.0.0. Each fix proved on Bun and Node by a one-time expectation
+   test (24 checks + the 5-minute verdict check), the guard inverted. ⚠️ Learned: with no `tasks`,
+   **`deno task <name>` runs the `package.json` script of that name** — a probe of
+   `deno task release` ran the real release (roadmap § Release path).
+   **Part 1 — the faithful ports, PROVED EQUIVALENT** (branch `bun/4-scripts`): the
    5 release scripts and 9 controls on `node:fs` / `node:child_process` / `process.*`, messages and
    logic unchanged. A one-time harness ran the Deno ORIGINAL (scratch clone at `78f9ac8`), the Bun
    port and the port on Node 24.21 on identical fixture trees — 42 cases: every success path, every
