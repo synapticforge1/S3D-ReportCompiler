@@ -22,7 +22,10 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const m = String(pkg.scripts?.lint ?? "").match(/^(bunx \S+ lint --error-on-warnings) &&/);
-if (!m) fail(`package.json "lint" must start "bunx @biomejs/biome@<version> lint --error-on-warnings &&"`);
+if (!m)
+  fail(
+    `package.json "lint" must start "bunx @biomejs/biome@<version> lint --error-on-warnings &&"`,
+  );
 const [exe, ...args] = m[1].split(" ");
 
 const planted = join(root, "scripts", "__lint_canary.ts");
@@ -70,7 +73,9 @@ try {
     console.log("❌ with a planted file, the lint exited 0");
   }
   for (const rule of expected) {
-    const fired = new RegExp(`__lint_canary\\.ts:\\d+:\\d+ ${rule.replace(/\//g, "\\/")}\\b`).test(out);
+    const fired = new RegExp(`__lint_canary\\.ts:\\d+:\\d+ ${rule.replace(/\//g, "\\/")}\\b`).test(
+      out,
+    );
     if (!fired) problems++;
     console.log(`${fired ? "✅" : "❌"} ${rule}`);
   }
@@ -78,7 +83,11 @@ try {
   rmSync(planted, { force: true });
 }
 
-console.log(problems ? `❌ lint canary: ${problems} problem(s)` : `✅ lint canary: ${expected.length} rules fire`);
+console.log(
+  problems
+    ? `❌ lint canary: ${problems} problem(s)`
+    : `✅ lint canary: ${expected.length} rules fire`,
+);
 process.exit(problems ? 1 : 0);
 
 function fail(msg: string): never {

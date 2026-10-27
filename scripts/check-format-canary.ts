@@ -24,7 +24,9 @@ if (!m) fail(`package.json "format" must be "bun fmt <paths>"; found ${JSON.stri
 const paths = m[1].split(/\s+/);
 const checkScript = String(pkg.scripts?.["format:check"] ?? "");
 if (!checkScript.startsWith(`bun fmt --check ${paths.join(" ")} &&`)) {
-  fail(`"format:check" must start "bun fmt --check ${paths.join(" ")} &&" — the two path lists differ`);
+  fail(
+    `"format:check" must start "bun fmt --check ${paths.join(" ")} &&" — the two path lists differ`,
+  );
 }
 
 const forbidden = paths.filter((p) => p === "." || /^(\.\/)?(cmem|tests)(\/|$)/.test(p));
@@ -62,13 +64,19 @@ try {
     const reported = out.includes(name);
     const ok = reported === c.expect;
     if (!ok) problems++;
-    console.log(`${ok ? "✅" : "❌"} ${name.padEnd(24)} ${reported ? "reported" : "not reported"}${ok ? "" : ` (expected ${c.expect ? "reported" : "not reported"})`}`);
+    console.log(
+      `${ok ? "✅" : "❌"} ${name.padEnd(24)} ${reported ? "reported" : "not reported"}${ok ? "" : ` (expected ${c.expect ? "reported" : "not reported"})`}`,
+    );
   }
 } finally {
   for (const name of Object.keys(canaries)) rmSync(join(root, dir, name), { force: true });
 }
 
-console.log(problems ? `❌ format canary: ${problems} problem(s)` : `✅ format canary: scope ${paths.join(" ")}`);
+console.log(
+  problems
+    ? `❌ format canary: ${problems} problem(s)`
+    : `✅ format canary: scope ${paths.join(" ")}`,
+);
 process.exit(problems ? 1 : 0);
 
 function fail(msg: string): never {
