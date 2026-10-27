@@ -1,6 +1,7 @@
 # bun-migration.md — moving the toolchain off Deno, keeping JSR (SCOPE, not started)
 
-**Status 2026-10-26: scoped, owner decisions taken (end of file), no step started.** Requested by the owner 2026-10-26 ("scope this
+**Status 2026-10-26: scoped, owner decisions taken (end of file); step 1 MEASURED and re-planned
+(§ "Step 1, measured" — binaryang's step 1 silently corrupts this package); next is step 2.** Requested by the owner 2026-10-26 ("scope this
 repo's transition to bun per the guidelines in the binaryang project"). The guidelines are
 binaryang's `cmem/jsr-deno-exit-guide.md` (written for the `@jrmarcum` JSR packages, this one
 included; § 6 lists s3d-reportcompiler as "not surveyed — start with § 2, then § 4") and its full
@@ -53,16 +54,9 @@ rule of its own). **The gate for every step:** `cd tests && <runtime> ../main.ts
 Node and Bun with the baked HTML's sha256 unchanged, plus the step's own done-condition. Only step
 6's real release is irreversible.
 
-1. **`jsr.json` becomes the one manifest (F1).** Move `name` / `version` / `license` / `exports` /
-   `publish` out of `deno.json`; `--config jsr.json` on every `deno publish` (CI and dry runs) until
-   step 7; `sync-version.ts`, `bump.ts`, `publish.ts`, `verify-release.ts` read `jsr.json`. A check
-   that fails if `deno.json` carries `name` or `version` again (a copy left there WINS). **Done
-   when** the dry run lists the same files as before.
-   ⚠️ **Risk binaryang did not have: runtime dependencies.** binaryang ships none; this package's
-   three npm deps reach `deno publish` through `deno.json`'s import map. UNMEASURED: whether
-   `deno publish --config jsr.json` still resolves them (from `package.json`, or a `jsr.json`
-   `imports`), and what JSR then records as the package's dependencies. Measure in a scratch clone
-   first: compare the dry run's file list AND the published dependency list.
+1. **`jsr.json` becomes the one manifest (F1) — MEASURED 2026-10-26: it cannot land before step 7
+   here.** binaryang's recipe (manifest in `jsr.json`, `--config jsr.json` while `deno.json` lives)
+   **silently corrupts this package.** See § "Step 1, measured" below; the revised order follows it.
 2. **`tsconfig.json` + `bun check`.** `strict` (Deno's default), `types: ["node"]`, `@types/node`
    pinned to the Node floor (not `^22.10.2`), `erasableSyntaxOnly: true` to prove F7. `bun check`
    (Bun ≥ 1.4.3; mind the `check` script-shadowing trap). **Done when** it accepts what `deno check`
@@ -117,6 +111,56 @@ Node and Bun with the baked HTML's sha256 unchanged, plus the step's own done-co
    `@types/node`; `nodeModulesDir: "manual"` goes with it (re-measure that `deno publish` still
    finds `node_modules`); `deno task install` (global CLI from the tree) needs a replacement;
    `.vscode` `deno.enable` off.
+
+## Step 1, measured (2026-10-26) — `--config jsr.json` corrupts prefix imports, silently
+
+Deno 2.9.8, a clean clone at `16c38909f`, `npm ci` (Node 24 via fnm). **Method:** a dry run never
+shows the rewritten files, so each variant was PUBLISHED to a fake JSR — a one-time Bun server on
+`127.0.0.1` (`JSR_URL=http://127.0.0.1:<port>/`, a dummy `--token`, `--no-provenance`) that saved
+the uploaded tarball — and the tarball's import specifiers were read. Every request reached the
+fake (its log shows the four calls of a publish); a stray request to jsr.io could not have
+authenticated, and 1.0.4 exists there. **Positive control:** the baseline capture rewrites imports
+exactly as the real 1.0.4 on JSR does (`npm:mathjax-full@3.2.2/js/…` ×6, `npm:pdf-lib@1.17.1`,
+`npm:pdfjs-dist@4.6.82/legacy/build/pdf.mjs`; JSR's API lists the same 8 dependencies).
+
+| variant | `deno.json` | `jsr.json` | command | result |
+|---|---|---|---|---|
+| baseline | full manifest + import map | — | `deno publish` | ✅ correct (= real 1.0.4) |
+| B | import map + `nodeModulesDir` | manifest | `--config jsr.json` | ❌ loud: TS2307 ×7, "not a dependency and not in import map" — `deno.json` is IGNORED |
+| C1 | import map + `nodeModulesDir` | manifest + import map + `nodeModulesDir` | `--config jsr.json` | ❌ **SILENT**: "Successfully published"; `pdf-lib` right, every prefix import (`mathjax-full/…`, `pdfjs-dist/…`) rewritten to `./mathjax-full/js/…` — a package that cannot load |
+| C2 | `nodeModulesDir` only | manifest + `nodeModulesDir` (deps from `package.json`) | `--config jsr.json` | ❌ **SILENT**: all three, `pdf-lib` too, rewritten to `./…` |
+| C3 | import map + `nodeModulesDir` | manifest + import map | `--config jsr.json` | ❌ loud: "Failed to resolve … after-prefix portion" |
+| C6 | `tasks` + `fmt` only | manifest + import map + `nodeModulesDir` | `--config jsr.json` | ❌ **SILENT**, as C1 |
+| C6 | same | same | `deno publish` | ❌ loud: "Missing 'name' field in deno.json" (F1) |
+| **C5** | **none** | manifest + import map + `nodeModulesDir` | `deno publish` | ✅ **correct — identical specifiers to the baseline** |
+
+In the C5 tree (no `deno.json`), `deno check` of the three entry files passes and the sample build
+on Deno PASSES (100 pages, 2,203 expressions) with the baked HTML **byte-identical** to this tree's
+(sha256 `7F283563…20D8`) — the Deno runtime leg survives the end state.
+
+**What it means:** in Deno 2.9.8, an explicit `--config jsr.json` beside a `deno.json` mis-resolves
+trailing-slash import-map entries (and `package.json` deps) and still reports success. binaryang
+never saw it because it ships no dependencies. **The publish gate here must therefore read the
+UPLOAD, not the exit code**: keep the fake-registry capture as a committed check (step 6) that
+compares every rewritten specifier against the expected list before a tag.
+
+### The revised order
+
+The manifest move and the `deno.json` deletion become ONE step, last before CI, and everything
+`deno.json` still holds must leave it first:
+
+1. ~~`jsr.json` alone~~ → folded into step 7.
+2. `tsconfig.json` + `bun check` (unchanged).
+3. `bun fmt` + Biome — takes `fmt` out of `deno.json`.
+4. Scripts on `node:` builtins, run by `bun` from `package.json` scripts — takes `tasks` out of
+   `deno.json` (`deno task release` becomes `bun run release`; `publish.ts` / `verify-release.ts`
+   stop importing `../deno.json`).
+5. The `node:test` suite.
+7. **One step: `jsr.json` = manifest + `imports` + `nodeModulesDir: "manual"`, `deno.json`
+   deleted, `deno publish` with NO `--config`**, proved by the fake-registry capture equal to the
+   baseline's specifiers and the dry run's file list (7 files, `jsr.json` in place of `deno.json`).
+   The version then lives in `jsr.json` (+ its two generated copies).
+6. CI and one real release, last, with the capture check in the release path.
 
 ## Also found, outside the seven steps
 
