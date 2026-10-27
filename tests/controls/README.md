@@ -49,7 +49,7 @@ works for the one person it was written for.
 **Retired 2026-10-26** (owner: "retire it if it is not being used" — nothing ran or imported it, and
 it imported `npm:pdfmake`, deliberately not a dependency, which would not survive the move off Deno;
 [../../cmem/bun-migration.md](../../cmem/bun-migration.md)). Its verdict stays here; the script is
-`git show a57cd72:tests/controls/spike-pdfmake.ts`.
+`git show bd2599287:tests/controls/spike-pdfmake.ts` (`a57cd72` before the 2026-10-26 history purge).
 
 | Script | Verdict |
 |---|---|

@@ -14,7 +14,7 @@ for the JSR items only (`deno publish`, F2). Workspace Tooling rule 1 says the s
 
 ## The two questions (guide § 2), measured 2026-10-26
 
-Deno 2.9.8, Bun 1.4.4, at `a57cd72`.
+Deno 2.9.8, Bun 1.4.4, at `bd2599287` (`a57cd72` before the 2026-10-26 history purge).
 
 **1. Does the published code call Deno? — NO.** `main.ts`, `src/report_core.ts`,
 `src/report_runtime.ts` make no `Deno.*` call; the one reference is runtime detection
@@ -147,4 +147,5 @@ Node and Bun with the baked HTML's sha256 unchanged, plus the step's own done-co
 3. The test suite: "yes add the test suite" → step 5.
 4. npm: "we will not publish this to npm" → JSR only.
 5. Order: "yes" → push first and decide the H19 purge before step 1, because a purge rewrites
-   history and must not land between these branches (roadmap task 11).
+   history and must not land between these branches. ✅ Both done 2026-10-26 (pushed; purged and
+   force-pushed — [history-purge-2026-10-26.md](history-purge-2026-10-26.md)). Step 1 is clear.

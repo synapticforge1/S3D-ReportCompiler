@@ -16,7 +16,7 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08) |
 | Published | **JSR `@jrmarcum/s3d-reportcompiler` 1.0.4** = latest, published 2026-08-12 through Actions (re-read from JSR 2026-10-26) |
 | Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · **1.0.4 ✅** Rekor `2439323008` (`deno task verify-release 1.0.4`, 2026-10-26) |
-| Tags | `v1.0.0`, `v1.0.1`, `v1.0.4` (= `12e84db`) on `origin`, with their `release/v*` branches |
+| Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 
 🔁 **Corrected 2026-10-26:** this memory said "1.0.4 is staged and unreleased" for two and a half
@@ -605,21 +605,21 @@ Since 2026-10-26 this repo sits under the workspace's common rules (`../cmem/wor
 `memory-conventions.md`). Done in-repo on 2026-10-26: `origin` reset to the org, the stale links
 fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ block copied
 ([best-practices.md](best-practices.md)), the privacy rule recorded ([INDEX.md](INDEX.md) § Privacy),
-`.gitattributes` made wildcard-first, the status line moved here. What remains:
+`.gitattributes` made wildcard-first, the status line moved here. Then, the same day:
 
-1. **Push.** `48ae20d` and the conformance commit were on local `main` only (`origin/main` =
-   `17aa1af`, read with `ls-remote` 2026-10-26). Owner, 2026-10-26: push before the Bun work starts
-   (`git ls-remote origin refs/heads/main` is the check).
-2. **The drive path in history (H19).** `roadmap.md` carried this machine's project path from
-   `387cbd9` onward — **inside every tagged tree, `v1.0.0`, `v1.0.1` and `v1.0.4`**, all public. The
-   published JSR packages do NOT contain it (`deno.json` `publish.include` has no `cmem/`). A purge
-   rewrites every commit from `387cbd9`, so the three tags move — and **pushing a moved `v*` tag
-   re-runs `publish.yml`** (it triggers on `push: tags: v*`). JSR refuses an existing version, but
-   read what the workflow does after that refusal before moving any tag (workspace working-rules §
-   Git). The rewritten tags would also no longer be the commits JSR's provenance attests. Decide:
-   purge and accept the moved tags, or leave the history and record why.
+1. ✅ **Pushed** (owner: "yes").
+2. ✅ **The drive path purged from history (H19)** (owner: "Purge now"), force-pushed with the three
+   tags and `release/v*` branches; every commit id from `387cbd9` changed. Method, verification,
+   the old → new map, and what the moved tags re-triggered: [history-purge-2026-10-26.md](history-purge-2026-10-26.md).
+   ⚠️ **Learned there: `deno publish` SKIPS an already-published version with exit 0**, so a
+   re-run of `publish.yml` does NOT stop at the publish step — it runs on into the release-branch
+   and GitHub Release steps. Harmless this time; read the workflow before ever moving a `v*` tag.
+   🗓️ Still the owner's: a GitHub Support request to drop the old commits GitHub serves by hash.
 3. **The five `scripts/*.ts` run under Deno** (drift X17). → **Answered by the owner 2026-10-26:
    port them** — the whole toolchain moves to Bun, scoped in task 12.
+
+What remains:
+
 4. **JSR: require publishing from GitHub Actions** — still the one real prevention for #26 (above).
 5. **The pull line** ("At session start, read `../cmem/workspace-correspondence.md`, then the
    letters in `../cmem/handoffs.md` addressed to this repo") is in the gitignored `CLAUDE.md` on

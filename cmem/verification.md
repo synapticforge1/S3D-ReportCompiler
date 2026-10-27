@@ -96,7 +96,8 @@ A check that cannot fail proves nothing. See [testing.md](testing.md) — every 
 ## The lessons that cost the most to learn
 
 *(Moved here from `INDEX.md` on 2026-10-26, verbatim, when the index was cut to one line per file;
-the earlier text is `git show 48ae20d:cmem/INDEX.md`.)*
+the earlier text is `git show 4856337b8:cmem/INDEX.md` — `48ae20d` before the
+[2026-10-26 history purge](history-purge-2026-10-26.md).)*
 
 ⚠️ **A converter that reports success is not the same as a correct document.** Three separate failure
 modes in this project were *silent*: an unrecognised delimiter (480 expressions typeset as prose while
