@@ -59,10 +59,14 @@ Node:
 npx jsr add @jrmarcum/s3d-reportcompiler
 ```
 
-⚠️ **npm 12 (bundled with Node 24.21) refuses JSR packages by default** —
-`EALLOWREMOTE: Fetching packages of type "remote" have been disabled`, because JSR's npm
-registry serves tarballs from a URL npm 12 classes as remote (`allow-remote` defaults to
-`none`; npm 10 and 11 allow it). Allow it for the install:
+⚠️ **npm 12 (bundled with Node 24.21) refuses the install `npx jsr add` performs** —
+`EALLOWREMOTE: Fetching packages of type "remote" have been disabled`. `jsr add` installs the
+package under an alias pointing at a tarball URL on JSR's npm registry, which npm 12 classes as
+remote (`allow-remote` defaults to `none`; npm 10 and 11 allow it). A direct
+`npm install @jsr/jrmarcum__s3d-reportcompiler` (with `@jsr:registry=https://npm.jsr.io` in
+`.npmrc`) is not affected (measured on npm 12.2.0) — the package is then named
+`@jsr/jrmarcum__s3d-reportcompiler` in imports and under `node_modules/`. To keep `jsr add`, allow
+it for the install:
 
 ```bash
 npm_config_allow_remote=all npx jsr add @jrmarcum/s3d-reportcompiler

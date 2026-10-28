@@ -653,10 +653,13 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 - **C20 ✅ closed 2026-10-28** — `--config jsr.json` corrupts a package with dependencies: binaryang's
   `jsr-deno-exit-guide.md` F1 / § 4 carry the caveat (`a846dc68f`, on its `origin/main`); wasmtk's
   `deno-exit-plan.md` P1 must prove its upload (`67686067a60`). Verified read-only by this repo.
-- **C21 open** — six findings from task 12 steps 2–4 for binaryang's guide and wasmtk (the `deno task`
-  fallback, `Deno.readTextFile` keeps a BOM, `bun fmt` exists, Biome's optional binaries, npm 12 vs
-  JSR, `deno publish` skips an existing version). Awaiting their answers; this repo closes it.
-- Answered here, the workspace closes: H26 (the floor), H19 (the purge), H15 (scripts on Bun).
+- **C21 ✅ closed 2026-10-28** — six findings from task 12 steps 2–4: binaryang's guide § 5a carries
+  all six (`a3d338e8e`, five re-measured), wasmtk's plan maps each to a phase (`67686067a60`).
+  binaryang NARROWED (5) — only `jsr add`'s alias install is refused by npm 12 — re-measured here and
+  carried into known-issues #27 and the README.
+- Answered here; the workspace closes them: **H26 ✅ closed** by the workspace 2026-10-28; **H15** and
+  **H19** still open in the ledger on 2026-10-28 (multi-repo rows — other repos' parts and the
+  owner's GitHub Support requests remain), nothing left in them for this repo.
 
 ---
 
