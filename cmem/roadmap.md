@@ -858,7 +858,14 @@ own `dist/`, last built at 1.1.0, so **npm's first version is 1.1.0** (owner: "n
 npm says 1.1.0"), by hand, no provenance; npm versions are immutable, so it stays. The owner then
 made the package public and set its trusted publisher (2026-10-28) and asked for **1.1.4** to JSR
 and npm together. (An anonymous registry read still answered 404 just before — propagation or the
-visibility change; re-read after 1.1.4.) After the first npm version: on npm, the
+visibility change; re-read after 1.1.4.) **1.1.4 released 2026-10-28:** JSR ✅ attested (Rekor
+`3546339510`); npm ❌ — the package now EXISTS (registry GET 200 in the job), yet the OIDC exchange
+still said `package not found` → npm holds no trusted publisher matching this package + workflow
+(the entry was first made before the package existed); the `NPM_TOKEN` fallback then hit `EOTP`.
+Fix: the trusted publisher ON the package — `npm trust github @synapticforge1/s3d-reportcompiler
+--file publish.yml --repo synapticforge1/S3D-ReportCompiler --allow-publish` (npm ≥ 11.15, logged
+in with 2FA), or its Settings → Trusted publishing; then "Re-run failed jobs" on 1.1.4's publish
+run (OIDC is tried before the token). After the first npm version: on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.
