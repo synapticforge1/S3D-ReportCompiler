@@ -806,9 +806,13 @@ could match. **Bootstrap, once:** the npm job publishes with the repository secr
 it exists (npm tries OIDC, falls back to the token, and still signs provenance with the run's OIDC
 token — never a local publish, which could not carry provenance). Owner steps: a granular npm token,
 shortest expiry, read-write on the `synapticforge1` scope (2FA bypass only if the account enforces
-2FA for publishing) → GitHub secret `NPM_PUBLISH` → "Run workflow" — ⚠️ **"Use workflow from"
-= `main`**, `tag` = `v1.1.1` (run 40742854280 was started from `release/v1.1.1`, so GitHub ran THAT
-branch's old `publish.yml`: no token step, placeholder token, the same 404) → on npm, the
+2FA for publishing) → GitHub secret `NPM_PUBLISH` → **owner, 2026-10-28: "lets try release 1.1.2
+with all of the updates first"** — after a second dispatch also ran from `release/v1.1.1`
+(run 40743268151), npm starts at **1.1.2**, released by tag (a tag push runs the TAG's own
+`publish.yml`, so the dropdown trap cannot occur); 1.1.1 stays JSR-only. ⚠️ **A manual "Run
+workflow" must use "Use workflow from" = `main`** and put the version in `tag`: runs 40742854280 and
+40743268151 were started from `release/v1.1.1`, so GitHub ran THAT branch's old `publish.yml` (no
+token step, placeholder token, the same 404). After the first npm version: on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.
