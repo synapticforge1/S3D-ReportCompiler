@@ -1,4 +1,4 @@
-# bun-migration.md — moving the toolchain off Deno, keeping JSR (steps 2–7 done; 1.1.0–1.1.4 released, JSR + npm by OIDC; left: publish.yml gated on CI, Deno uninstalled here + one no-Deno local gate run)
+# bun-migration.md — moving the toolchain off Deno, keeping JSR (steps 2–7 done; 1.1.0–1.1.4 released, JSR + npm by OIDC; publish.yml gated on CI; left: Deno uninstalled here + one no-Deno local gate run)
 
 🔒 **Goal (owner, 2026-10-28): "the goal is to be deno free on this machine."** Deno may run only
 where JSR needs it — `deno publish` on GitHub's runner, installed per run by `setup-deno` — and
@@ -84,7 +84,9 @@ folder shared with Bun hides it); Bun resolves no `npm:` specifier; `setup-deno`
   rewriting, so a new Deno is caught by CI before a tag — floating is acceptable; § 5a's exact pin
   matters where Deno output feeds snapshots, which nothing here does since compat moved to tsc.
 
-**Suggested for the guide — SENT 2026-10-28 as workspace ledger row C26** (owner: "send as
+**Suggested for the guide — SENT 2026-10-28 as workspace ledger row C27** (filed as C26, renumbered
+after a collision with binaryang's own C26; answered by binaryang `60025f640`, verified and CLOSED
+by S3D 2026-10-28 — two older `--config jsr.json` mentions in its F2 and table left to it) (owner: "send as
 workspace correspondence"; S3D is the creator, so S3D verifies and closes):
 1. § 4 step 6 still says "`deno publish --config jsr.json`". For a package with dependencies that
    is the C20 layout; with `deno.json` DELETED, s3d measured `deno publish` with NO `--config`

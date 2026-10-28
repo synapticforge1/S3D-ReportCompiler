@@ -697,7 +697,15 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 
 ---
 
-## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–7 DONE (1.1.0–1.1.4 released); left: `publish.yml` gated on CI; Deno uninstalled here (owner) + one no-Deno local gate run
+## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–7 DONE, `publish.yml` gated on CI (2026-10-28); left: Deno uninstalled here (owner) + one no-Deno local gate run
+
+**`publish.yml` gated on CI (2026-10-28; owner: "make the publish.yml"):** a first job `ci-green`
+waits for `ci.yml`'s run on the tagged SHA (`gh api …/workflows/ci.yml/runs?head_sha=`, every
+30 s, up to 40 min) and requires `success`; the JSR job `needs` it and npm needs JSR — so a red,
+cancelled or missing CI run publishes NOTHING to either registry. Manual npm-only runs skip it
+(they publish an already-tagged version). The query was checked against v1.1.4's commit
+(`completed success`, run 40749944867); the gate itself first runs on the next tag.
+
 
 Done and merged 2026-10-26: step 2 `bun check` (`a222adf`), step 3 `bun fmt` + Biome (`78f9ac8`),
 step 4 every script and control on Bun, with three release defects fixed (`129fd0a`). 2026-10-28
@@ -791,7 +799,12 @@ npm's staged-publishing / trust setup; deprecate or unpublish within npm's windo
 install of 1.1.4 (npm 12.2, Node 24): 0 vulnerabilities, the CLI compiles the 13 samples PASS
 (13/13 per report), the library imports with `compareEachReport`. JSR has 1.1.0–1.1.4, all attested.
 From now on one tag publishes both (🔒 owner: "jsr and npm are updated at the same time always").
-Left: "require 2FA and disallow tokens" on the package, if not already set (owner). **Owner,
+**"Require 2FA and disallow tokens" is SET** (owner, 2026-10-28). **`0.0.0-stage`** (read
+2026-10-28): description "Temporary package placeholder for staged publishing", published by the
+owner's npm user at 18:49:30Z — npm's staged-publishing flow left it during the first manual
+attempt; not `latest`. The owner found no way to deprecate it on the website; the CLI can, with an
+interactive 2FA login: `npm deprecate @synapticforge1/s3d-reportcompiler@0.0.0-stage "<msg>"`, or
+`npm unpublish …@0.0.0-stage` while npm's unpublish window allows (owner's call). **Owner,
 2026-10-28: the npm tokens are revoked** (and the `NPM_TOKEN` secret deleted before 1.1.4's
 re-run) — no npm token exists for this package. The global CLI on this machine: the Deno one
 uninstalled by the owner, now a Bun global of npm 1.1.4 (architecture.md § Installing it).

@@ -278,7 +278,8 @@ Owner: "the goal is to be deno free on this machine", then steps 5 and 7, "relea
 - **Step 5:** `tests/build.test.ts`, 13 tests on `bun test` and `node --test`, inverted 8/8.
 - **Releases:** JSR 1.1.0–1.1.4, all attested; npm `@synapticforge1/s3d-reportcompiler` 1.1.0 (by
   hand) and 1.1.4 (trusted publisher, provenance). 🔒 JSR and npm release together from now on.
-- **Ledger C26** sent to binaryang (five findings for its exit guide).
+- **Ledger C27** (filed as C26; renumbered — binaryang's own C26 collided) sent to binaryang: five
+  findings for its exit guide; answered `60025f640`, verified and closed the same day.
 
 | believed | measured |
 |---|---|

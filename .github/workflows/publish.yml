@@ -4,6 +4,8 @@ name: Publish to JSR and npm
 # version already on JSR (1.1.0 was released to JSR before the npm job existed). npm's trusted
 # publisher for @synapticforge1/s3d-reportcompiler names THIS file and no environment (owner,
 # 2026-10-28): renaming the file or adding an environment breaks npm publishing.
+# 🔒 JSR and npm are released together, always (owner, 2026-10-28), and only from a commit CI
+# passed: the `ci-green` job below gates both.
 on:
   push:
     tags:
@@ -15,7 +17,41 @@ on:
         required: true
 
 jobs:
+  # Nothing is published from a commit CI did not pass. `bun run release` pushes the commit to main
+  # BEFORE the tag, so ci.yml runs on exactly this SHA; this waits for that run and requires
+  # success. No run, a failed run, a cancelled one, or one still going after 40 minutes: refused.
+  ci-green:
+    name: CI passed on the tagged commit
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for ci.yml on this commit, and require success
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          for i in $(seq 1 80); do
+            RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=1" \
+              --jq '.workflow_runs[0] | "\(.status) \(.conclusion) \(.html_url)"' || true)
+            set -- $RUN
+            if [ "${1:-}" = "completed" ]; then
+              if [ "${2:-}" = "success" ]; then
+                echo "✅ CI passed on ${SHA}: ${3}"
+                exit 0
+              fi
+              echo "::error::CI on ${SHA} concluded '${2}', not success — refusing to publish (${3})."
+              exit 1
+            fi
+            echo "  attempt ${i}/80: CI on ${SHA} is '${1:-not started}'"
+            sleep 30
+          done
+          echo "::error::No completed CI run for ${SHA} after 40 minutes — refusing to publish."
+          exit 1
+
   publish:
+    needs: ci-green
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
