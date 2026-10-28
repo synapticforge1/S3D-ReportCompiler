@@ -160,7 +160,7 @@ package find nothing to run.
 
   | runtime | the installed package | a clone of this repository |
   |---|---|---|
-  | Node 22 | 22.6 or later | **22.18 or later** (the first 22.x that runs `.ts` with no flag) |
+  | Node 22 | 22.6 or later for 1.0.4 (measured); **22.13 or later from the next release** — its `pdfjs-dist` 6 requires it | **22.18 or later** (the first 22.x that runs `.ts` with no flag) |
   | Node 24, Node 26 | ✅ | ✅ |
   | Bun | 1.4.4 (the version measured; Bun has no LTS line) | 1.4.4 |
   | Deno | 2.9 LTS (2.9.8 measured) | 2.9 LTS |
@@ -426,7 +426,7 @@ and each lands here with its migration.
 
 | Version | What changed | How to migrate |
 |---|---|---|
-| _next release_ | nothing breaking | — |
+| _next release_ | The API is unchanged, but **the installed package's Node floor rises from 22.6 to 22.13** (`pdfjs-dist` 6 requires it). The compatibility gate does not read engine requirements, so whether this makes the next release a major is decided by the owner. | Node 22.6–22.12: move to 22.13 or later, or stay on 1.0.4 |
 | 1.0.0 – 1.0.4 | nothing breaking (1.0.2 added the `./cli` export) | — |
 
 ---
@@ -453,7 +453,7 @@ and each lands here with its migration.
 | ✅ | CLI | Defaults resolve from the working directory, so a global install is relocatable |
 | ✅ | Packaging | Published to JSR with GitHub Actions OIDC provenance |
 | ⏳ | Verification | **Per-report conservation.** Segment the PDF at report headings and compare each segment against its own source, closing the set-union gap above |
-| ⏳ | Maths | **MathJax 3 → 4.** Deferred deliberately: v4 replaced the font system, so glyph metrics, line breaking and page count all move. Deprecation is not an advisory. (`npm audit`, 2026-10-26: one high and one moderate advisory in `@xmldom/xmldom` 0.9.10, pinned by MathJax's `speech-rule-engine`; an override to the fixed 0.9.12 is planned, and v4 is not the remedy.) Requires a measured no-degradation comparison first |
+| ⏳ | Maths | **MathJax 3 → 4.** Deferred deliberately: v4 replaced the font system, so glyph metrics, line breaking and page count all move. Deprecation is not an advisory. (`npm audit` reports 0 vulnerabilities since 2026-10-28, when `@xmldom/xmldom` — pinned by MathJax's `speech-rule-engine` — was overridden to the fixed 0.9.12; v4 was not the remedy.) Requires a measured no-degradation comparison first |
 | ⏳ | CSS | **Scope the remaining blanket rewrites.** `visibility: hidden → visible` and `height: 100% → auto` are still textual. They are audited and counted, and they fail *visibly*, which is the safer class — narrowing them means evaluating the cascade |
 | ⏳ | Upstream | **Emit MathML from SkyCiv instead.** Their reports are generated from structured data; HTML → PDF is a lossy round-trip through a format that was never the source of truth |
 
