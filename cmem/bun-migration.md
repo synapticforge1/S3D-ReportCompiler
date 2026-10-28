@@ -33,7 +33,8 @@ step-7 tree (run 40727580815): checks, runtime matrix (Deno leg included) and np
 loaded manifest resolves, and with no `deno.json` Deno loads none for `check` (TS2307 ×3,
 reproduced locally). Fixed with `--config jsr.json` on THAT step only (a type check fails loudly;
 `deno publish` must never get it). `deno check` of the entry files, `doc --lint` and the dry run
-passed without it. Still to come: uninstalling Deno here (owner), and `publish.yml` gating on CI plus the npm job.
+passed without it. **Green after the fix:** branch run 40728431628, then main run 40728999111
+(merge `c4e3a92`) — all four jobs, the upload check on the runner included. Still to come: uninstalling Deno here (owner), and `publish.yml` gating on CI plus the npm job.
 
 **Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
 `129fd0a`); step 1 MEASURED and folded into step 7 (§ "Step 1, measured" — binaryang's step 1
