@@ -5,13 +5,16 @@
  *   - Node: the floor named in package.json `engines.node`, every line Node's own release schedule
  *     lists as LTS today, and a line that becomes LTS within 30 days. Each runs through
  *     `fnm exec --using=<version>`, so nothing switches globally and no path is machine-specific.
- *   - Bun: whichever `bun` is on PATH. Deno: whichever `deno` is on PATH (expected: the LTS line).
+ *   - Bun: whichever `bun` is on PATH.
+ *   - Deno, with `--deno` only: whichever `deno` is on PATH. CI passes it (.github/workflows/ci.yml);
+ *     a developer machine has no Deno (owner, 2026-10-28), so locally the line says where it runs.
  *
  * A Node version fnm has not installed FAILS with the `fnm install` that fixes it; it is never
- * skipped. `--also=<version>` adds a Node version (used to show a version below the floor fails).
+ * skipped. `--install-node` installs every needed version first (CI). `--also=<version>` adds a
+ * Node version (used to show a version below the floor fails).
  *
  * Run via:  bun run runtimes
- * Uses only node: builtins and web APIs, so it also runs on Node and Deno.
+ * Uses only node: builtins and web APIs, so it also runs on Node.
  */
 
 import { spawnSync } from "node:child_process";
@@ -29,6 +32,8 @@ const samples = join(root, "tests", "HTMLFilesToBeCompiled");
 const main = join(root, "main.ts");
 
 const also = process.argv.filter((a) => a.startsWith("--also=")).map((a) => a.slice(7));
+const withDeno = process.argv.includes("--deno");
+const installNode = process.argv.includes("--install-node");
 
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const floor = String(pkg.engines?.node ?? "").replace(/^>=\s*/, "");
@@ -72,8 +77,20 @@ const runs: Run[] = [
     cmd: ["fnm", "exec", `--using=${v}`, "--", "node", main],
   })),
   { name: "bun", cmd: ["bun", main] },
-  { name: "deno", cmd: ["deno", "run", "-A", main] },
+  ...(withDeno ? [{ name: "deno", cmd: ["deno", "run", "-A", main] }] : []),
 ];
+if (!withDeno) console.log("·  deno: runs in CI (.github/workflows/ci.yml), not on this machine");
+
+if (installNode) {
+  for (const run of runs.filter((r) => r.cmd[0] === "fnm")) {
+    const v = run.cmd[2].slice("--using=".length);
+    const r = spawnSync("fnm", ["install", v], { encoding: "utf8" });
+    if (r.status !== 0) {
+      console.error(`❌ fnm install ${v} failed:\n${r.stdout}${r.stderr}${r.error?.message ?? ""}`);
+      process.exit(1);
+    }
+  }
+}
 
 const work = mkdtempSync(join(tmpdir(), "s3d-runtimes-"));
 const hashes = new Map<string, string>();
@@ -124,7 +141,7 @@ if (distinct.size > 1) {
   failed++;
   console.log(`❌ the baked document differs between runtimes: ${[...distinct].join(", ")}`);
 }
-if (hashes.size < 4) failed++;
+if (hashes.size !== runs.length) failed++;
 console.log(
   failed
     ? `\n❌ ${failed} problem(s) across ${runs.length} runtime(s)`

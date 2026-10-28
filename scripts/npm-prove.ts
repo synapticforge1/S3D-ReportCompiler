@@ -5,7 +5,8 @@
  *
  *  1. pack dist/; no TypeScript source ships, and every path the manifest names is in the tarball;
  *  2. install the tarball into a scratch project OUTSIDE the repo, as a user would;
- *  3. on the manifest's Node floor, every current Node LTS line (Node's own schedule), Bun and Deno:
+ *  3. on the manifest's Node floor, every current Node LTS line (Node's own schedule), Bun, and Deno
+ *     with `--deno` (CI passes it; a developer machine has no Deno, owner 2026-10-28):
  *     import `.` and `./runtime`, and run the INSTALLED CLI on the sample reports — it must PASS and
  *     bake the same document, byte for byte, as the source does;
  *  4. `npm exec s3d-reportcompiler -- --version` prints the version;
@@ -13,6 +14,7 @@
  *  6. the export list equals JSR's own npm build of this package (an independent reference).
  *
  * A Node version fnm lacks FAILS with the `fnm install` that fixes it; nothing is skipped.
+ * `--install-node` installs every needed version first (CI).
  * Needs the network (the tarball's dependencies come from npmjs.org) and Chrome (the CLI renders).
  * Uses node: builtins; npm is run as `node <npm-cli.js>` beside a fnm Node (fnm cannot spawn the
  * Windows `npm.cmd` shim).
@@ -36,6 +38,8 @@ if (!existsSync(join(dist, "package.json"))) {
 const manifest = JSON.parse(readFileSync(join(dist, "package.json"), "utf8"));
 const NAME: string = manifest.name;
 const NPM_NODE = "24";
+const withDeno = process.argv.includes("--deno");
+const installNode = process.argv.includes("--install-node");
 
 let failed = 0;
 const ok = (good: boolean, what: string, why = "") => {
@@ -57,12 +61,33 @@ const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("
 
 const work = mkdtempSync(join(tmpdir(), "s3d-npm-prove-"));
 try {
-  // npm itself: the npm-cli.js beside the chosen Node.
+  const floor = /^>=(\d+\.\d+\.\d+)$/.exec(String(manifest.engines?.node ?? ""))?.[1];
+  if (!floor)
+    throw new Error(`engines.node must be ">=X.Y.Z": ${JSON.stringify(manifest.engines)}`);
+  const schedule = (await (
+    await fetch("https://raw.githubusercontent.com/nodejs/Release/main/schedule.json")
+  ).json()) as Record<string, { lts?: string; end: string }>;
+  const now = Date.now();
+  const lines = Object.entries(schedule)
+    .filter(
+      ([, v]) => v.lts && Date.parse(v.end) >= now && Date.parse(v.lts) <= now + 30 * 86_400_000,
+    )
+    .map(([k]) => k.slice(1));
+  if (installNode) {
+    for (const v of new Set([NPM_NODE, floor, ...lines])) {
+      const r = run("fnm", ["install", v], work);
+      if (r.code !== 0) throw new Error(`fnm install ${v} failed:\n${r.out}`);
+    }
+  }
+
+  // npm itself: the npm-cli.js beside the chosen Node (Windows layout), or under lib/ (POSIX).
   writeFileSync(join(work, "where.mjs"), "console.log(process.execPath);\n");
   const nodeExe = fnmNode(NPM_NODE, [join(work, "where.mjs")], work).out.trim();
-  const npmCli = join(dirname(nodeExe), "node_modules", "npm", "bin", "npm-cli.js");
-  if (!existsSync(npmCli))
-    throw new Error(`npm-cli.js not found beside Node ${NPM_NODE} (${npmCli})`);
+  const npmCli = [
+    join(dirname(nodeExe), "node_modules", "npm", "bin", "npm-cli.js"),
+    join(dirname(nodeExe), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ].find((p) => existsSync(p));
+  if (!npmCli) throw new Error(`npm-cli.js not found beside Node ${NPM_NODE} (${nodeExe})`);
   const npm = (args: string[], cwd: string) => fnmNode(NPM_NODE, [npmCli, ...args], cwd);
 
   // 1. Pack and inspect.
@@ -132,18 +157,6 @@ try {
       "",
     ].join("\n"),
   );
-  const floor = /^>=(\d+\.\d+\.\d+)$/.exec(String(manifest.engines?.node ?? ""))?.[1];
-  if (!floor)
-    throw new Error(`engines.node must be ">=X.Y.Z": ${JSON.stringify(manifest.engines)}`);
-  const schedule = (await (
-    await fetch("https://raw.githubusercontent.com/nodejs/Release/main/schedule.json")
-  ).json()) as Record<string, { lts?: string; end: string }>;
-  const now = Date.now();
-  const lines = Object.entries(schedule)
-    .filter(
-      ([, v]) => v.lts && Date.parse(v.end) >= now && Date.parse(v.lts) <= now + 30 * 86_400_000,
-    )
-    .map(([k]) => k.slice(1));
   const runtimes: Array<[string, (args: string[]) => ReturnType<typeof run>]> = [
     [`node ${floor} (engines floor)`, (a) => fnmNode(floor, a, consumer)],
     ...lines.map((l): [string, (args: string[]) => ReturnType<typeof run>] => [
@@ -151,8 +164,16 @@ try {
       (a) => fnmNode(l, a, consumer),
     ]),
     ["bun", (a) => run("bun", a, consumer)],
-    ["deno", (a) => run("deno", ["run", "-A", ...a], consumer)],
+    ...(withDeno
+      ? [
+          ["deno", (a) => run("deno", ["run", "-A", ...a], consumer)] as [
+            string,
+            (args: string[]) => ReturnType<typeof run>,
+          ],
+        ]
+      : []),
   ];
+  if (!withDeno) console.log("·  deno: runs in CI (.github/workflows/ci.yml), not on this machine");
   const cli = join(consumer, "node_modules", ...NAME.split("/"), "main.js");
   const probes = new Set<string>();
   for (const [label, exec] of runtimes) {

@@ -165,23 +165,22 @@ execute a build — so the fix is the extra export rather than pointing `.` at `
 
 | Task | Installs from | Use when |
 |---|---|---|
-| `bun run cli:install` | this working tree | developing, or you keep a clone — no publish, no registry lag |
-| `bun run cli:install-jsr` | the published package | you want exactly what users get |
+| `bun run cli:install` | this working tree, as the npm package (`npm:build`, then `npm install -g --install-links ./dist`) | developing, or you keep a clone — no publish, no registry lag |
+| `bun run cli:install-published` | `@synapticforge1/s3d-reportcompiler` from npm | you want exactly what users get (from the first npm release) |
 
-⚠️ **`bun run cli:install` deliberately omits `--config deno.json`.** Passing it breaks the install:
+**npm, not Deno, since 2026-10-28** (owner: no Deno on this machine; accepted that the published
+route waits for the first npm release). `--install-links` makes npm install a real copy with its
+dependencies instead of a symlink to `dist/`, which `npm:build` deletes and recreates. Measured
+2026-10-28 (Node 24 via fnm): 17 packages added, the installed `s3d-reportcompiler --version`
+prints 1.0.4 and compiles the 13 samples on Node with PASS. It needs `npm` on PATH — in a shell
+where fnm's environment is not loaded there is none, and the script fails with `command not found`.
+⚠️ A global installed by the old `deno install -g` lives in `~/.deno/bin` and can shadow the npm one
+on PATH: remove it (`deno uninstall -g s3d-reportcompiler`) before uninstalling Deno.
 
-```
-error: Failed to resolve the specifier "mathjax-full/js/input/tex/AllPackages.js" as its
-after-prefix portion could not be URL-parsed relative to "npm:mathjax-full@3.2.2/"
-```
-
-The trailing-slash prefix mapping in `imports` — required for JSR to resolve subpath imports — is not
-handled the same way when the config is attached to a globally installed command. Without `--config`,
-Deno resolves the bare specifiers through `package.json` instead and it works. Verified end to end:
-the installed command compiles the 13 samples to 100 pages and reports PASS.
-
-⚠️ `install:jsr` passes `--min-dep-age=0`, because Deno's 24-hour minimum dependency age otherwise
-installs the *previous* release and reports the error against *its* exports.
+*Until 2026-10-28* these were `deno install -g` (from the tree, deliberately without
+`--config deno.json`, whose trailing-slash `imports` mapping broke the install) and
+`cli:install-jsr` (`--min-dep-age=0`, else Deno's 24-hour minimum dependency age installed the
+previous release).
 
 ⚠️ **JSR rejects "slow types".** Every exported symbol needs a type its analyser can read without
 running `tsc`. Four exported `new Set<string>()` declarations had to become

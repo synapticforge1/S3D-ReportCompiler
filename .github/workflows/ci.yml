@@ -1,0 +1,162 @@
+name: CI
+
+# Every check a developer machine runs, plus the ones that need Deno. 🔒 Owner, 2026-10-28: "the goal
+# is to be deno free on this machine" — so JSR's own checks and the Deno legs of the runtime matrix
+# and the npm proof run HERE, with Deno installed per run by setup-deno, and nowhere else.
+# cmem/bun-migration.md (step 6) and cmem/testing.md say what each job proves.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Types, format, lint, compat, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the compat gate reads the last v* tag
+
+      # Pinned to the developer machine's Bun: `bun fmt --check` must judge CI as it judges locally.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Types
+        run: bun run check
+
+      - name: Format
+        run: bun run format:check
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Compatibility gate (api-surface.txt current; floor since the last tag)
+        run: bun run compat
+
+      # The build verifies its own output and exits non-zero if the PDF lost anything.
+      - name: Build the committed samples
+        run: bun run build:sample
+
+  jsr:
+    name: JSR checks (Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # deno.json sets "nodeModulesDir": "manual" — Deno reads the node_modules npm creates.
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Type check under Deno
+        run: deno check main.ts src/report_core.ts src/report_runtime.ts
+
+      - name: Docs coverage (a scored JSR criterion)
+        run: deno doc --lint src/*.ts
+
+      - name: The JSDoc examples compile
+        run: deno check --doc src/*.ts
+
+      - name: JSR validation, slow types included
+        run: deno publish --dry-run
+
+  runtimes:
+    name: Runtime matrix (Node floor + LTS lines, Bun, Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install fnm
+        run: |
+          curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell --install-dir "$HOME/.fnm"
+          echo "$HOME/.fnm" >> "$GITHUB_PATH"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # The Node lines come from Node's own schedule; --install-node installs each one first.
+      - name: Every runtime builds the samples to one baked document
+        run: bun scripts/check-runtimes.ts --deno --install-node
+
+  npm:
+    name: npm package (build and prove the tarball)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install fnm
+        run: |
+          curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell --install-dir "$HOME/.fnm"
+          echo "$HOME/.fnm" >> "$GITHUB_PATH"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build
+        run: bun run npm:build
+
+      - name: Prove the tarball on every runtime
+        run: bun scripts/npm-prove.ts --deno --install-node
