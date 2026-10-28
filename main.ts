@@ -99,6 +99,7 @@ import {
   bakeBody,
   bakeStyle,
   compareAgainstPdf,
+  compareEachReport,
   delimSignatures,
   extractSourceTokens,
   findLeftoverMath,
@@ -356,11 +357,14 @@ async function inlineFonts(css: string, cacheDir: string): Promise<string> {
  * Tracks drawing as well as text, because a page holding only a diagram has no
  * extractable text and calling it blank would fail a correct build.
  */
-async function readPdf(pdfPath: string): Promise<PdfObservations> {
+async function readPdf(pdfPath: string): Promise<PdfObservations & { pageTexts: string[] }> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const doc = await pdfjs.getDocument({ data: await rt.readFile(pdfPath) }).promise;
 
-  const obs: PdfObservations = {
+  // Each page's text, in order, for the per-report check (compareEachReport): kept beside the
+  // public observations rather than added to them, so the exported type does not change.
+  const obs: PdfObservations & { pageTexts: string[] } = {
+    pageTexts: [],
     text: "",
     pages: doc.numPages,
     imagePaints: 0,
@@ -390,6 +394,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations> {
     const text = (await page.getTextContent()).items.map((i) => ("str" in i ? i.str : "")).join("");
 
     obs.text += `${text}\n`;
+    obs.pageTexts.push(text);
     if (text.trim().length === 0 && !drew) obs.blankPages.push(p);
 
     // These two patterns are specific to the SkyCiv diagram, which prints its
@@ -665,6 +670,32 @@ try {
     if (check.missingWords.length) console.log(`    ${check.missingWords.slice(0, 12).join(", ")}`);
     if (check.missingNumbers.length) {
       console.log(`    ${check.missingNumbers.slice(0, 12).join(", ")}`);
+    }
+
+    // The set-wide check above cannot see a value lost from one report but present in another;
+    // this one checks every report against its own part of the PDF (verification.md, limit 1).
+    const perReport = compareEachReport(sources, observed.pageTexts);
+    const short = perReport.reports.filter((r) => r.missingWords.length || r.missingNumbers.length);
+    if (!perReport.checked) {
+      console.log(`  per-report: NOT checked -- ${perReport.reason}`);
+      check.failures.push(`per-report check could not run: ${perReport.reason}`);
+    } else if (short.length === 0) {
+      console.log(
+        `  per-report: ${entries.length}/${entries.length} reports hold all their own words and numbers`,
+      );
+    } else {
+      console.log(
+        `  per-report: ${short.length} of ${entries.length} report(s) missing their own content`,
+      );
+      for (const r of short.slice(0, 10)) {
+        const lost = [...r.missingWords, ...r.missingNumbers].slice(0, 8).join(", ");
+        console.log(
+          `    ${entries[r.report]}: ${r.missingWords.length} word(s), ${r.missingNumbers.length} number(s) -- ${lost}`,
+        );
+      }
+      check.failures.push(
+        `content missing from its own report: ${short.map((r) => entries[r.report]).join(", ")}`,
+      );
     }
     console.log(
       `  graphics: ${observed.imagePaints} image paint(s), ${expected.expectedImages} expected; ` +

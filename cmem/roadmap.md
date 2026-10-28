@@ -508,7 +508,21 @@ Apache-2.0, and none of them impose copyleft. See [licensing.md](licensing.md).
 
 ---
 
-## 🟡 7. Per-report conservation — the one real capability gap
+## ✅ 7. Per-report conservation — DONE 2026-10-28
+
+Owner: "perform" (2026-10-28). `compareEachReport` in `src/report_core.ts` (a new export — the
+compatibility floor is now MINOR) cuts the PDF into whole pages at the report headings and checks each
+report's own words and numbers against its own pages; `main.ts` prints `per-report: N/N …` and fails
+the build otherwise. Acceptance: `control-hidden-row-two-reports` — PASS before — now FAILS for the
+right reason (`b_report.html: 5 word(s) … internal, forces, absolute, force, bending`; the set-wide
+check alone still says 0 missing); every correct build still passes — samples 13/13 on Deno, Bun,
+Node 24 and all six runtimes (`7F283563003F`), the 48-report set 48/48 (`A19E5AD15E3F`), the
+positive controls. ⚠️ A first version cut AT the heading and failed the correct samples on the last
+report: each report prints its tab strip before its heading, so every earlier report had been
+credited its successor's opening — the set-union gap reappearing inside the fix; whole pages fixed
+it (verification.md § limit 1). Remaining blind spot: a value moved within one report.
+
+The task as written:
 
 Conservation is currently a **set union** across all reports: it proves every distinct value appears
 somewhere in the PDF, not that each value appears in the *right* report. It would not catch one member

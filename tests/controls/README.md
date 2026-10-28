@@ -23,9 +23,11 @@ rather than the folder the control just built.
 | `control-unknown-delimiter.ts` | `@@..@@` with the tex2jax config removed | guard refuses; `250 TeX command(s)`, **no PDF** |
 | `control-hidden-content.ts` | `#calculations { display: none }` in a **single** report | `172 words, 119 numbers missing`, 1 blank page, exit 1 |
 | `control-custom-delimiters-colliding.ts` | `{{..}}` — collides with LaTeX braces | guard refuses; truncated expressions leave LaTeX behind |
+| `control-hidden-row-two-reports.ts` | one table row hidden in the second of two identical reports | since 2026-10-28: per-report check `b_report.html: 5 word(s) … internal, forces, absolute, force, bending`, exit 1 — the set-wide check alone still reports 0 missing |
 
-⚠️ `control-hidden-content.ts` uses **one** report deliberately. Its two-report sibling below passes
-when it should fail, because conservation is a set union — see [../../cmem/verification.md](../../cmem/verification.md).
+⚠️ `control-hidden-content.ts` uses **one** report deliberately. Its two-report sibling PASSED when it
+should have failed until 2026-10-28 — conservation was only a set union; the per-report check closes
+that (see [../../cmem/verification.md](../../cmem/verification.md)).
 
 ## Positive controls — each must PASS, matching the baseline
 
@@ -38,7 +40,7 @@ when it should fail, because conservation is a set union — see [../../cmem/ver
 
 | Script | What it showed |
 |---|---|
-| `control-hidden-row-two-reports.ts` | **Passed when it should have failed.** Two identical reports; the intact one supplied the tokens the hidden one lost. This is how the set-union limit was found — and chasing it uncovered the stray-semicolon bug that was silently dropping a CSS rule from every report |
+| `control-hidden-row-two-reports.ts` | **Passed when it should have failed — until 2026-10-28** (now a negative control, above). Two identical reports; the intact one supplied the tokens the hidden one lost. This is how the set-union limit was found — and chasing it uncovered the stray-semicolon bug that was silently dropping a CSS rule from every report |
 
 ⚠️ `redact-paths.ts` takes the username from `USERNAME`/`USER` (or `--user=`) rather than hardcoding
 one. A redaction tool that names the thing it redacts republishes it in a tracked file — and only
