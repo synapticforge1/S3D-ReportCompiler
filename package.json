@@ -1,6 +1,6 @@
 {
   "name": "@jrmarcum/s3d-reportcompiler",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Compile a folder of SkyCiv structural design reports into one combined PDF, and prove nothing was lost.",
   "type": "module",
   "private": true,
