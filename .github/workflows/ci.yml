@@ -58,6 +58,14 @@ jobs:
       - name: Build the committed samples
         run: bun run build:sample
 
+      # The samples and every control, each failing for its own reason (tests/build.test.ts) —
+      # one file, both runners.
+      - name: Test suite (bun test)
+        run: bun run test
+
+      - name: Test suite (node --test)
+        run: bun run test:node
+
   jsr:
     name: JSR checks (Deno)
     runs-on: ubuntu-latest

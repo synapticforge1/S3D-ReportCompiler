@@ -1,4 +1,4 @@
-# bun-migration.md — moving the toolchain off Deno, keeping JSR (in progress: steps 2–4 done)
+# bun-migration.md — moving the toolchain off Deno, keeping JSR (in progress: 2–5, 7 and 6's CI part done; left: 6's release part)
 
 🔒 **Goal (owner, 2026-10-28): "the goal is to be deno free on this machine."** Deno may run only
 where JSR needs it — `deno publish` on GitHub's runner, installed per run by `setup-deno` — and
@@ -36,10 +36,12 @@ reproduced locally). Fixed with `--config jsr.json` on THAT step only (a type ch
 passed without it. **Green after the fix:** branch run 40728431628, then main run 40728999111
 (merge `c4e3a92`) — all four jobs, the upload check on the runner included. Still to come: uninstalling Deno here (owner), and `publish.yml` gating on CI plus the npm job.
 
-**Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
-`129fd0a`); step 1 MEASURED and folded into step 7 (§ "Step 1, measured" — binaryang's step 1
-silently corrupts this package). **Next: step 5** (the `node:test` suite), then 7 (`jsr.json`, no
-`deno.json`), then 6 (CI + one real release). Owner decisions at the end of file. Requested by the owner 2026-10-26 ("scope this
+**Status 2026-10-28: steps 2, 3, 4, 5 and 7 DONE, step 6's CI part DONE** (above). **Step 5**
+(owner: "start step 5"): `tests/build.test.ts`, 13 tests on `bun test` and `node --test` (Node 24 and
+the 22.18 floor), inverted 8/8 — testing.md § Test suite; CI runs both. Left: 6's release part (`publish.yml`
+gated on CI, the npm job, one real release). *Status 2026-10-26 (end of day), kept:* steps 2, 3 and
+4 DONE and merged (`a222adf`, `78f9ac8`, `129fd0a`); step 1 MEASURED and folded into step 7
+(§ "Step 1, measured" — binaryang's step 1 silently corrupts this package). Owner decisions at the end of file. Requested by the owner 2026-10-26 ("scope this
 repo's transition to bun per the guidelines in the binaryang project"). The guidelines are
 binaryang's `cmem/jsr-deno-exit-guide.md` (written for the `@jrmarcum` JSR packages, this one
 included; § 6 lists s3d-reportcompiler as "not surveyed — start with § 2, then § 4") and its full

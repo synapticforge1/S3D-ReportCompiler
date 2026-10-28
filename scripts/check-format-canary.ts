@@ -2,7 +2,8 @@
  * Proves `bun run format:check` can fail, and that it can only touch what it should.
  *
  * The path list is read from package.json's `format` script, so there is one list. Then:
- *   - the list must not reach cmem/, the byte-checked sample reports, or the whole tree;
+ *   - the list must not reach cmem/, the byte-checked sample reports, or the whole tree (a named
+ *     `tests/<name>.test.ts` file is allowed; `tests` or any other path under it is not);
  *   - every listed path must exist (a typo would otherwise check nothing and pass);
  *   - planted files INSIDE the scope must be reported: a misformatted one, a CRLF one, and a line
  *     one character over the width; a line exactly at the width must NOT be reported.
@@ -29,7 +30,13 @@ if (!checkScript.startsWith(`bun fmt --check ${paths.join(" ")} &&`)) {
   );
 }
 
-const forbidden = paths.filter((p) => p === "." || /^(\.\/)?(cmem|tests)(\/|$)/.test(p));
+// tests/ holds the byte-checked sample reports; only a named test FILE there may be formatted.
+const forbidden = paths.filter(
+  (p) =>
+    p === "." ||
+    /^(\.\/)?cmem(\/|$)/.test(p) ||
+    (/^(\.\/)?tests(\/|$)/.test(p) && !/^(\.\/)?tests\/[\w-]+\.test\.ts$/.test(p)),
+);
 if (forbidden.length) fail(`the format scope reaches ${forbidden.join(", ")}`);
 const missing = paths.filter((p) => !existsSync(join(root, p)));
 if (missing.length) fail(`listed path(s) do not exist: ${missing.join(", ")}`);
