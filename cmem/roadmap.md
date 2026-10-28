@@ -802,11 +802,13 @@ trusted-publisher entry when it is saved; troubleshooting = workflow filename in
 failed exchange now fails as itself) and `--loglevel verbose` with the OIDC lines in the annotation.
 **Cause (owner, 2026-10-28): "the first version must be published first before the trusted
 publisher is set for that specific module"** — the name did not exist, so no trusted publisher
-could match. **Bootstrap, once:** the npm job publishes with the repository secret `NPM_TOKEN` when
+could match. **Bootstrap, once:** the npm job publishes with the repository secret `NPM_PUBLISH` (owner's name for it) when
 it exists (npm tries OIDC, falls back to the token, and still signs provenance with the run's OIDC
 token — never a local publish, which could not carry provenance). Owner steps: a granular npm token,
 shortest expiry, read-write on the `synapticforge1` scope (2FA bypass only if the account enforces
-2FA for publishing) → GitHub secret `NPM_TOKEN` → "Run workflow" with `v1.1.1` → on npm, the
+2FA for publishing) → GitHub secret `NPM_PUBLISH` → "Run workflow" — ⚠️ **"Use workflow from"
+= `main`**, `tag` = `v1.1.1` (run 40742854280 was started from `release/v1.1.1`, so GitHub ran THAT
+branch's old `publish.yml`: no token step, placeholder token, the same 404) → on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.

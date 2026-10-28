@@ -136,7 +136,7 @@ GitHub OIDC — no token anywhere. **npm is the second registry** (owner, 2026-1
 **Its trusted publisher** names `.github/workflows/publish.yml` and no environment (owner,
 2026-10-28) — so that file must not be renamed and its npm job must not gain an environment.
 ⚠️ npm can attach a trusted publisher only to a package that EXISTS, so the first version is
-published once with a short-lived token (the `NPM_TOKEN` secret, roadmap task 15), from CI so it
+published once with a short-lived token (the `NPM_PUBLISH` secret, roadmap task 15), from CI so it
 still carries provenance; the token and secret are then removed.
 `publish.yml`'s `npm` job (2026-10-28) runs after the JSR job on a tag, or alone on "Run workflow"
 with a tag; it checks the built version equals the tag, refuses any manifest `npm publish` would
