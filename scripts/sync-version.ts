@@ -1,9 +1,10 @@
 /**
- * Reads `version` and `name` from deno.json and writes them into:
+ * Reads `version` and `name` from jsr.json and writes them into:
  *   - package.json          (name + version fields)
  *   - src/report_core.ts    (VERSION constant)
  *
- * deno.json is the single source of truth for both; everything else is a copy.
+ * jsr.json is the single source of truth for both; everything else is a copy (deno.json until
+ * 2026-10-28, bun-migration step 7). The npm package's manifest is generated from it too.
  *
  * Run via:  bun run update-version
  * Must be invoked from the project root (bun run does this automatically).
@@ -16,8 +17,8 @@ const readText = (p: string) => readFile(p, "utf8");
 
 const root = process.cwd();
 
-const denoJson = JSON.parse(await readText(`${root}/deno.json`));
-const { version, name } = denoJson as { version: string; name: string };
+const jsrJson = JSON.parse(await readText(`${root}/jsr.json`));
+const { version, name } = jsrJson as { version: string; name: string };
 
 // ── package.json ─────────────────────────────────────────────────────────────
 const pkgPath = `${root}/package.json`;

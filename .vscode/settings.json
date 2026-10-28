@@ -1,6 +1,5 @@
 {
-  "deno.enable": true,
-  "deno.config": "./deno.json",
-  "typescript.validate.enable": false,
-  "javascript.validate.enable": false
+  "deno.enable": false,
+  "typescript.validate.enable": true,
+  "javascript.validate.enable": true
 }

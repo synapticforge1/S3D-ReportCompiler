@@ -19,8 +19,17 @@ are off by default and print `· deno: runs in CI`; `check:deno` and `build:deno
 install through npm. **First run green 2026-10-28** (Actions run 40725430831, commit `a2825af`):
 all four jobs — checks, JSR checks (Deno), runtime matrix, npm package. The Deno legs cannot have
 been skipped: with `--deno` both scripts count Deno among the required runtimes and fail if it is
-missing or fails. Still to come: uninstalling Deno here (owner), `.vscode/settings.json` (`deno.enable`) and `deno.json` at step 7,
-and `publish.yml` gating on CI plus the npm job.
+missing or fails.
+**Done 2026-10-28: step 7** (owner: "start step 7"). `git mv deno.json jsr.json` — the C5 layout:
+manifest + `imports` + `nodeModulesDir: "manual"`, `publish.include` names `jsr.json`, `deno publish`
+with no `--config`. Every reader moved (`sync-version`, `bump`, `publish` incl. its step-0 guard and
+`git add`, `verify-release`, `npm-build`, `compat` — which reads `deno.json` at tags cut before
+this, v1.0.4 included, measured: floor still minor), `publish.yml`'s score step, `.vscode`
+(`deno.enable` off, TS validation on). The proof is a committed check, `scripts/jsr-upload-check.ts`
+(testing.md § JSR upload check), run in CI's JSR job and in `publish.yml` before the real
+`deno publish` — the "capture check in the release path" step 6 asked for. Still to come: the CI run
+on this tree (deno check / doc lint / dry run / Deno runtime leg without a `deno.json` — re-measured
+there, not here), uninstalling Deno here (owner), and `publish.yml` gating on CI plus the npm job.
 
 **Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
 `129fd0a`); step 1 MEASURED and folded into step 7 (§ "Step 1, measured" — binaryang's step 1

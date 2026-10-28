@@ -8,8 +8,7 @@
  * Why a build: Node will not strip types inside node_modules, so an npm package must ship compiled
  * JavaScript; the `.d.ts` files carry the types. JSR does this for its own npm layer; npm does not.
  *
- * The manifest is GENERATED, so the version has one source (deno.json until roadmap task 12 step 7
- * moves it to jsr.json): name, version, the exports map rewritten to the compiled files, a `bin`
+ * The manifest is GENERATED, so the version has one source (jsr.json): name, version, the exports map rewritten to the compiled files, a `bin`
  * (npm can run a CLI through `npx`; JSR cannot), the runtime dependencies exactly as package.json
  * pins them, and the Node floor taken from pdfjs-dist's own `engines`.
  *
@@ -52,7 +51,7 @@ const main = readFileSync(mainJs, "utf8");
 writeFileSync(mainJs, `#!/usr/bin/env node\n${main.replace(/^#![^\n]*\n/, "")}`);
 
 // 3. The manifest.
-const deno = json("deno.json");
+const jsr = json("jsr.json");
 const pkg = json("package.json");
 const pdfjsEngines = json("node_modules/pdfjs-dist/package.json").engines?.node;
 const floor = /^>=\s*(\d+\.\d+\.\d+)/.exec(String(pdfjsEngines ?? ""))?.[1];
@@ -60,16 +59,16 @@ if (!floor)
   fail(`cannot read a Node floor from pdfjs-dist's engines: ${JSON.stringify(pdfjsEngines)}`);
 
 const exportsMap: Record<string, { types: string; default: string }> = {};
-for (const [spec, path] of Object.entries(deno.exports as Record<string, string>)) {
+for (const [spec, path] of Object.entries(jsr.exports as Record<string, string>)) {
   const js = String(path).replace(/\.ts$/, ".js");
   exportsMap[spec] = { types: js.replace(/\.js$/, ".d.ts"), default: js };
 }
 
 const manifest = {
   name: NPM_NAME,
-  version: deno.version,
+  version: jsr.version,
   description: pkg.description,
-  license: deno.license,
+  license: jsr.license,
   type: "module",
   exports: exportsMap,
   types: exportsMap["."].types,

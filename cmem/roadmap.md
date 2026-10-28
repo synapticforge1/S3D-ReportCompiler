@@ -19,7 +19,7 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26) |
-| Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; no Deno locally since 2026-10-28 (🔒 owner goal, [bun-migration.md](bun-migration.md)): compat reads tsc `.d.ts`; `cli:*` install via npm; JSR's checks (`deno check`, `doc --lint`, `check --doc`, `publish --dry-run`) and the Deno legs of `runtimes` / `npm:prove` run in `.github/workflows/ci.yml`; Deno publishes from `publish.yml`; `deno.json` stays until task 12 step 7 |
+| Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; no Deno locally since 2026-10-28 (🔒 owner goal, [bun-migration.md](bun-migration.md)): compat reads tsc `.d.ts`; `cli:*` install via npm; JSR's checks (`deno check`, `doc --lint`, `check --doc`, `publish --dry-run`, the upload check) and the Deno legs of `runtimes` / `npm:prove` run in `.github/workflows/ci.yml`; Deno publishes from `publish.yml`; the manifest is `jsr.json` (no `deno.json`, task 12 step 7) |
 | API surface | `api-surface.txt`, 69 lines; floor since v1.0.4 = **minor** — `compareEachReport` added — so the next release is ≥ 1.1.0 (`bun run compat`, 2026-10-28) |
 | Verification | set-wide AND per-report conservation (task 7, 2026-10-28); pdfjs-dist 6.4.299, no polyfill warnings (task 14) |
 | `npm audit` | **0 vulnerabilities** since the `@xmldom/xmldom` 0.9.12 override (task 13; 2026-10-28) |
@@ -365,7 +365,7 @@ Since 2026-10-26 the release tooling runs on Bun from `package.json` (bun-migrat
 accounts above of 1.0.3 and 1.0.4 keep the `deno task` names they were run with.
 
 ```bash
-bun run bump            # or edit "version" in deno.json
+bun run bump            # or edit "version" in jsr.json
 bun run release         # syncs version, commits, tags, pushes → triggers publish.yml
 ```
 
@@ -386,7 +386,7 @@ All three exist because of a release that went wrong; none is theoretical:
 | Refuses when | Because |
 |---|---|
 | the compatibility gate refuses (since 2026-10-28): a stale `api-surface.txt`, a bump below the surface floor since the last tag, or the last tag's samples failing on the new code | SemVer is a gate result, not a judgment (workspace letter H6; testing.md § Compatibility gate) |
-| `deno.json`, `package.json` or `src/report_core.ts` differ from `HEAD` beyond their version line (since 2026-10-26) | the release `git add`s those three, so anything else in them would ship under "bump version" — known-issues #30 |
+| `jsr.json` (`deno.json` until 2026-10-28), `package.json` or `src/report_core.ts` differ from `HEAD` beyond their version line (since 2026-10-26) | the release `git add`s those three, so anything else in them would ship under "bump version" — known-issues #30 |
 | the working tree has uncommitted tracked changes | they are not in the commit being tagged, so they are not in the release |
 | HEAD is behind its upstream | commits from elsewhere would be missing from the release |
 | the version is already on JSR | versions are immutable; forcing the tag would desync the GitHub release from the published code |
@@ -404,7 +404,7 @@ wait was silent and only the exit code told — measured by the step-4 equivalen
 step 4 part 3 (`stdio: "inherit"`).
 
 ```bash
-bun run verify-release              # the version in deno.json
+bun run verify-release              # the version in jsr.json
 bun run verify-release 1.0.1        # audit any version
 ```
 
@@ -418,7 +418,8 @@ for a package with a linked repository (owner, 2026-10-28). `verify-release` sta
 an Actions release really was attested. There is still deliberately no `publish` script: `bun run publish` answers `Script not found "publish"`
 (measured 2026-10-26).
 
-⚠️ **`deno task release` is NOT dead — it runs the real release.** With no `tasks` in `deno.json`,
+⚠️ **`deno task release` is NOT dead — it runs the real release** (on any machine that still has
+Deno; with no `deno.json` at all since 2026-10-28 this is UNMEASURED — assume it still does). With no `tasks` in `deno.json`,
 `deno task <name>` falls back to `package.json` scripts, so `deno task release` runs
 `bun scripts/publish.ts`. Found the hard way on 2026-10-26: typed as a "does the old name still
 resolve?" probe, it synced the version and committed `bump version to v1.0.4` on the step-4 branch,
@@ -695,14 +696,17 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 
 ---
 
-## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–4 DONE 2026-10-26; next step 5
+## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–4, 6 (CI part), 7 DONE; left 5 and 6's release
 
 Done and merged 2026-10-26: step 2 `bun check` (`a222adf`), step 3 `bun fmt` + Biome (`78f9ac8`),
-step 4 every script and control on Bun, with three release defects fixed (`129fd0a`). Remaining, in
-the revised order: **5** the `node:test` suite for the build and every control; **7** `jsr.json`
-as the one manifest with `deno.json` deleted (step 1 folded in — `--config jsr.json` corrupts this
-package); **6** the CI gate and one real release proving provenance. Details and every measurement:
-[bun-migration.md](bun-migration.md).
+step 4 every script and control on Bun, with three release defects fixed (`129fd0a`). 2026-10-28
+(🔒 owner goal: no Deno on this machine): the compat gate reads tsc's `.d.ts`; **step 6, CI part** —
+`.github/workflows/ci.yml`, first run green (run 40725430831); **step 7** — `jsr.json` is the one
+manifest, `deno.json` deleted, `deno publish` with no `--config`, proved by
+`scripts/jsr-upload-check.ts` (a fake-JSR capture of the real upload, in CI and in `publish.yml`
+before the real publish). Remaining: **5** the `node:test` suite; **6, release part** —
+`publish.yml` gated on CI, the npm job (task 15), and one real release proving provenance; the
+owner uninstalls Deno here. Details and every measurement: [bun-migration.md](bun-migration.md).
 
 The scope as first written:
 

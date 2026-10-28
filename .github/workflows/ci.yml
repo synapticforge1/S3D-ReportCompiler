@@ -75,7 +75,7 @@ jobs:
         with:
           node-version: 24
 
-      # deno.json sets "nodeModulesDir": "manual" — Deno reads the node_modules npm creates.
+      # jsr.json sets "nodeModulesDir": "manual" — Deno reads the node_modules npm creates.
       - name: Install npm dependencies
         run: npm ci
 
@@ -90,6 +90,17 @@ jobs:
 
       - name: JSR validation, slow types included
         run: deno publish --dry-run
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      # A dry run never shows the rewritten files, and `deno publish` has reported success on a
+      # corrupted upload (cmem/bun-migration.md § "Step 1, measured"). This publishes to a FAKE JSR
+      # on 127.0.0.1 and reads the tarball: the files, every rewritten import, no deno.json.
+      - name: The upload is this package, intact
+        run: bun scripts/jsr-upload-check.ts
 
   runtimes:
     name: Runtime matrix (Node floor + LTS lines, Bun, Deno)

@@ -267,6 +267,27 @@ Not a support promise, by design: Bun has no LTS line (the version on PATH is te
 whatever `deno upgrade lts` names. Node lines leave the matrix when the schedule ends them, and
 `engines.node` must be raised then too (22 ends 2027-04-30).
 
+## JSR upload check — `bun scripts/jsr-upload-check.ts` (CI and `publish.yml`; needs Deno)
+
+What `deno publish` would UPLOAD, read from the tarball — because its exit code has lied (step 1:
+"Successfully published" on a package whose prefix imports became `./…`). It publishes to a fake JSR
+on `127.0.0.1` (`JSR_URL`, a dummy `--token`, `--no-provenance`) and requires: no `deno.json`; the
+files exactly `publish.include`; in every `.ts` file each import specifier equal to the source's,
+resolved through `jsr.json` `imports` (relative, `node:` and the package's own name in doc examples
+unchanged), in order; everything else byte-identical; at least one bare specifier rewritten.
+Measured 2026-10-28 (Deno 2.9.8, the step-7 tree): ✅ 7 files, 8 rewritten specifiers — the same
+eight as the step-1 baseline and the real 1.0.4 (`mathjax-full` ×6, `pdf-lib`, `pdfjs-dist`).
+
+⚠️ **The fake must answer `GET …/versions/<v>` with 404.** Answered 200, `deno publish` treated
+the version as published, uploaded NOTHING and exited 0 — measured while writing the check; the
+check fails a run with no tarball.
+
+**Inverted 2026-10-28** (one-time harness, scratch copies): clean → exit 0; step 1's C1 (`deno.json`
+with `imports` + `nodeModulesDir`, `--config jsr.json`) — `deno publish` exited 0 again, the check
+❌ the `deno.json` and every `./mathjax-full/…`, `./pdfjs-dist/…` specifier, exit 1; C2 (`deno.json`
+`nodeModulesDir` only, `jsr.json` without `imports`) — ❌ `./pdf-lib` etc., exit 1. 3/3. (C2 first
+crashed on the missing `imports` — exit 1 for the wrong reason; fixed to report it.)
+
 ## npm package — `bun run npm:build && bun run npm:prove` (roadmap task 15)
 
 `npm:build` ([`scripts/npm-build.ts`](../scripts/npm-build.ts)) emits JS + `.d.ts` into `dist/`

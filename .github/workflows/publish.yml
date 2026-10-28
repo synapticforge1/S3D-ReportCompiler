@@ -32,7 +32,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      # REQUIRED, and easy to leave out: deno.json sets "nodeModulesDir": "manual", so Deno resolves
+      # REQUIRED, and easy to leave out: jsr.json sets "nodeModulesDir": "manual", so Deno resolves
       # the npm dependencies from an on-disk node_modules that something else has to create. Without
       # this step `deno publish` cannot resolve `mathjax-full` and fails before publishing anything:
       #
@@ -59,6 +59,16 @@ jobs:
           else
             echo "::warning::OIDC token NOT available (URL present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}, TOKEN present: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}). deno publish will skip provenance. Verify id-token:write is honored — check org/enterprise Settings → Actions → General OIDC policy."
           fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      # The last gate before an IMMUTABLE version: publish to a fake JSR on 127.0.0.1 (dummy token,
+      # no provenance) and read the tarball — `deno publish` has exited 0 on a corrupted upload.
+      - name: The upload is this package, intact
+        run: bun scripts/jsr-upload-check.ts
 
       - name: Publish to JSR
         run: deno publish
@@ -93,7 +103,7 @@ jobs:
       - name: Report the JSR package score
         continue-on-error: true
         run: |
-          PKG=$(deno eval 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).name)')
+          PKG=$(deno eval 'console.log(JSON.parse(Deno.readTextFileSync("jsr.json")).name)')
           SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}
           NAME=${PKG#*/}
           # The score is the headline quality signal and the thing worth watching release to

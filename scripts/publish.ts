@@ -22,9 +22,9 @@
  * name because that is what it does; only the entry point is named `release`.
  *
  * Steps:
- *   0. Refuse if deno.json / package.json / src/report_core.ts differ from HEAD in anything
+ *   0. Refuse if jsr.json / package.json / src/report_core.ts differ from HEAD in anything
  *      but their version lines (step 3 would otherwise commit those edits as a "bump")
- *   1. Read the current version from deno.json
+ *   1. Read the current version from jsr.json
  *   2. Run scripts/sync-version.ts to propagate it to package.json + src/report_core.ts
  *   3. git add + commit "bump version to vX.Y.Z"
  *   4. Pre-flight — refuse to tag the wrong thing (see below)
@@ -40,12 +40,12 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-const denoJson = JSON.parse(readFileSync(new URL("../deno.json", import.meta.url), "utf8")) as {
+const manifest = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url), "utf8")) as {
   name: string;
   version: string;
 };
 
-const version = denoJson.version;
+const version = manifest.version;
 const tag = `v${version}`;
 
 /** This same runtime, with its own flags — how the release runs its sibling scripts. */
@@ -80,7 +80,7 @@ console.log(`Publishing ${tag} via GitHub Actions…`);
 //    dirty-tree check in step 4 cannot see it, because by then these files are committed.
 {
   const VERSION_LINE: Record<string, RegExp> = {
-    "deno.json": /^"version"\s*:\s*"[^"]*",?$/,
+    "jsr.json": /^"version"\s*:\s*"[^"]*",?$/,
     "package.json": /^"version"\s*:\s*"[^"]*",?$/,
     "src/report_core.ts": /^export const VERSION = "[^"]*";$/,
   };
@@ -106,7 +106,7 @@ console.log(`Publishing ${tag} via GitHub Actions…`);
 run([...self, "scripts/sync-version.ts"]);
 
 // 2. Stage the three files sync-version touches
-run(["git", "add", "deno.json", "package.json", "src/report_core.ts"]);
+run(["git", "add", "jsr.json", "package.json", "src/report_core.ts"]);
 
 // 3. Commit (skip if nothing staged — the version was already synced)
 const diffCode = spawnSync("git", ["diff", "--cached", "--quiet"]).status;
@@ -149,7 +149,7 @@ if (diffCode !== 0) {
   // Forcing the tag would move the GitHub release off the code JSR actually
   // holds, and `deno publish` would fail anyway. Turning the warning below into
   // a check, because a comment does not stop anyone.
-  const [scope, name] = denoJson.name.replace(/^@/, "").split("/");
+  const [scope, name] = manifest.name.replace(/^@/, "").split("/");
   try {
     const res = await fetch(
       `https://api.jsr.io/scopes/${scope}/packages/${name}/versions/${version}`,
@@ -157,7 +157,7 @@ if (diffCode !== 0) {
     );
     if (res.ok) {
       await res.body?.cancel();
-      console.error(`\n❌ ${denoJson.name}@${version} is ALREADY published on JSR.`);
+      console.error(`\n❌ ${manifest.name}@${version} is ALREADY published on JSR.`);
       console.error(`   JSR versions are immutable — bump instead:\n`);
       console.error(`     bun run bump      # ${version} -> next patch`);
       console.error(`     bun run release\n`);
