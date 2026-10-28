@@ -1,4 +1,4 @@
-# bun-migration.md — moving the toolchain off Deno, keeping JSR (in progress: 2–5, 7 and 6's CI part done; left: 6's release part)
+# bun-migration.md — moving the toolchain off Deno, keeping JSR (steps 2–7 done, 1.1.0 released attested 2026-10-28; left: publish.yml gated on CI, the npm job)
 
 🔒 **Goal (owner, 2026-10-28): "the goal is to be deno free on this machine."** Deno may run only
 where JSR needs it — `deno publish` on GitHub's runner, installed per run by `setup-deno` — and
@@ -38,7 +38,11 @@ passed without it. **Green after the fix:** branch run 40728431628, then main ru
 
 **Status 2026-10-28: steps 2, 3, 4, 5 and 7 DONE, step 6's CI part DONE** (above). **Step 5**
 (owner: "start step 5"): `tests/build.test.ts`, 13 tests on `bun test` and `node --test` (Node 24 and
-the 22.18 floor), inverted 8/8 — testing.md § Test suite; CI runs both. Left: 6's release part (`publish.yml`
+the 22.18 floor), inverted 8/8 — testing.md § Test suite; CI runs both (first CI run failed on a
+pinned page count — 103 on Linux, 100 on Windows — now ≥ 1 per report). **Step 6 proved
+2026-10-28:** 1.1.0 released by `bun run release` (gate minor, v1.0.4's samples PASS), publish run
+40735763508 with the upload check green, JSR attested (Rekor `3544353215`), score 100. Left of 6:
+`publish.yml` gated on CI, and the npm job. Was: 6's release part (`publish.yml`
 gated on CI, the npm job, one real release). *Status 2026-10-26 (end of day), kept:* steps 2, 3 and
 4 DONE and merged (`a222adf`, `78f9ac8`, `129fd0a`); step 1 MEASURED and folded into step 7
 (§ "Step 1, measured" — binaryang's step 1 silently corrupts this package). Owner decisions at the end of file. Requested by the owner 2026-10-26 ("scope this
@@ -52,6 +56,50 @@ only what this repo measured and the plan. Findings cited as **F1–F11** are th
 2026-10-09); JSR stays. 🔒 Owner direction for every package (2026-10-12): off Deno toward Bun,
 **JSR stays the source**, **code that runs on both Bun and Node, Bun the main runtime**; Deno is kept
 for the JSR items only (`deno publish`, F2). Workspace Tooling rule 1 says the same for scripts.
+
+## binaryang's guide update of 2026-10-28 (§ 5a "No installed Deno", `701d1043d`) — reviewed
+
+Read 2026-10-28 (owner: "review … comment on any added changes needed here or any added comments
+you would suggest there"). Nothing written into binaryang from here.
+
+**What it says:** Deno from npm (`bun x deno@<exact>`) runs the real `deno publish` WITH its type
+check, so no machine or CI job but the publish workflow needs Deno installed; one module holds the
+pin, a test refuses copies; prove "none installed" by removing Deno from PATH (a scoop/volta shim
+folder shared with Bun hides it); Bun resolves no `npm:` specifier; `setup-deno` only in
+`publish.yml`, pinned in a guard test.
+
+**Here — measured against it:**
+- No `npm:` specifier left in any `.ts` (grep 2026-10-28) — the Bun trap does not bite.
+- We took the STRICTER road for the owner's goal: Deno runs only on GitHub's runners (`setup-deno`
+  in `ci.yml`'s JSR job and the two `--deno` legs, and in `publish.yml`), nothing local, not even
+  `bun x deno`. § 5a would let the JSR checks and the upload check run locally again with no
+  install, and drop `setup-deno` from `ci.yml`. Not needed for the goal; the owner's call
+  (`bun x` still downloads a Deno binary into Bun's cache).
+- **Applies here, open:** step 3's proof. This machine's scoop shim folder holds `deno.exe` beside
+  `bun.exe` (seen 2026-10-28) — exactly the trap. Until Deno is uninstalled, "the local gate needs
+  no Deno" is shown by construction (no local script spawns `deno` without `--deno`;
+  `jsr-upload-check.ts` is CI-only), not by a run with Deno gone. After `scoop uninstall deno`:
+  run `check`, `lint`, `format:check`, `test`, `compat`, `runtimes`, `npm:prove` once and record it.
+- `ci.yml`/`publish.yml` float `deno-version: v2.x`. The upload check depends on `deno publish`'s
+  rewriting, so a new Deno is caught by CI before a tag — floating is acceptable; § 5a's exact pin
+  matters where Deno output feeds snapshots, which nothing here does since compat moved to tsc.
+
+**Suggested for the guide (to hand over — ledger/letter at the owner's word):**
+1. § 4 step 6 still says "`deno publish --config jsr.json`". For a package with dependencies that
+   is the C20 layout; with `deno.json` DELETED, s3d measured `deno publish` with NO `--config`
+   correct (C5) and released 1.1.0 that way, attested. Say "no `--config` once `deno.json` is gone".
+2. With no `deno.json`, `deno check --doc` loads no manifest, so JSDoc examples that import the
+   package by its own name fail (TS2307 ×3 here, CI run 40727580815); `--config jsr.json` on THAT
+   command only fixes it. A trap for every package whose examples import itself.
+3. The fake-registry capture must answer `GET …/versions/<v>` with 404: answered 200, `deno
+   publish` uploaded nothing and exited 0. s3d's committed check: `scripts/jsr-upload-check.ts`
+   (files = `publish.include`, every specifier = the source's resolved through `imports`, the rest
+   byte-identical, no `deno.json`; inverted with C1 and C2) — a reusable answer to step 6's "keep
+   the fake-registry capture as a committed check".
+4. § 5a option 7 (`@deno/doc`) has a third alternative s3d measured: an API surface from tsc's
+   emitted `.d.ts` (`scripts/compat.ts`) — same 69 symbols as `deno doc --json`, no Deno at all.
+5. Chrome pagination differs by platform (100 pages Windows, 103 Ubuntu) — only relevant to a
+   package that renders; a test pinning a page count fails in CI.
 
 ## The two questions (guide § 2), measured 2026-10-26
 
