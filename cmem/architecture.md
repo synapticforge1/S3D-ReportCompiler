@@ -133,8 +133,11 @@ JSR; one path: `.github/workflows/publish.yml` on a `v*` tag, `id-token: write`,
 GitHub OIDC — no token anywhere. **npm is the second registry** (owner, 2026-10-28; roadmap task 15):
 `@synapticforge1/s3d-reportcompiler`, built by `bun run npm:build` into `dist/` (compiled JS +
 `.d.ts`, a generated manifest with a `bin`) and proven by `bun run npm:prove` — not yet published.
-**Its trusted publisher EXISTS** (owner, 2026-10-28): it names `.github/workflows/publish.yml` and no
-environment — so that file must not be renamed and its npm job must not gain an environment.
+**Its trusted publisher** names `.github/workflows/publish.yml` and no environment (owner,
+2026-10-28) — so that file must not be renamed and its npm job must not gain an environment.
+⚠️ npm can attach a trusted publisher only to a package that EXISTS, so the first version is
+published once with a short-lived token (the `NPM_TOKEN` secret, roadmap task 15), from CI so it
+still carries provenance; the token and secret are then removed.
 `publish.yml`'s `npm` job (2026-10-28) runs after the JSR job on a tag, or alone on "Run workflow"
 with a tag; it checks the built version equals the tag, refuses any manifest `npm publish` would
 auto-correct, skips a version already on npm, then `npm publish` with the run's OIDC token (no npm

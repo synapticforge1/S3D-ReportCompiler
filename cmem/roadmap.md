@@ -800,7 +800,16 @@ trusted-publisher entry when it is saved; troubleshooting = workflow filename in
 `id-token: write`, GitHub-hosted runner, `repository.url` matching exactly (it does — read
 2026-10-28: `synapticforge1/S3D-ReportCompiler`). Changed: no `registry-url` (no placeholder; a
 failed exchange now fails as itself) and `--loglevel verbose` with the OIDC lines in the annotation.
-Next: the owner re-checks the npm entry's fields and re-runs "Run workflow" → `v1.1.1`.
+**Cause (owner, 2026-10-28): "the first version must be published first before the trusted
+publisher is set for that specific module"** — the name did not exist, so no trusted publisher
+could match. **Bootstrap, once:** the npm job publishes with the repository secret `NPM_TOKEN` when
+it exists (npm tries OIDC, falls back to the token, and still signs provenance with the run's OIDC
+token — never a local publish, which could not carry provenance). Owner steps: a granular npm token,
+shortest expiry, read-write on the `synapticforge1` scope (2FA bypass only if the account enforces
+2FA for publishing) → GitHub secret `NPM_TOKEN` → "Run workflow" with `v1.1.1` → on npm, the
+package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
+environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
+every later version publishes by OIDC with no token.
 
 🔒 Owner: "we will post this to npm as well as jsr" — **supersedes** the 2026-10-26 "we will not
 publish this to npm" (bun-migration.md, owner decision 4). 🔒 **Names** (owner, 2026-10-28: "jsr
