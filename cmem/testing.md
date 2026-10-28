@@ -8,21 +8,26 @@ longer reproduces its sources, so running the build *is* the test.
 Defaults resolve from the **working directory**, so which folder you stand in selects the input set:
 
 ```bash
-bun run check                            # types (bun check; `bun run check:deno` agrees until step 7)
+bun run check                            # types (bun check)
 bun run format:check                     # formatting (main.ts, src/, scripts/) + its canary
 bun run lint                             # Biome + its canary
-bun run runtimes                         # every Node LTS line, Bun, Deno — one baked document
+bun run runtimes                         # every Node LTS line and Bun — one baked document
 bun run compat                           # api-surface.txt current? floor since the last tag
-deno doc --lint src/*.ts                 # docs coverage — a scored JSR criterion
-deno check --doc src/*.ts                # the JSDoc examples actually compile
-deno publish --dry-run --allow-dirty     # JSR validation, incl. slow types
-bun run verify-release <version>       # after a release: did it get an attestation?
+bun run npm:build && bun run npm:prove   # the npm tarball, installed and run
+bun run verify-release <version>         # after a release: did it get an attestation?
 
-cd tests && deno run -A ../main.ts       # the 2 committed samples
-cd local && deno run -A ../main.ts       # the real 48-report set
-cd local && node       ../main.ts        # same, on Node
-cd local && bun run    ../main.ts        # same, on Bun
+cd tests && bun ../main.ts               # the 13 committed samples
+cd local && bun ../main.ts               # the real 48-report set
+cd local && node ../main.ts              # same, on Node
 ```
+
+**On GitHub, not here: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)**, on every push
+and PR (🔒 owner, 2026-10-28: no Deno on this machine). It repeats the checks above from a bare
+checkout (`npm ci`), and runs what needs Deno, installed per run by `setup-deno`: `deno check`,
+`deno doc --lint src/*.ts` (docs coverage, a scored JSR criterion), `deno check --doc src/*.ts` (the
+JSDoc examples compile), `deno publish --dry-run` (JSR validation, slow types included), and the
+Deno legs of `runtimes` and `npm:prove` (`--deno`; `--install-node` installs the Node lines with
+fnm). Locally those two scripts print `· deno: runs in CI`, so the gap is never silent.
 
 ### ⚠️ A dry run in your working tree is not a rehearsal for CI
 

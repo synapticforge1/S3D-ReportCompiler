@@ -12,6 +12,13 @@ remove: the compat gate's `deno doc --json` (→ the `.d.ts` tsc emits); `deno d
 `deno.json` (→ step 7). Order: CI first, then the local copies come out.
 **Done 2026-10-28: the compat gate** reads tsc's emitted `.d.ts` instead of `deno doc --json`
 (proof and inversion in [testing.md](testing.md) § Compatibility gate).
+**Done 2026-10-28: CI** — `.github/workflows/ci.yml` (step 6, first part; owner: "build the CI
+workflow and push it") runs the Bun checks, compat, the sample build, JSR's Deno checks, and the
+runtime matrix and npm proof WITH their Deno legs (`--deno`, `--install-node`). Locally those legs
+are off by default and print `· deno: runs in CI`; `check:deno` and `build:deno` are gone; `cli:*`
+install through npm. Still to come: the first green CI run (the proof the move worked), then
+uninstalling Deno here (owner), `.vscode/settings.json` (`deno.enable`) and `deno.json` at step 7,
+and `publish.yml` gating on CI plus the npm job.
 
 **Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
 `129fd0a`); step 1 MEASURED and folded into step 7 (§ "Step 1, measured" — binaryang's step 1

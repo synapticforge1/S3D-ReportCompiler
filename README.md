@@ -174,19 +174,17 @@ Bun and Node: not from JSR (no `bin`) — `npx @synapticforge1/s3d-reportcompile
 #### From a checkout
 
 ```bash
-bun run cli:install       # global command built from THIS working tree
-bun run cli:install-jsr   # global command from the published registry
+bun run cli:install             # global command built from THIS working tree
+bun run cli:install-published   # global command from npm (from the first npm release)
 bun run cli:uninstall
 ```
 
-These three need **Deno** on your `PATH` — the global command they install is a Deno one (JSR's
-npm packages carry no `bin`, see above). `bun run cli:install` is the one to use while developing
-or if you keep a clone: it installs whatever is in your working tree, so there is no publish step
-and no waiting on the registry. `cli:install-jsr` installs the released package and passes
-`--min-dep-age=0`, so it also works within 24 hours of a release.
-
-Both install the command as `s3d-reportcompiler`, and `--force` means re-running
-either one simply replaces whatever is installed.
+These need **Bun and npm** on your `PATH` — the global command is an npm one, run by Node.
+`bun run cli:install` is the one to use while developing or if you keep a clone: it builds the npm
+package from your working tree and installs it (`npm install -g --install-links ./dist`), so there
+is no publish step and no waiting on the registry. `cli:install-published` installs the released
+npm package. Both install the command as `s3d-reportcompiler`; re-running either replaces it.
+Like any npm global, it belongs to the Node version that was active when you installed it.
 
 ### Requirements
 
