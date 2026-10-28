@@ -295,7 +295,10 @@ Later the same day: `publish.yml` gated on CI (nothing publishes from a commit C
 ledger C27 (filed as C26, renumbered after a collision) answered by binaryang and closed; the
 session log exported (part 4) and deleted; `main.ts`'s Deno shebang → Bun; and **dependency
 installs moved to Bun** (owner: "because it is faster") — `bun.lock` replaced `package-lock.json`
-with the same 20 package versions and the same baked document, 15.4 s vs 29.4 s warm.
+with the same 20 package versions and the same baked document, 15.4 s vs 29.4 s warm. Then
+binaryang's C26 answered (`439db99`: three stale binaryang ids translated, each new one read back on
+a binaryang branch), the session's recreated log exported as transcript part 5 and deleted, and
+1.1.5 released — the first release through `publish.yml`'s CI gate and the first by `bun.lock`.
 
 ## What I would tell the next person
 
