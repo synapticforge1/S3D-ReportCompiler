@@ -14,8 +14,8 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Maths | 8,286 expressions typeset, **0 failed** (2026-08-08) |
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages (2026-08-08) |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08) |
-| Published | **JSR `@jrmarcum/s3d-reportcompiler` 1.1.0** = latest, released 2026-10-28 by `bun run release` (owner: "release 1.1.0"); publish run 40735763508, upload check ✅; JSR score 100. npm: not yet (task 15) |
-| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · **1.1.0 ✅ Rekor `3544353215`** (`verify-release`, 2026-10-28) — the first release from the org, with no `deno.json`, run from Bun |
+| Published | **JSR `@jrmarcum/s3d-reportcompiler` 1.1.1** = latest (2026-10-28; 1.1.0 earlier the same day, publish run 40735763508). npm `@synapticforge1/s3d-reportcompiler`: **not yet** — 1.1.1's npm publish failed (task 15) |
+| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · **1.1.1 ✅ Rekor `3544876876`** (`verify-release`, 2026-10-28) — the first release from the org, with no `deno.json`, run from Bun |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26); Deno's leg runs in CI only since 2026-10-28 |
@@ -786,9 +786,13 @@ instead — prebuilt N-API binaries, no `tar` chain. Plan, as its own task after
 `publish.yml` has an `npm` job (architecture.md § JSR packaging). The first `npm publish --dry-run`
 found npm 12 DROPPING the `"./main.js"` bin at publish time — fixed in `npm-build` (`"main.js"`) and
 guarded in `npm:prove` and the job (testing.md § npm package). ⚠️ **The `v1.1.0` tag carries the
-old `npm-build`**, so the npm job REFUSES to publish 1.1.0 from it (the guard trips): npm's first
-version is the owner's call — see the open question in the session record, and § below when
-decided.
+old `npm-build`**, so the npm job refuses 1.1.0; owner: npm starts at **1.1.1** ("I agree on
+1.1.1"). **1.1.1 released 2026-10-28:** JSR ✅ attested (Rekor `3544876876`); **npm ❌ NOT
+published** — publish run 40739241100: every check in the npm job passed (version = tag, the dry
+run corrected nothing), then `npm publish` exited 1; the public annotations carry no reason (job
+logs need a GitHub sign-in). The step now writes npm's error as an annotation. Next: the reason
+(owner reads the log, or the next run's annotation), the fix, then "Run workflow" → tag `v1.1.1`
+publishes npm only.
 
 🔒 Owner: "we will post this to npm as well as jsr" — **supersedes** the 2026-10-26 "we will not
 publish this to npm" (bun-migration.md, owner decision 4). 🔒 **Names** (owner, 2026-10-28: "jsr
