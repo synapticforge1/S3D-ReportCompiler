@@ -14,8 +14,8 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Maths | 8,286 expressions typeset, **0 failed** (2026-08-08) |
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages (2026-08-08) |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08) |
-| Published | **JSR `@jrmarcum/s3d-reportcompiler` 1.1.2** = latest (2026-10-28; 1.1.0 and 1.1.1 the same day). npm `@synapticforge1/s3d-reportcompiler`: **not yet** — 1.1.1's and 1.1.2's npm publishes failed (task 15) |
-| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · 1.1.1 ✅ Rekor `3544876876` · **1.1.2 ✅ Rekor `3545629708`** (`verify-release`, 2026-10-28) — the first release from the org, with no `deno.json`, run from Bun |
+| Published | **JSR `@jrmarcum/s3d-reportcompiler` 1.1.3** = latest (2026-10-28; 1.1.0–1.1.2 the same day). npm `@synapticforge1/s3d-reportcompiler`: **not yet** — 1.1.3's npm half is pending a "Bypass 2FA" token (task 15); 🔒 the two registries release together |
+| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · 1.1.1 ✅ Rekor `3544876876` · 1.1.2 ✅ Rekor `3545629708` · **1.1.3 ✅ Rekor `3546011937`** (`verify-release`, 2026-10-28) — the first release from the org, with no `deno.json`, run from Bun |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26); Deno's leg runs in CI only since 2026-10-28 |
@@ -831,7 +831,14 @@ LATER versions on npm, the npm-recommended pairing is trusted publishing + stage
 copy reads only `NPM_PUBLISH` (gone) → no token → `ENEEDAUTH`. Three of three manual runs picked a
 `release/v*` branch in "Use workflow from": the trap is the UI, not a slip. **Owner: "release
 1.1.3 and try again"** — npm starts at 1.1.3, by tag (its `publish.yml` reads `NPM_TOKEN`); 1.1.1
-and 1.1.2 stay JSR-only. After the first npm version: on npm, the
+and 1.1.2 stay JSR-only. 🔒 **Owner, 2026-10-28: "jsr and npm are updated at the same time
+always"** — one tag, one run, both registries; an npm-only run exists only to complete a release
+whose npm half failed. **1.1.3 released 2026-10-28:** JSR ✅ attested (Rekor `3546011937`); npm ❌ —
+publish run 40746815045: the `NPM_TOKEN` token was READ and accepted as a credential, then
+**`EOTP — This operation requires a one-time password`**: the account requires 2FA for writes and
+the token lacks **"Bypass 2FA"**. Fix = the same granular token (Read and write on
+`@synapticforge1`, not stage-only) WITH "Bypass 2FA", saved as `NPM_TOKEN`, then **"Re-run failed
+jobs" on run 40746815045** (the v1.1.3 tag's own workflow reads `NPM_TOKEN`; no dropdown). After the first npm version: on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.
