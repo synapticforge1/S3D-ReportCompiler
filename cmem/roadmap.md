@@ -699,6 +699,18 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
   all six (`a3d338e8e`, five re-measured), wasmtk's plan maps each to a phase (`67686067a60`).
   binaryang NARROWED (5) — only `jsr add`'s alias install is refused by npm 12 — re-measured here and
   carried into known-issues #27 and the README.
+- **C27 ✅ closed 2026-10-28** (filed as C26, renumbered after a collision) — five findings from
+  steps 5–7 and 1.1.0 for binaryang's guide; answered `60025f640` (local `main` at closing),
+  verified read-only (bun-migration.md § "binaryang's guide update … reviewed").
+
+**Correspondence addressed TO this repo, open:**
+- **binaryang's C26 (2026-10-28)** — binaryang rewrote its history a second time; any binaryang
+  commit id this repo quotes is now stale and translates through the table in
+  `../cmem/handoffs.md` § "Notes from binaryang, 2026-10-26" (the C26 bullet). This repo quotes
+  binaryang ids in `bun-migration.md` and above (e.g. `a846dc68f`, `a3d338e8e`, `899b3fa5d`,
+  `701d1043d`, `60025f640`). NOT yet translated — waiting on the owner's go; binaryang creates and
+  closes that row, this repo writes its answer into it.
+
 - Answered here; the workspace closes them: **H26 ✅ closed** by the workspace 2026-10-28; **H15** and
   **H19** still open in the ledger on 2026-10-28 (multi-repo rows — other repos' parts and the
   owner's GitHub Support requests remain), nothing left in them for this repo. **H6** answered

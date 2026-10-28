@@ -289,6 +289,13 @@ Owner: "the goal is to be deno free on this machine", then steps 5 and 7, "relea
 | CI can publish a new npm package with a token | a stage-only token cannot publish; a write token hit 2FA (`EOTP`); a trusted publisher needs the package to EXIST — the first version had to be by hand |
 | "Run workflow" runs the workflow I just fixed | it runs the copy on the branch picked in "Use workflow from" — three runs picked `release/v*` and ran stale copies |
 | the root manifest's `"private": true` is boilerplate | it stopped an `npm publish` typed in the repo root from publishing the whole repository |
+| a publish dry run is a stable check | once 1.1.4 was on npm, it failed "cannot publish over…" on every commit — main's CI went red until it dry-ran a throwaway prerelease copy |
+
+Later the same day: `publish.yml` gated on CI (nothing publishes from a commit CI did not pass);
+ledger C27 (filed as C26, renumbered after a collision) answered by binaryang and closed; the
+session log exported (part 4) and deleted; `main.ts`'s Deno shebang → Bun; and **dependency
+installs moved to Bun** (owner: "because it is faster") — `bun.lock` replaced `package-lock.json`
+with the same 20 package versions and the same baked document, 15.4 s vs 29.4 s warm.
 
 ## What I would tell the next person
 
