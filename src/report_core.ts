@@ -896,6 +896,81 @@ export function compareAgainstPdf(
   };
 }
 
+/** One report's own conservation: what its source holds that its own part of the PDF lacks. */
+export type ReportConservation = {
+  /** Position of the report in the build, 0-based — the order the sources were given in. */
+  report: number;
+  missingWords: string[];
+  missingNumbers: string[];
+};
+
+/** Outcome of {@link compareEachReport}. `checked` is false when the PDF could not be segmented. */
+export type PerReportResult = {
+  checked: boolean;
+  /** Why the check did not run, when `checked` is false. */
+  reason: string;
+  reports: ReportConservation[];
+};
+
+/**
+ * Per-report conservation: each report's words and numbers must appear in ITS OWN part of the PDF.
+ *
+ * {@link compareAgainstPdf} checks a set union across all reports, so a value lost from one report
+ * but present in another passes it (two identical members, one with a hidden row). This closes that
+ * gap. The PDF is cut into whole PAGES at the report headings — the SkyCiv template prints
+ * `MEMBER # n DESIGN REPORT` once per report — and report i owns the pages from the one carrying its
+ * heading up to (not including) the one carrying the next. Whole pages, not the heading's position:
+ * each report prints its tab strip and code line BEFORE its heading, and every report starts on a
+ * new page (`.report-sheet { break-after: page }` in {@link assembleDocument}). Were a report ever to
+ * start mid-page, the earlier report's tail would land in the next segment and the earlier report
+ * would FAIL — the loud direction, never a silent pass. Segments are matched to `sources` in order,
+ * which is the order the build assembled them in.
+ *
+ * Same comparison as the set-wide check (a normalised stream searched by substring), so it can only
+ * under-report absence. If the number of heading pages differs from the number of sources the PDF
+ * cannot be segmented: `checked` is false and `reason` says why — that is a failure for the caller,
+ * never a pass.
+ *
+ * @param sources the raw source reports, in build order
+ * @param pageTexts the extracted text of each PDF page, in page order
+ * @example
+ * ```ts
+ * import { compareEachReport } from "@jrmarcum/s3d-reportcompiler";
+ * const r = compareEachReport(["<body>MEMBER # 1 DESIGN REPORT 2.5</body>"], ["MEMBER # 1 DESIGN REPORT 2.5"]);
+ * console.log(r.checked, r.reports[0].missingNumbers); // true []
+ * ```
+ */
+export function compareEachReport(sources: string[], pageTexts: string[]): PerReportResult {
+  const heading = /MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/gi;
+  const headingCount = pageTexts.reduce((n, t) => n + (t.match(heading) ?? []).length, 0);
+  const starts = pageTexts.flatMap((t, p) =>
+    /MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/i.test(t) ? [p] : [],
+  );
+  // Two headings on one page would make two reports share it: not segmentable by page.
+  if (starts.length !== sources.length || headingCount !== sources.length) {
+    return {
+      checked: false,
+      reason: `found ${headingCount} report heading(s) on ${starts.length} page(s) for ${sources.length} source(s)`,
+      reports: [],
+    };
+  }
+
+  const reports = sources.map((source, i) => {
+    const segment = pageTexts
+      .slice(starts[i], i + 1 < starts.length ? starts[i + 1] : pageTexts.length)
+      .join("\n");
+    const own = extractSourceTokens([source]);
+    const letters = segment.toLowerCase().replace(/[^a-z]/g, "");
+    const digits = segment.replace(/\s+/g, "");
+    return {
+      report: i,
+      missingWords: [...own.words].filter((w) => !letters.includes(w)),
+      missingNumbers: [...own.numbers].filter((n) => !digits.includes(n)),
+    };
+  });
+  return { checked: true, reason: "", reports };
+}
+
 /** Order report filenames the way a reader expects: member_2 before member_10. */
 export function sortReportNames(names: string[]): string[] {
   return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));

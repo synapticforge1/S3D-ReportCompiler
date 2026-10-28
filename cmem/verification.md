@@ -20,7 +20,7 @@ Run automatically as the last step; `--no-verify` skips it (**never on a release
 
 | Check | What it proves |
 |---|---|
-| **CONSERVATION** | every word and number in the sources appears in the PDF |
+| **CONSERVATION** | every word and number in the sources appears in the PDF — and, since 2026-10-28, each report's in its OWN pages |
 | **MATHEMATICS** | no LaTeX source survived into the PDF |
 | **GRAPHICS** | no image or diagram was sliced by a page break |
 | **STRUCTURE** | every report contributed content, no page is blank |
@@ -28,6 +28,7 @@ Run automatically as the last step; `--no-verify` skips it (**never on a release
 ```
   checked:  174 words, 660 numbers from 48 source(s)
   missing:  0 word(s), 0 number(s)
+  per-report: 48/48 reports hold all their own words and numbers
   graphics: 48 image paint(s), 48 expected; 48 diagram(s) checked, intact
   latex:    0 surviving, 48/48 reports, 0 blank page(s)
   PASS
@@ -49,18 +50,29 @@ baker's mistakes — it was treated as a defect and fixed even though it worked.
 
 ## ⚠️ Two limits. Know these before relying on it.
 
-### 1. Conservation is a **set union** across all reports
+### 1. ✅ CLOSED 2026-10-28 — conservation was a **set union** across all reports
 
-It proves *every distinct value in the package appears somewhere in the PDF* — **not** that each value
-appears in the right report. With 48 genuinely different members, each carrying distinct dimensions and
-results, that is a strong guarantee. It would **not** catch one member being silently replaced by a
-duplicate of another.
+The set-wide check proves *every distinct value in the package appears somewhere in the PDF* — not that
+each value appears in the right report. It would not catch one member silently replaced by a
+duplicate of another; a negative control found it by *passing when it should have failed* (a row
+hidden in one of two identical reports, the other supplying the same tokens).
 
-This was discovered by a negative control that *passed when it should have failed*: hiding a row in one
-of two identical reports, where the other supplied the same tokens.
+**Now also PER REPORT** (`compareEachReport`, roadmap task 7). The PDF is cut into whole pages at
+the report headings — report i owns the pages from the one carrying its `MEMBER # n DESIGN REPORT`
+up to the one carrying the next — and each report's own words and numbers must appear in its own
+pages. Whole pages, because each report prints its tab strip and code line BEFORE its heading
+(a first version cut at the heading itself and failed the correct samples on the last report: every
+earlier report's opening had silently been credited to its predecessor — the set-union gap again,
+inside the fix), and every report starts on a new page (`.report-sheet { break-after: page }`).
+Were a report ever to start mid-page, the earlier report would FAIL — the loud direction. If the
+heading pages do not match the source count the check reports that it did not run, as a failure.
 
-Tightening it means segmenting the PDF at report headings and comparing each against its own source.
-Not done; the one real capability gap left.
+```
+  per-report: 48/48 reports hold all their own words and numbers
+```
+
+What it still cannot see: a value moved WITHIN one report, and the order of reports matching the
+headings only by position (segments are paired with sources in build order).
 
 ### 2. The diagram-split check is template-specific
 

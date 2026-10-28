@@ -119,9 +119,11 @@ VERIFICATION FAILED
 exit=1
 ```
 
-⚠️ **Use one report, not two copies.** Conservation is a set union, so a duplicate report supplies the
-tokens the hidden one lost and the control passes when it should fail. Discovering that is how the
-set-union limit in [verification.md](verification.md) came to light.
+⚠️ **Use one report, not two copies** — for THIS control, which targets the set-wide check. With two
+copies a duplicate report supplies the tokens the hidden one lost, and the set-wide check passes;
+discovering that is how the set-union limit came to light. Since 2026-10-28 the per-report check
+catches the two-copy case too: `control-hidden-row-two-reports` now FAILS on its own (verification.md
+§ limit 1, closed).
 
 ⚠️ **This control is also how bug #15 was found.** The first attempt passed because the injected rule
 was itself being dropped — by the stray-semicolon defect in the CSS scoper. The control failing to fail

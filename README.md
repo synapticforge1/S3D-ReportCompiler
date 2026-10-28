@@ -404,12 +404,13 @@ The check re-reads the sources and the finished PDF **from disk** and re-derives
 independently — a build and its own self-assessment failing the same way is what it exists to rule
 out.
 
-Two limits worth knowing before you rely on it:
+Conservation is checked twice: across the whole package, and **per report** — each report's words
+and numbers must appear in its own pages, so one member silently replaced by a duplicate of another
+is caught (`per-report: 48/48 reports hold all their own words and numbers`). It cannot see a value
+moved *within* a report.
 
-- **Conservation is a set union across all reports.** It proves every distinct value in the package
-  appears somewhere in the PDF, not that each value appears in the *right* report. With genuinely
-  different members that is a strong guarantee; it would not catch one member being silently
-  replaced by a duplicate of another.
+One limit worth knowing before you rely on it:
+
 - **The diagram-split check is template-specific.** It keys on the SkyCiv diagram's title and axis
   caption. A different template makes it find nothing — so the count is printed, and
   `0 diagram(s) checked` means it did not run, **not** that everything is fine.
@@ -452,7 +453,7 @@ and each lands here with its migration.
 | ✅ | Portability | Browser path — bake and print, with the same guard as the CLI |
 | ✅ | CLI | Defaults resolve from the working directory, so a global install is relocatable |
 | ✅ | Packaging | Published to JSR with GitHub Actions OIDC provenance |
-| ⏳ | Verification | **Per-report conservation.** Segment the PDF at report headings and compare each segment against its own source, closing the set-union gap above |
+| ✅ | Verification | **Per-report conservation.** The PDF is segmented at the report headings and each report is compared against its own source, closing the set-union gap |
 | ⏳ | Maths | **MathJax 3 → 4.** Deferred deliberately: v4 replaced the font system, so glyph metrics, line breaking and page count all move. Deprecation is not an advisory. (`npm audit` reports 0 vulnerabilities since 2026-10-28, when `@xmldom/xmldom` — pinned by MathJax's `speech-rule-engine` — was overridden to the fixed 0.9.12; v4 was not the remedy.) Requires a measured no-degradation comparison first |
 | ⏳ | CSS | **Scope the remaining blanket rewrites.** `visibility: hidden → visible` and `height: 100% → auto` are still textual. They are audited and counted, and they fail *visibly*, which is the safer class — narrowing them means evaluating the cascade |
 | ⏳ | Upstream | **Emit MathML from SkyCiv instead.** Their reports are generated from structured data; HTML → PDF is a lossy round-trip through a format that was never the source of truth |

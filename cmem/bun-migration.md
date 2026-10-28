@@ -127,7 +127,7 @@ Node and Bun with the baked HTML's sha256 unchanged, plus the step's own done-co
    baseline (100 pages, 2,203 expressions, 0 failed); each NEGATIVE control makes the build FAIL
    **for its own reason** (the expected message, not just exit 1 — a control caught by a different
    check is a bad control, ★ 2.1); each POSITIVE control passes at its baseline; the known
-   set-union case (`control-hidden-row-two-reports`) is pinned as passing, so the day task 7 fixes
+   set-union case (`control-hidden-row-two-reports` — FAILS since task 7, 2026-10-28; pin it as a NEGATIVE control) is pinned as passing, so the day task 7 fixes
    it the test fails and is re-recorded (★ 2.6). Guard "ran nothing": every control file must be
    exercised. Each assertion inverted once before it counts. Needs Chrome, so it is a CI job with a
    browser, not a unit test. May land before step 4 if it runs the controls through Deno at first.
