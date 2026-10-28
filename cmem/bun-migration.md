@@ -27,9 +27,13 @@ with no `--config`. Every reader moved (`sync-version`, `bump`, `publish` incl. 
 this, v1.0.4 included, measured: floor still minor), `publish.yml`'s score step, `.vscode`
 (`deno.enable` off, TS validation on). The proof is a committed check, `scripts/jsr-upload-check.ts`
 (testing.md § JSR upload check), run in CI's JSR job and in `publish.yml` before the real
-`deno publish` — the "capture check in the release path" step 6 asked for. Still to come: the CI run
-on this tree (deno check / doc lint / dry run / Deno runtime leg without a `deno.json` — re-measured
-there, not here), uninstalling Deno here (owner), and `publish.yml` gating on CI plus the npm job.
+`deno publish` — the "capture check in the release path" step 6 asked for. First CI run on the
+step-7 tree (run 40727580815): checks, runtime matrix (Deno leg included) and npm ✅; JSR job ❌ at
+`deno check --doc` — the JSDoc examples import `@jrmarcum/s3d-reportcompiler` by name, which only a
+loaded manifest resolves, and with no `deno.json` Deno loads none for `check` (TS2307 ×3,
+reproduced locally). Fixed with `--config jsr.json` on THAT step only (a type check fails loudly;
+`deno publish` must never get it). `deno check` of the entry files, `doc --lint` and the dry run
+passed without it. Still to come: uninstalling Deno here (owner), and `publish.yml` gating on CI plus the npm job.
 
 **Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
 `129fd0a`); step 1 MEASURED and folded into step 7 (§ "Step 1, measured" — binaryang's step 1

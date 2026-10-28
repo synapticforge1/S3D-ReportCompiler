@@ -85,8 +85,12 @@ jobs:
       - name: Docs coverage (a scored JSR criterion)
         run: deno doc --lint src/*.ts
 
+      # `--config jsr.json`: the examples import the package by its own name, which resolves only
+      # from the manifest, and since step 7 there is no deno.json for Deno to find on its own
+      # (measured 2026-10-28: TS2307 ×3 without it). Safe here: what `--config` broke was the
+      # UPLOAD of `deno publish`; a type check fails loudly. Never add it to `deno publish`.
       - name: The JSDoc examples compile
-        run: deno check --doc src/*.ts
+        run: deno check --doc --config jsr.json src/*.ts
 
       - name: JSR validation, slow types included
         run: deno publish --dry-run
