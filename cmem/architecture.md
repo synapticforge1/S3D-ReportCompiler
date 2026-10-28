@@ -138,7 +138,9 @@ GitHub OIDC — no token anywhere. **npm is the second registry** (owner, 2026-1
 ⚠️ npm can attach a trusted publisher only to a package that EXISTS, so the first version
 (1.1.0) was published BY HAND, without provenance; a CI token could not answer npm's 2FA. The
 trusted publisher is now set on the package (`npm trust`, 2026-10-28) and `publish.yml` has no
-token path: OIDC only (roadmap task 15).
+token path: OIDC only (roadmap task 15). **Proven by 1.1.4** (npm provenance
+`https://slsa.dev/provenance/v1`). ⚠️ The root `package.json` keeps `"private": true` — a
+`npm publish` typed in the repository root was stopped only by it (task 15).
 `publish.yml`'s `npm` job (2026-10-28) runs after the JSR job on a tag, or alone on "Run workflow"
 with a tag; it checks the built version equals the tag, refuses any manifest `npm publish` would
 auto-correct, skips a version already on npm, then `npm publish` with the run's OIDC token (no npm

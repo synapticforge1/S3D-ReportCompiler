@@ -14,8 +14,8 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Maths | 8,286 expressions typeset, **0 failed** (2026-08-08) |
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages (2026-08-08) |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08) |
-| Published | **JSR `@jrmarcum/s3d-reportcompiler` 1.1.3** = latest (2026-10-28; 1.1.0–1.1.2 the same day). npm `@synapticforge1/s3d-reportcompiler`: **not yet** — 1.1.3's npm half is pending a "Bypass 2FA" token (task 15); 🔒 the two registries release together |
-| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · 1.1.1 ✅ Rekor `3544876876` · 1.1.2 ✅ Rekor `3545629708` · **1.1.3 ✅ Rekor `3546011937`** (`verify-release`, 2026-10-28) — the first release from the org, with no `deno.json`, run from Bun |
+| Published | **1.1.4 on both registries** (2026-10-28): JSR `@jrmarcum/s3d-reportcompiler` (1.1.0–1.1.4 attested) and npm `@synapticforge1/s3d-reportcompiler` (1.1.0 by hand; **1.1.4 by OIDC with provenance**; plus a stray `0.0.0-stage`). 🔒 One tag releases both |
+| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · 1.1.1 ✅ Rekor `3544876876` · 1.1.2 ✅ Rekor `3545629708` · 1.1.3 ✅ Rekor `3546011937` · **1.1.4 ✅ Rekor `3546339510`** (`verify-release`, 2026-10-28); npm 1.1.4 ✅ SLSA provenance — the first release from the org, with no `deno.json`, run from Bun |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26); Deno's leg runs in CI only since 2026-10-28 |
@@ -780,7 +780,20 @@ instead — prebuilt N-API binaries, no `tar` chain. Plan, as its own task after
 
 ---
 
-## 🟡 15. Publish to npm as well as JSR — BUILT AND PROVEN 2026-10-28, not published
+## ✅ 15. Publish to npm as well as JSR — DONE 2026-10-28: 1.1.4 on both, by OIDC, with provenance
+
+**Outcome (read 2026-10-28):** npm `@synapticforge1/s3d-reportcompiler` has `1.1.0` (by hand, no
+provenance), **`1.1.4` = latest, published by the trusted publisher with provenance**
+(`https://slsa.dev/provenance/v1`; the re-run of publish run 40749944976 after the owner deleted
+the token secret), bin `s3d-reportcompiler` → `main.js`, 10 files, Node ≥ 22.13.0 — and a
+**`0.0.0-stage`** version nobody here published on purpose (open: owner's call — likely left by
+npm's staged-publishing / trust setup; deprecate or unpublish within npm's window). A clean
+install of 1.1.4 (npm 12.2, Node 24): 0 vulnerabilities, the CLI compiles the 13 samples PASS
+(13/13 per report), the library imports with `compareEachReport`. JSR has 1.1.0–1.1.4, all attested.
+From now on one tag publishes both (🔒 owner: "jsr and npm are updated at the same time always").
+Left: "require 2FA and disallow tokens" on the package, if not already set (owner).
+
+*The record of how it got here, kept:*
 
 **2026-10-28, later:** the owner created the trusted publisher (`publish.yml`, no environment);
 `publish.yml` has an `npm` job (architecture.md § JSR packaging). The first `npm publish --dry-run`
