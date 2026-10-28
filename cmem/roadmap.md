@@ -838,7 +838,18 @@ publish run 40746815045: the `NPM_TOKEN` token was READ and accepted as a creden
 **`EOTP — This operation requires a one-time password`**: the account requires 2FA for writes and
 the token lacks **"Bypass 2FA"**. Fix = the same granular token (Read and write on
 `@synapticforge1`, not stage-only) WITH "Bypass 2FA", saved as `NPM_TOKEN`, then **"Re-run failed
-jobs" on run 40746815045** (the v1.1.3 tag's own workflow reads `NPM_TOKEN`; no dropdown). After the first npm version: on npm, the
+jobs" on run 40746815045** (the v1.1.3 tag's own workflow reads `NPM_TOKEN`; no dropdown).
+A manual run 40747526243 (from `release/v1.1.3`, whose copy does read `NPM_TOKEN`) got the same
+`EOTP`. **Owner: "it is not asking for the 2FA like it did for the other repos"** — and binaryang's
+own record (`../binaryang/cmem/publishing.md` § 1.13.1, read 2026-10-28) shows why: ITS first npm
+version was a **manual publish by the owner** (`npm login`, then `npm publish --provenance=false`
+from a `dist/` built and proved at the tag — the 2FA prompt was that interactive login), and only
+then the trusted publisher (`npm trust github … --file publish.yml --repo … --allow-publish`, or the
+package's Settings page). **Same route here:** `dist/` built from a checkout of `v1.1.3`
+(`fcb6706`), `npm:prove` 20/20, `npm publish --dry-run --access public --provenance=false` clean
+(10 files, 1.1.3); the owner publishes it. So npm's FIRST version, 1.1.3, carries NO provenance
+(only CI can make it); every later one does, by OIDC. The token route is abandoned: revoke the
+token, delete the `NPM_TOKEN` secret. After the first npm version: on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.
