@@ -4,6 +4,7 @@
  *   bun run npm:build && bun run npm:prove
  *
  *  1. pack dist/; no TypeScript source ships, and every path the manifest names is in the tarball;
+ *     `npm publish --dry-run` takes the manifest without "auto-correcting" it;
  *  2. install the tarball into a scratch project OUTSIDE the repo, as a user would;
  *  3. on the manifest's Node floor, every current Node LTS line (Node's own schedule), Bun, and Deno
  *     with `--deno` (CI passes it; a developer machine has no Deno, owner 2026-10-28):
@@ -122,6 +123,18 @@ try {
     "utf8",
   ).split("\n")[0];
   ok(firstLine === "#!/usr/bin/env node", "the bin runs under Node", firstLine);
+
+  // `npm publish` validates the manifest more strictly than `npm pack` and SILENTLY repairs what it
+  // dislikes — it dropped a "./main.js" bin (2026-10-28). A dry run (no registry write) shows it.
+  const dry = npm(["publish", "--dry-run", "--access", "public"], dist);
+  const corrected = dry.out
+    .split("\n")
+    .filter((l) => /auto-corrected|errors corrected|was invalid and removed/.test(l));
+  ok(
+    dry.code === 0 && corrected.length === 0,
+    "`npm publish --dry-run` accepts the manifest unchanged",
+    dry.code === 0 ? corrected.join(" | ") : dry.out.trim().split("\n").slice(-3).join(" | "),
+  );
 
   // 2. Install as a user would.
   const consumer = join(work, "consumer");

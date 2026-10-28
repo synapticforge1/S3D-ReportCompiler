@@ -1,12 +1,22 @@
-name: Publish to JSR
+name: Publish to JSR and npm
 
+# A v* tag publishes to JSR, then to npm. "Run workflow" with a tag publishes ONLY to npm — for a
+# version already on JSR (1.1.0 was released to JSR before the npm job existed). npm's trusted
+# publisher for @synapticforge1/s3d-reportcompiler names THIS file and no environment (owner,
+# 2026-10-28): renaming the file or adding an environment breaks npm publishing.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish to npm only (e.g. v1.1.0)"
+        required: true
 
 jobs:
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -136,3 +146,78 @@ jobs:
           done
           echo "::warning::${PKG}@${VERSION} shows no Sigstore/Rekor entry on JSR. The package IS published and the GitHub release IS created — only the attestation is unreported. This is a known JSR-side issue (see the comment above) and is expected; it is NOT a release failure and needs no action here."
           exit 0
+
+  # npm: @synapticforge1/s3d-reportcompiler, built from the same tag by `bun run npm:build` (compiled
+  # JS + .d.ts, a generated manifest with a bin). Trusted publishing: `npm publish` authenticates
+  # with this run's OIDC token (id-token: write) — no npm token exists anywhere — and npm records
+  # provenance itself. CI proves the tarball (`npm:prove`) on every push, the tagged commit's too.
+  npm:
+    needs: publish
+    # After a successful JSR publish on a tag push; or alone, on "Run workflow" with a tag.
+    if: >-
+      !cancelled() && (needs.publish.result == 'success' ||
+      (github.event_name == 'workflow_dispatch' && needs.publish.result == 'skipped'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      # Node 24 bundles npm 12, past trusted publishing's npm 11.5.1 floor.
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build the npm package
+        run: bun run npm:build
+
+      # The tag names the version; the built manifest must say the same, or this would publish a
+      # version nobody tagged.
+      - name: The package version is the tag's
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          VERSION=$(node -p 'require("./dist/package.json").version')
+          if [ "v${VERSION}" != "${TAG}" ]; then
+            echo "::error::dist/package.json is ${VERSION}, the tag is ${TAG} — refusing to publish."
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      # `npm publish` silently REPAIRS a manifest it dislikes — it dropped the "./main.js" bin
+      # (2026-10-28), which would ship a package with no command. Refuse any correction first.
+      - name: npm takes the manifest unchanged
+        working-directory: dist
+        shell: bash # -eo pipefail: a failing dry run must not hide behind `tee`
+        run: |
+          npm publish --dry-run --access public 2>&1 | tee ../npm-dry-run.log
+          if grep -Eq 'auto-corrected|errors corrected|was invalid and removed' ../npm-dry-run.log; then
+            echo "::error::npm would change the manifest on publish — refusing (see the dry run above)."
+            exit 1
+          fi
+
+      # npm versions are immutable too. A re-run must stop cleanly, not fail on a duplicate.
+      - name: Publish to npm
+        working-directory: dist
+        run: |
+          NAME=$(node -p 'require("./package.json").name')
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::${NAME}@${VERSION} is already on npm — nothing to publish."
+            exit 0
+          fi
+          npm publish --access public

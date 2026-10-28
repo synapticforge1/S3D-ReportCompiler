@@ -782,6 +782,14 @@ instead — prebuilt N-API binaries, no `tar` chain. Plan, as its own task after
 
 ## 🟡 15. Publish to npm as well as JSR — BUILT AND PROVEN 2026-10-28, not published
 
+**2026-10-28, later:** the owner created the trusted publisher (`publish.yml`, no environment);
+`publish.yml` has an `npm` job (architecture.md § JSR packaging). The first `npm publish --dry-run`
+found npm 12 DROPPING the `"./main.js"` bin at publish time — fixed in `npm-build` (`"main.js"`) and
+guarded in `npm:prove` and the job (testing.md § npm package). ⚠️ **The `v1.1.0` tag carries the
+old `npm-build`**, so the npm job REFUSES to publish 1.1.0 from it (the guard trips): npm's first
+version is the owner's call — see the open question in the session record, and § below when
+decided.
+
 🔒 Owner: "we will post this to npm as well as jsr" — **supersedes** the 2026-10-26 "we will not
 publish this to npm" (bun-migration.md, owner decision 4). 🔒 **Names** (owner, 2026-10-28: "jsr
 remains the same, npm is on synapticforge1"): JSR `@jrmarcum/s3d-reportcompiler`, npm

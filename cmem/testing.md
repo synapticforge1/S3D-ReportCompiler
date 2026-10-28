@@ -357,6 +357,13 @@ with ITS check ❌): types path to a missing file; the Deno shebang kept; the CL
 (❌ on every runtime); `./runtime` dropped (❌ imports and ❌ export list vs JSR);
 a `.ts` source leaked into the tarball; `compareEachReport` deleted from the `.d.ts` (❌ consumer
 type-check); `THIRD-PARTY-NOTICES.md` dropped from `files`. 7/7 caught.
+⚠️ **`npm pack` and an install from the tarball are NOT the publish path.** Found 2026-10-28 by
+the first `npm publish --dry-run` (npm 12.2.0): it called the generated bin `"./main.js"` invalid
+and REMOVED it — a published package with no command, with only a warning — while pack, install,
+`npm exec` and every check above passed. `npm-build` now writes `"main.js"`, and `npm:prove`
+checks that the dry run corrects nothing (inverted: the old `"./main.js"` → ❌ with npm's own
+warning, exit 1). `publish.yml`'s npm job runs the same refusal before the real publish.
+
 ⚠️ **Dropping `LICENSE` from `files` is not a breakage**: npm packs `LICENSE`, `README` and
 `package.json` regardless — the first mutant tried was that one, and the proof correctly passed it.
 
