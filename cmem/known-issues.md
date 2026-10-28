@@ -168,9 +168,12 @@ alias was considered and rejected, because keeping the word available is what ke
 memory. `deno task publish` now answers `Task not found` and lists the real one. See
 [practices.md](practices.md) §14.
 
-🔒 **Still worth doing: make JSR refuse.** The package can be configured to require publishing from
-a GitHub Actions workflow, which turns this from something detected afterwards into something that
-cannot happen.
+✅ **JSR refuses — settled 2026-10-28 (owner):** with the GitHub repository linked, JSR requires
+publishing from a GitHub Actions workflow by default, and the link is in place (`githubRepository`
+= `synapticforge1/S3D-ReportCompiler`, read 2026-10-26). A workstation `deno publish` is therefore
+refused at the registry, not merely detected afterwards. Deliberately NOT confirmed by trying one:
+a probe of a live publish command is a run of it (roadmap § Release path). Kept for the record: this
+section used to say "Still worth doing: make JSR refuse".
 
 ⚠️ **Score 100 does not mean the release was done correctly.** That is the trap here: JSR reports
 1.0.2 at 100, identical to the two attested releases, because provenance is not a scored criterion.

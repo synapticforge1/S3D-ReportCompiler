@@ -275,10 +275,10 @@ The text below is the record of how it got there.
 now named **`deno task release`** so it cannot be confused with `deno publish`; that rename is the
 actual fix, and everything below it is secondary.
 
-🔒 **Do this once and the problem ends:** on jsr.io → the package → settings, require publishing from
-a GitHub Actions workflow. A workstation `deno publish` then fails at the registry instead of quietly
-producing an unattested version. Everything in this repo can only *detect* the mistake after the
-fact; only JSR can refuse it.
+✅ **Settled 2026-10-28 (owner):** JSR requires publishing from a GitHub Actions workflow by default
+once the GitHub repository is linked, and it is linked (`synapticforge1/S3D-ReportCompiler`). So a
+workstation `deno publish` fails at the registry instead of producing an unattested version — the
+prevention this section once listed as still to do (known-issues #26).
 
 <details>
 <summary>The 1.0.3 attempt, kept for the record</summary>
@@ -398,9 +398,10 @@ Exit codes: **0** attested · **1** published but not attested · **2** not publ
 against all three real cases (again on Deno, Bun and Node, 2026-10-26). `bun run release --no-wait`
 skips the wait if you do not want to hold the terminal.
 
-⚠️ **This detects, it does not prevent.** Deno has no pre-publish hook and nothing here can shadow
-its subcommand, so `deno publish` typed directly still works and still loses the attestation. There
-is still deliberately no `publish` script: `bun run publish` answers `Script not found "publish"`
+⚠️ **This detects; JSR prevents.** Nothing in this repo can stop a `deno publish` typed directly —
+Deno has no pre-publish hook. What refuses it is JSR, which requires publishing from GitHub Actions
+for a package with a linked repository (owner, 2026-10-28). `verify-release` stays as the check that
+an Actions release really was attested. There is still deliberately no `publish` script: `bun run publish` answers `Script not found "publish"`
 (measured 2026-10-26).
 
 ⚠️ **`deno task release` is NOT dead — it runs the real release.** With no `tasks` in `deno.json`,
@@ -645,7 +646,8 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 
 What remains:
 
-4. **JSR: require publishing from GitHub Actions** — still the one real prevention for #26 (above).
+4. ✅ **JSR: require publishing from GitHub Actions** — settled 2026-10-28 (owner): it is JSR's
+   default once the GitHub repository is linked, and the link is in place (#26 above).
 5. **The pull line** ("At session start, read `../cmem/workspace-correspondence.md`, then the
    letters in `../cmem/handoffs.md` addressed to this repo") is in the gitignored `CLAUDE.md` on
    this machine only; a clone does not get it. INDEX § Workspace carries the same instruction for

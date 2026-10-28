@@ -17,10 +17,11 @@
  * an attested one. The only reliable signal is `rekorLogId` on the version, and
  * nothing was asking for it.
  *
- * ⚠️ This cannot PREVENT a direct `deno publish` — Deno has no pre-publish hook,
- * and a subcommand cannot be shadowed by a task. It closes the loop instead: run
- * automatically at the end of `bun run release`, it turns a silent loss into an
- * immediate, loud one.
+ * This script does not PREVENT a direct `deno publish` — Deno has no pre-publish
+ * hook. JSR does: it requires publishing from GitHub Actions for a package with a
+ * linked repository (owner, 2026-10-28). This closes the loop on the release path:
+ * run automatically at the end of `bun run release`, it confirms the Actions
+ * publish was actually attested.
  *
  * Exit codes: 0 attested · 1 published but NOT attested · 2 not published yet.
  */
