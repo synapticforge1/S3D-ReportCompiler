@@ -187,13 +187,24 @@ surface`** re-baselines it (Rule 5: an intended surface change is its OWN commit
 `bun run bump <kind>` runs the gate before writing anything; `bun run release` runs it on the version
 it is about to tag.
 
-**The surface** (66 lines on 2026-10-28): the `exports` map; every symbol `deno doc --json` documents
-for each export (JSON v2 `nodes[file].symbols`), its declarations canonicalized — locations and doc
-comments stripped, keys sorted; the CLI's options and `USAGE` shapes from `--help`. `VERSION`'s literal
-is normalized to `<VERSION>` (its type is the version string, which every bump changes — without that,
-every bump read as breaking). At a tag with no snapshot (`v1.0.4`), the surface is GENERATED from the
-tag: `git archive` into a temp dir with this repo's `node_modules` linked (a bare archive cannot resolve
-the npm types — measured); `v1.0.4`'s generated surface equals today's.
+**The surface** (69 lines on 2026-10-28): the `exports` map; every exported symbol in the `.d.ts`
+that tsc (node_modules, `emitDeclarationOnly`) emits for each export, one line per symbol — comments
+removed, whitespace collapsed, overloads joined; the CLI's options and `USAGE` shapes from `--help`.
+`VERSION`'s literal is normalized to `<VERSION>` (its type is the version string, which every bump
+changes — without that, every bump read as breaking). An export the reader does not recognise, or a
+tree that does not type-check, FAILS the gate (fail closed). At a tag with no snapshot (`v1.0.4`), the
+surface is GENERATED from the tag: `git archive` into a temp dir with this repo's `node_modules` linked
+(a bare archive cannot resolve the npm types — measured).
+
+**No Deno since 2026-10-28** (owner: "the goal is to be deno free on this machine"). Until then the
+symbols came from `deno doc --json`. Switch proven: the tsc reader names the SAME 69 lines' symbols,
+kinds, exports and CLI lines as the `deno doc` snapshot; the floor vs `v1.0.4` is unchanged (minor —
+`compareEachReport`, `PerReportResult`, `ReportConservation` added); re-baselined in the same commit
+as the reader (the format changed, so the old snapshot could not stay). Inverted (one-time harness,
+mutate → `compat check` → restore): doc-comment edit → current, exit 0; parameter widened, optional
+parameter added, export removed, export added, type field added, return type changed → stale with
+THAT symbol named, exit 1; a type error in the tree → refused. 8/8. (Two mutants first failed for
+harness reasons — they were not valid TypeScript, so the gate refused them as type errors.)
 
 **The floor:** removed or changed → major; added → minor; nothing → patch ("changed" includes widening,
 so the floor can be high, never low). **Rule 3:** for a patch or minor, the PREVIOUS tag's sample

@@ -13,8 +13,8 @@
  *
  * THE SURFACE (Rule 1), generated, never hand-written:
  *   - `export`   the `exports` map in deno.json — a surface grep cannot see;
- *   - `symbol`   every symbol `deno doc --json` documents for each export, its definition with
- *                locations and doc comments stripped (moving a line or editing prose is not a change);
+ *   - `symbol`   every symbol in the `.d.ts` tsc emits for each export, one line each, comments
+ *                removed and whitespace collapsed (moving a line or editing prose is not a change);
  *   - `cli-flag` / `cli-usage`  the options and the USAGE shapes `main.ts --help` prints.
  * Not covered, by design: exit codes and the CLI's prose (not machine-readable from --help), and
  * the npm dependencies' own types (the tag's surface is generated against today's node_modules).
@@ -27,14 +27,15 @@
  * their verification with the NEW code. (A `tests/` suite does not exist yet — roadmap task 12
  * step 5; when it does, it joins this.)
  *
- * Uses node: builtins and spawns `deno doc` (a JSR item — Deno stays for those), `git` and `tar`.
+ * Uses node: builtins and spawns tsc (from node_modules), `git` and `tar` — no Deno (owner,
+ * 2026-10-28: "the goal is to be deno free on this machine"; this used `deno doc --json` until then).
  */
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SNAPSHOT = join(ROOT, "api-surface.txt");
@@ -51,50 +52,128 @@ function run(cmd: string, args: string[], cwd: string) {
   };
 }
 
-/** Recursively sort keys and drop what is not API: source locations and documentation. */
-function canonical(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(canonical);
-  if (v && typeof v === "object") {
-    const out: Record<string, unknown> = {};
-    for (const k of Object.keys(v).sort()) {
-      if (k === "location" || k === "jsDoc" || k === "doc") continue;
-      out[k] = canonical((v as Record<string, unknown>)[k]);
+/**
+ * Split declaration text into its top-level statements, comments removed and whitespace collapsed
+ * to single spaces. Strings are skipped whole, so a `;` or brace inside one never splits.
+ */
+function statements(dts: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let depth = 0;
+  for (let i = 0; i < dts.length; i++) {
+    const c = dts[i];
+    if (c === "/" && dts[i + 1] === "*") {
+      const end = dts.indexOf("*/", i + 2);
+      i = end < 0 ? dts.length : end + 1;
+      cur += " ";
+      continue;
     }
-    return out;
+    if (c === "/" && dts[i + 1] === "/") {
+      const end = dts.indexOf("\n", i);
+      i = end < 0 ? dts.length : end;
+      cur += " ";
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < dts.length && dts[j] !== c) j += dts[j] === "\\" ? 2 : 1;
+      cur += dts.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+    if (c === "{" || c === "(" || c === "[" || c === "<") depth++;
+    if (c === "}" || c === ")" || c === "]" || (c === ">" && dts[i - 1] !== "=")) depth--;
+    if (c === ";" && depth === 0) {
+      out.push(cur.replace(/\s+/g, " ").trim());
+      cur = "";
+      continue;
+    }
+    cur += c;
   }
-  return v;
+  if (cur.trim()) out.push(cur.replace(/\s+/g, " ").trim());
+  return out.filter(Boolean);
+}
+
+/** The exported symbols of one emitted `.d.ts`: [name, kind, declaration] (overloads joined). */
+function declarations(dts: string): Array<[string, string, string]> {
+  const byName = new Map<string, [string, string[]]>();
+  for (const s of statements(dts)) {
+    const m = s.match(
+      /^export (?:declare )?(?:async )?(function|const|let|var|type|interface|class|enum|namespace) ([A-Za-z_$][\w$]*)/,
+    );
+    if (!m) {
+      // `import …` and the empty `export {}` carry no API; anything else exported is unread.
+      if (/^export\b/.test(s) && s !== "export {}")
+        throw new Error(`unrecognised export: ${s.slice(0, 120)}`);
+      continue;
+    }
+    const kind =
+      { const: "variable", let: "variable", var: "variable", type: "typeAlias" }[m[1]] ?? m[1];
+    const entry = byName.get(m[2]) ?? [kind, []];
+    entry[1].push(s);
+    byName.set(m[2], entry);
+  }
+  return [...byName].map(([name, [kind, defs]]) => [name, kind, defs.join(" ; ")]);
+}
+
+/** Emit `.d.ts` for `files` of the package at `root` into a temp dir; returns the dir. */
+function emitDeclarations(root: string, files: string[]): string {
+  const out = mkdtempSync(join(tmpdir(), "s3d-dts-"));
+  const config = join(out, "tsconfig.json");
+  writeFileSync(
+    config,
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2022",
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        lib: ["ES2022", "DOM", "DOM.Iterable"],
+        types: ["node"],
+        typeRoots: [join(root, "node_modules", "@types")],
+        strict: true,
+        skipLibCheck: true,
+        declaration: true,
+        emitDeclarationOnly: true,
+        rewriteRelativeImportExtensions: true,
+        rootDir: root,
+        outDir: join(out, "d"),
+      },
+      files: files.map((f) => join(root, f)),
+    }),
+  );
+  const tsc = run(
+    process.execPath,
+    [join(ROOT, "node_modules/typescript/bin/tsc"), "-p", config],
+    root,
+  );
+  if (tsc.code !== 0) {
+    rmSync(out, { recursive: true, force: true });
+    throw new Error(`tsc declaration emit failed in ${root}:\n${(tsc.out + tsc.err).trim()}`);
+  }
+  return join(out, "d");
 }
 
 /** The surface of the package rooted at `root`, as sorted tab-separated lines. */
 function surface(root: string): string[] {
   const lines: string[] = [];
-  const deno = JSON.parse(readFileSync(join(root, "deno.json"), "utf8"));
-  const exportsMap: Record<string, string> = deno.exports ?? {};
-  for (const [spec, path] of Object.entries(exportsMap)) {
-    lines.push(`export\t${spec}\t${path}`);
-    const file = join(root, path);
-    const doc = run("deno", ["doc", "--json", path], root);
-    if (doc.code !== 0) throw new Error(`deno doc ${path} failed in ${root}:\n${doc.err}`);
-    // deno doc JSON v2: nodes[<file URL>].symbols = [{ name, declarations: [{ kind, def, … }] }].
-    type Symbol = { name: string; declarations: Array<Record<string, unknown>> };
-    const json = JSON.parse(doc.out) as {
-      version: number;
-      nodes: Record<string, { symbols?: Symbol[] }>;
-    };
-    if (json.version !== 2)
-      throw new Error(`deno doc JSON version ${json.version}; this reader knows 2`);
-    const url = pathToFileURL(file).href;
-    const mod = json.nodes[url] ?? Object.values(json.nodes)[0];
-    if (!mod?.symbols) throw new Error(`deno doc for ${path} has no symbols list`);
-    for (const sym of mod.symbols) {
-      const kind = sym.declarations.map((d) => String(d.kind)).join("+");
-      let def = JSON.stringify(canonical(sym.declarations));
-      // `export const VERSION = "x.y.z"` documents as the literal type "x.y.z", which every bump
-      // changes: the package's version is not API. Normalized for that one symbol only — its kind
-      // (a string literal) is still compared.
-      if (sym.name === "VERSION") def = def.replaceAll(`"${deno.version}"`, `"<VERSION>"`);
-      lines.push(`symbol\t${spec}\t${sym.name}\t${kind}\t${def}`);
+  const manifest = JSON.parse(readFileSync(join(root, "deno.json"), "utf8"));
+  const exportsMap: Record<string, string> = manifest.exports ?? {};
+  const dts = emitDeclarations(root, Object.values(exportsMap));
+  try {
+    for (const [spec, path] of Object.entries(exportsMap)) {
+      lines.push(`export\t${spec}\t${path}`);
+      const file = join(dts, path.replace(/\.ts$/, ".d.ts"));
+      if (!existsSync(file)) throw new Error(`tsc emitted no declarations for ${path}`);
+      for (const [name, kind, decl] of declarations(readFileSync(file, "utf8"))) {
+        // `export declare const VERSION = "x.y.z"` changes with every bump: the package's version
+        // is not API. Normalized for that one symbol only — its kind is still compared.
+        const def =
+          name === "VERSION" ? decl.replaceAll(`"${manifest.version}"`, `"<VERSION>"`) : decl;
+        lines.push(`symbol\t${spec}\t${name}\t${kind}\t${def}`);
+      }
     }
+  } finally {
+    rmSync(join(dts, ".."), { recursive: true, force: true });
   }
   // The CLI. The first line carries the version, which a bump changes: normalized out.
   const help = run(SELF[0], [...SELF.slice(1), join(root, "main.ts"), "--help"], root);
