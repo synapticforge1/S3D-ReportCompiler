@@ -48,7 +48,7 @@ The same package is published to two registries, under two names:
 
 #### From npm — `@synapticforge1/s3d-reportcompiler`
 
-**On npm from 1.1.2** (earlier versions are on JSR only). Compiled JavaScript with its type
+**On npm from 1.1.3** (earlier versions are on JSR only). Compiled JavaScript with its type
 declarations, so it runs on Node with no flags, no `.npmrc` and no JSR registry setting.
 
 As a project dependency:
@@ -174,7 +174,7 @@ Bun and Node: not from JSR (no `bin`) — `npx @synapticforge1/s3d-reportcompile
 
 ```bash
 bun run cli:install             # global command built from THIS working tree
-bun run cli:install-published   # global command from npm (1.1.2 on)
+bun run cli:install-published   # global command from npm (1.1.3 on)
 bun run cli:uninstall
 ```
 
@@ -345,7 +345,7 @@ import * as rt from "@jrmarcum/s3d-reportcompiler/runtime";
 Identical, under the name of the registry you installed from ([Installation](#installation)):
 
 ```typescript
-// from npm (`npm install` / `bun add`) — 1.1.2 on
+// from npm (`npm install` / `bun add`) — 1.1.3 on
 import { assembleDocument, bakeBody, bakeStyle } from "@synapticforge1/s3d-reportcompiler";
 
 // from JSR (`npx jsr add` / `bunx jsr add --bun`; see Installation for npm 12)
@@ -466,8 +466,8 @@ and each lands here with its migration.
 
 | Version | What changed | How to migrate |
 |---|---|---|
-| 1.1.2 | nothing breaking — the same library as 1.1.0, and the first version on npm (`@synapticforge1/s3d-reportcompiler`) | — |
-| 1.1.1 | nothing breaking — the same library as 1.1.0 (JSR only: its npm publish did not go through) | — |
+| 1.1.3 | nothing breaking — the same library as 1.1.0, and the first version on npm (`@synapticforge1/s3d-reportcompiler`) | — |
+| 1.1.1, 1.1.2 | nothing breaking — the same library as 1.1.0 (JSR only: their npm publishes did not go through) | — |
 | 1.1.0 | No API removed or changed (`compareEachReport` and its two types were added). **The installed package's Node floor rises from 22.6 to 22.13** (`pdfjs-dist` 6 requires it); the compatibility gate does not read engine requirements, and the owner released this as a minor (2026-10-28). | Node 22.6–22.12: move to 22.13 or later, or stay on 1.0.4 |
 | 1.0.0 – 1.0.4 | nothing breaking (1.0.2 added the `./cli` export) | — |
 
