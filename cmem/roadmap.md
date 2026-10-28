@@ -625,7 +625,7 @@ See [known-issues.md](known-issues.md) and [design-decisions.md](design-decision
 
 ---
 
-## 🟡 11. Workspace floor (letter H26) — what is left, all of it the owner's call
+## 🟡 11. Workspace floor (letter H26) — one owner action left: the GitHub Support request (item 2)
 
 Since 2026-10-26 this repo sits under the workspace's common rules (`../cmem/working-rules.md`,
 `memory-conventions.md`). Done in-repo on 2026-10-26: `origin` reset to the org, the stale links
@@ -641,17 +641,22 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
    re-run of `publish.yml` does NOT stop at the publish step — it runs on into the release-branch
    and GitHub Release steps. Harmless this time; read the workflow before ever moving a `v*` tag.
    🗓️ Still the owner's: a GitHub Support request to drop the old commits GitHub serves by hash.
-3. **The five `scripts/*.ts` run under Deno** (drift X17). → **Answered by the owner 2026-10-26:
-   port them** — the whole toolchain moves to Bun, scoped in task 12.
-
-What remains:
-
+3. ✅ **The five `scripts/*.ts` ran under Deno** (drift X17). Owner 2026-10-26: port them — done in
+   task 12 step 4 (`129fd0a`): `scripts/` and `tests/controls/` run on Bun.
 4. ✅ **JSR: require publishing from GitHub Actions** — settled 2026-10-28 (owner): it is JSR's
    default once the GitHub repository is linked, and the link is in place (#26 above).
-5. **The pull line** ("At session start, read `../cmem/workspace-correspondence.md`, then the
+5. ✅ **The pull line** ("At session start, read `../cmem/workspace-correspondence.md`, then the
    letters in `../cmem/handoffs.md` addressed to this repo") is in the gitignored `CLAUDE.md` on
-   this machine only; a clone does not get it. INDEX § Workspace carries the same instruction for
-   clones.
+   this machine, and INDEX § Workspace carries the same instruction for clones.
+
+**Correspondence this repo opened** (`../cmem/workspace-correspondence.md`):
+- **C20 ✅ closed 2026-10-28** — `--config jsr.json` corrupts a package with dependencies: binaryang's
+  `jsr-deno-exit-guide.md` F1 / § 4 carry the caveat (`a846dc68f`, on its `origin/main`); wasmtk's
+  `deno-exit-plan.md` P1 must prove its upload (`67686067a60`). Verified read-only by this repo.
+- **C21 open** — six findings from task 12 steps 2–4 for binaryang's guide and wasmtk (the `deno task`
+  fallback, `Deno.readTextFile` keeps a BOM, `bun fmt` exists, Biome's optional binaries, npm 12 vs
+  JSR, `deno publish` skips an existing version). Awaiting their answers; this repo closes it.
+- Answered here, the workspace closes: H26 (the floor), H19 (the purge), H15 (scripts on Bun).
 
 ---
 

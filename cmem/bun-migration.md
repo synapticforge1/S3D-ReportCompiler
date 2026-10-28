@@ -178,6 +178,11 @@ never saw it because it ships no dependencies. **The publish gate here must ther
 UPLOAD, not the exit code**: keep the fake-registry capture as a committed check (step 6) that
 compares every rewritten specifier against the expected list before a tag.
 
+**Handed over as ledger C20 (2026-10-26) — CLOSED 2026-10-28:** binaryang's
+`jsr-deno-exit-guide.md` F1 and § 4 now carry this caveat and the upload check (`a846dc68f`, on its
+`origin/main`); wasmtk's `deno-exit-plan.md` P1 must prove its upload's specifiers (`67686067a60`).
+Both verified read-only by this repo, as the item's creator.
+
 ### The revised order
 
 The manifest move and the `deno.json` deletion become ONE step, last before CI, and everything
