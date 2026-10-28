@@ -790,9 +790,17 @@ old `npm-build`**, so the npm job refuses 1.1.0; owner: npm starts at **1.1.1** 
 1.1.1"). **1.1.1 released 2026-10-28:** JSR ✅ attested (Rekor `3544876876`); **npm ❌ NOT
 published** — publish run 40739241100: every check in the npm job passed (version = tag, the dry
 run corrected nothing), then `npm publish` exited 1; the public annotations carry no reason (job
-logs need a GitHub sign-in). The step now writes npm's error as an annotation. Next: the reason
-(owner reads the log, or the next run's annotation), the fix, then "Run workflow" → tag `v1.1.1`
-publishes npm only.
+logs need a GitHub sign-in). **The log (owner pasted it):** provenance was signed and logged
+(Sigstore index 3544894402) — the OIDC token reached Sigstore — but the PUT got `E404 Not Found`
+with `NODE_AUTH_TOKEN: XXXXX-XXXXX-XXXXX-XXXXX` in the step's environment: npm's OIDC exchange for
+publishing failed or was skipped, and npm fell back to setup-node's PLACEHOLDER token (written
+because the job passed `registry-url`). The registry answers an unauthorised scoped write with 404.
+npm's docs: the CLI tries OIDC "before falling back to traditional tokens"; npm does not check a
+trusted-publisher entry when it is saved; troubleshooting = workflow filename incl. `.yml`,
+`id-token: write`, GitHub-hosted runner, `repository.url` matching exactly (it does — read
+2026-10-28: `synapticforge1/S3D-ReportCompiler`). Changed: no `registry-url` (no placeholder; a
+failed exchange now fails as itself) and `--loglevel verbose` with the OIDC lines in the annotation.
+Next: the owner re-checks the npm entry's fields and re-runs "Run workflow" → `v1.1.1`.
 
 🔒 Owner: "we will post this to npm as well as jsr" — **supersedes** the 2026-10-26 "we will not
 publish this to npm" (bun-migration.md, owner decision 4). 🔒 **Names** (owner, 2026-10-28: "jsr

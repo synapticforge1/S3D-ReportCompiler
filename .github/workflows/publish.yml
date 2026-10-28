@@ -168,12 +168,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
-      # Node 24 bundles npm 12, past trusted publishing's npm 11.5.1 floor.
+      # Node 24 bundles npm 12, past trusted publishing's npm 11.5.1 floor. NO `registry-url`: with
+      # it, setup-node writes an .npmrc whose token is NODE_AUTH_TOKEN's placeholder
+      # (XXXXX-XXXXX-…), and when the OIDC exchange failed npm fell back to that "token" and the
+      # registry answered 404 (1.1.1, run 40739241100). Without it a failed exchange says so.
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -224,9 +226,10 @@ jobs:
             exit 0
           fi
           npm --version
-          if ! npm publish --access public > ../npm-publish.log 2>&1; then
+          # --loglevel verbose: the trusted-publishing (OIDC) exchange is logged only at verbose.
+          if ! npm publish --access public --loglevel verbose > ../npm-publish.log 2>&1; then
             cat ../npm-publish.log
-            MSG=$(grep -E 'npm (error|ERR|warn)' ../npm-publish.log | tail -n 15 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+            MSG=$(grep -Ei 'npm (error|ERR|warn)|oidc|trusted|provenance|token' ../npm-publish.log | grep -v 'Tarball\|notice [0-9]' | tail -n 25 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
             echo "::error title=npm publish failed::${MSG:-$(tail -n 15 ../npm-publish.log | tr '\n' ' ')}"
             exit 1
           fi
