@@ -849,7 +849,16 @@ package's Settings page). **Same route here:** `dist/` built from a checkout of 
 (`fcb6706`), `npm:prove` 20/20, `npm publish --dry-run --access public --provenance=false` clean
 (10 files, 1.1.3); the owner publishes it. So npm's FIRST version, 1.1.3, carries NO provenance
 (only CI can make it); every later one does, by OIDC. The token route is abandoned: revoke the
-token, delete the `NPM_TOKEN` secret. After the first npm version: on npm, the
+token, delete the `NPM_TOKEN` secret. **What actually happened:** the first attempt ran from the
+REPO ROOT and tried to publish the whole repository as `@jrmarcum/s3d-reportcompiler` (68 files,
+`cmem/` and the samples included) — refused only by the root `package.json`'s `"private": true`
+(`EPRIVATE`). ⚠️ **Keep `"private": true` on the root manifest: it is the only thing between a
+mistyped `npm publish` and a public copy of the whole repository.** The second ran in the repo's
+own `dist/`, last built at 1.1.0, so **npm's first version is 1.1.0** (owner: "now the version on
+npm says 1.1.0"), by hand, no provenance; npm versions are immutable, so it stays. The owner then
+made the package public and set its trusted publisher (2026-10-28) and asked for **1.1.4** to JSR
+and npm together. (An anonymous registry read still answered 404 just before — propagation or the
+visibility change; re-read after 1.1.4.) After the first npm version: on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.
