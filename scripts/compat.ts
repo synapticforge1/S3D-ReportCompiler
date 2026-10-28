@@ -12,7 +12,8 @@
  *                                   the same gate for the version about to be tagged (publish.ts)
  *
  * THE SURFACE (Rule 1), generated, never hand-written:
- *   - `export`   the `exports` map in deno.json — a surface grep cannot see;
+ *   - `export`   the `exports` map in jsr.json (deno.json at tags before step 7) — a surface grep
+ *                cannot see;
  *   - `symbol`   every symbol in the `.d.ts` tsc emits for each export, one line each, comments
  *                removed and whitespace collapsed (moving a line or editing prose is not a change);
  *   - `cli-flag` / `cli-usage`  the options and the USAGE shapes `main.ts --help` prints.
@@ -156,7 +157,10 @@ function emitDeclarations(root: string, files: string[]): string {
 /** The surface of the package rooted at `root`, as sorted tab-separated lines. */
 function surface(root: string): string[] {
   const lines: string[] = [];
-  const manifest = JSON.parse(readFileSync(join(root, "deno.json"), "utf8"));
+  // jsr.json since bun-migration step 7 (2026-10-28); a tag cut before it (v1.0.4) has deno.json.
+  const manifestFile = ["jsr.json", "deno.json"].find((f) => existsSync(join(root, f)));
+  if (!manifestFile) throw new Error(`no jsr.json or deno.json in ${root}`);
+  const manifest = JSON.parse(readFileSync(join(root, manifestFile), "utf8"));
   const exportsMap: Record<string, string> = manifest.exports ?? {};
   const dts = emitDeclarations(root, Object.values(exportsMap));
   try {
@@ -244,7 +248,9 @@ function extractTag(tag: string, paths: string[]): string {
 function surfaceAt(tag: string): string[] {
   const snap = run("git", ["show", `${tag}:api-surface.txt`], ROOT);
   if (snap.code === 0) return snap.out.replace(/\r\n/g, "\n").split("\n").filter(Boolean);
-  const dir = extractTag(tag, ["deno.json", "package.json", "main.ts", "src"]);
+  const manifestFile =
+    run("git", ["cat-file", "-e", `${tag}:jsr.json`], ROOT).code === 0 ? "jsr.json" : "deno.json";
+  const dir = extractTag(tag, [manifestFile, "package.json", "main.ts", "src"]);
   try {
     return surface(dir);
   } finally {

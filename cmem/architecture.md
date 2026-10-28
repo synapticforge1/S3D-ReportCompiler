@@ -105,10 +105,13 @@ everything else loaded.
 The source uses **bare specifiers only** — no `npm:` or `jsr:` prefixes anywhere in `main.ts`,
 `src/` or the controls. That is what lets one file tree serve four runtimes.
 
-Node and Bun resolve those specifiers from `node_modules` via `package.json`. Deno now resolves them
-through the `imports` map in `deno.json`, which is required for JSR: a published package must declare
-where its dependencies come from, and `deno publish` will not accept a bare specifier it cannot
-resolve.
+Node and Bun resolve those specifiers from `node_modules` via `package.json`. Deno resolves them
+through the `imports` map in **`jsr.json`** (in `deno.json` until 2026-10-28, bun-migration step 7),
+which is required for JSR: a published package must declare where its dependencies come from, and
+`deno publish` will not accept a bare specifier it cannot resolve. ⚠️ **There must be no
+`deno.json` beside it**, and no `--config`: that layout made `deno publish` report success on an
+upload whose imports were rewritten to `./…` (bun-migration.md § "Step 1, measured").
+`scripts/jsr-upload-check.ts` refuses it, in CI and before every real publish.
 
 ⚠️ **`"nodeModulesDir": "manual"` is load-bearing, not boilerplate.** It keeps Deno reading the same
 `node_modules` that `npm install` produced — the same packages, `overrides` included (the

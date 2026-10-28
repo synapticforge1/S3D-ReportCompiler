@@ -75,7 +75,7 @@ jobs:
         with:
           node-version: 24
 
-      # deno.json sets "nodeModulesDir": "manual" — Deno reads the node_modules npm creates.
+      # jsr.json sets "nodeModulesDir": "manual" — Deno reads the node_modules npm creates.
       - name: Install npm dependencies
         run: npm ci
 
@@ -85,11 +85,26 @@ jobs:
       - name: Docs coverage (a scored JSR criterion)
         run: deno doc --lint src/*.ts
 
+      # `--config jsr.json`: the examples import the package by its own name, which resolves only
+      # from the manifest, and since step 7 there is no deno.json for Deno to find on its own
+      # (measured 2026-10-28: TS2307 ×3 without it). Safe here: what `--config` broke was the
+      # UPLOAD of `deno publish`; a type check fails loudly. Never add it to `deno publish`.
       - name: The JSDoc examples compile
-        run: deno check --doc src/*.ts
+        run: deno check --doc --config jsr.json src/*.ts
 
       - name: JSR validation, slow types included
         run: deno publish --dry-run
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      # A dry run never shows the rewritten files, and `deno publish` has reported success on a
+      # corrupted upload (cmem/bun-migration.md § "Step 1, measured"). This publishes to a FAKE JSR
+      # on 127.0.0.1 and reads the tarball: the files, every rewritten import, no deno.json.
+      - name: The upload is this package, intact
+        run: bun scripts/jsr-upload-check.ts
 
   runtimes:
     name: Runtime matrix (Node floor + LTS lines, Bun, Deno)

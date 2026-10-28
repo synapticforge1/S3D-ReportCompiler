@@ -1,7 +1,7 @@
 /**
- * Increments the `version` field in deno.json, then propagates the new version to
+ * Increments the `version` field in jsr.json, then propagates the new version to
  * package.json + src/report_core.ts (by importing sync-version.ts, which runs after
- * deno.json has already been written here).
+ * jsr.json has already been written here).
  *
  * Run via:  bun run bump            # patch: 1.6.2 → 1.6.3   (fixes only)
  *           bun run bump minor      # minor: 1.6.2 → 1.7.0   (backward-compatible additions)
@@ -19,7 +19,7 @@
  * (scripts/compat.ts) diffs the committed surface snapshot against the last tag and refuses a
  * lower bump, before anything is written.
  *
- * Unlike `update-version` (which only COPIES the existing deno.json version outward), this RAISES
+ * Unlike `update-version` (which only COPIES the existing jsr.json version outward), this RAISES
  * it first. Must be run from the project root (bun run does this automatically).
  */
 
@@ -30,7 +30,7 @@ import { readFile, writeFile } from "node:fs/promises";
 const readText = (p: string) => readFile(p, "utf8");
 
 const root = process.cwd();
-const denoJsonPath = `${root}/deno.json`;
+const manifestPath = `${root}/jsr.json`;
 
 const kind = (process.argv[2] ?? "patch").toLowerCase();
 if (kind !== "patch" && kind !== "minor" && kind !== "major") {
@@ -49,10 +49,10 @@ if (gate.status !== 0) {
   process.exit(1);
 }
 
-const text = await readText(denoJsonPath);
+const text = await readText(manifestPath);
 const m = text.match(/("version"\s*:\s*)"(\d+)\.(\d+)\.(\d+)"/);
 if (!m) {
-  console.error('❌ bump: could not find a "version": "X.Y.Z" field in deno.json');
+  console.error('❌ bump: could not find a "version": "X.Y.Z" field in jsr.json');
   process.exit(1);
 }
 
@@ -72,10 +72,10 @@ if (kind === "major") {
 
 const to = `${major}.${minor}.${patch}`;
 
-// Targeted replace so the rest of deno.json's formatting is untouched.
+// Targeted replace so the rest of jsr.json's formatting is untouched.
 const updated = text.replace(/("version"\s*:\s*)"\d+\.\d+\.\d+"/, `$1"${to}"`);
-await writeFile(denoJsonPath, updated);
-console.log(`✅ deno.json          → ${to}  (${kind} bump from ${from})`);
+await writeFile(manifestPath, updated);
+console.log(`✅ jsr.json           → ${to}  (${kind} bump from ${from})`);
 
 // Propagate the freshly-written version to package.json + src/report_core.ts.
 await import("./sync-version.ts");

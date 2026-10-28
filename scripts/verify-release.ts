@@ -1,7 +1,7 @@
 /**
  * Confirms a published version actually went out the attested path.
  *
- *   bun run verify-release            # the version in deno.json
+ *   bun run verify-release            # the version in jsr.json
  *   bun run verify-release 1.0.2      # a specific version
  *   bun run verify-release --wait     # poll while JSR ingests (after a release)
  *
@@ -28,7 +28,7 @@
 
 import { readFileSync } from "node:fs";
 
-const denoJson = JSON.parse(readFileSync(new URL("../deno.json", import.meta.url), "utf8")) as {
+const jsrJson = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url), "utf8")) as {
   name: string;
   version: string;
 };
@@ -36,9 +36,9 @@ const denoJson = JSON.parse(readFileSync(new URL("../deno.json", import.meta.url
 const argv = process.argv.slice(2);
 const args = argv.filter((a) => !a.startsWith("-"));
 const wait = argv.includes("--wait");
-const version = args[0] ?? denoJson.version;
+const version = args[0] ?? jsrJson.version;
 
-const [scope, name] = denoJson.name.replace(/^@/, "").split("/");
+const [scope, name] = jsrJson.name.replace(/^@/, "").split("/");
 const url = `https://api.jsr.io/scopes/${scope}/packages/${name}/versions/${version}`;
 
 type VersionInfo = { rekorLogId?: string | null; yanked?: boolean };
@@ -63,7 +63,7 @@ async function fetchVersion(): Promise<VersionInfo | null> {
   }
 }
 
-console.log(`Checking ${denoJson.name}@${version} …`);
+console.log(`Checking ${jsrJson.name}@${version} …`);
 
 // JSR ingests asynchronously, so a check straight after a release needs to wait.
 // Without --wait this is a single look, which is what you want when auditing an
