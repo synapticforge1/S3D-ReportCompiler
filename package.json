@@ -19,6 +19,8 @@
     "cli:install-jsr": "deno install -g -A --force --min-dep-age=0 -n s3d-reportcompiler jsr:@jrmarcum/s3d-reportcompiler/cli",
     "cli:uninstall": "deno uninstall -g s3d-reportcompiler",
     "update-version": "bun scripts/sync-version.ts",
+    "surface": "bun scripts/compat.ts surface --write",
+    "compat": "bun scripts/compat.ts check",
     "bump": "bun scripts/bump.ts",
     "release": "bun scripts/publish.ts",
     "verify-release": "bun scripts/verify-release.ts",

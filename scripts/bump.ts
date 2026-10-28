@@ -15,13 +15,15 @@
  * patch capped at 9, carrying into the component on the left, and refusing to bump from a wider
  * version. The workspace retired every such cap on 2026-09-20.)
  *
- * Choosing the right component is the owner's call, made per release; this script does not
- * judge it (the workspace's surface-snapshot bump gate does not exist here yet — roadmap).
+ * Which component is the owner's call, but never below the FLOOR: the compatibility gate
+ * (scripts/compat.ts) diffs the committed surface snapshot against the last tag and refuses a
+ * lower bump, before anything is written.
  *
  * Unlike `update-version` (which only COPIES the existing deno.json version outward), this RAISES
  * it first. Must be run from the project root (bun run does this automatically).
  */
 
+import { spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 
 /** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
@@ -33,6 +35,17 @@ const denoJsonPath = `${root}/deno.json`;
 const kind = (process.argv[2] ?? "patch").toLowerCase();
 if (kind !== "patch" && kind !== "minor" && kind !== "major") {
   console.error(`❌ bump: unknown release kind "${kind}" — use patch | minor | major`);
+  process.exit(1);
+}
+
+// The compatibility gate (scripts/compat.ts, workspace letter H6): refuses a stale api-surface.txt,
+// a bump below the surface floor since the last tag, and — for patch / minor — a previous tag whose
+// sample reports no longer PASS on this code. Nothing is written unless it passes.
+const gate = spawnSync(process.execPath, [...process.execArgv, "scripts/compat.ts", "gate", kind], {
+  stdio: "inherit",
+});
+if (gate.status !== 0) {
+  console.error(`❌ bump: the compatibility gate refused a ${kind} bump — nothing written.`);
   process.exit(1);
 }
 
