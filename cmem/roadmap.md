@@ -773,11 +773,35 @@ instead — prebuilt N-API binaries, no `tar` chain. Plan, as its own task after
 
 ---
 
-## 🔴 15. Publish to npm as well as JSR — owner, 2026-10-28
+## 🟡 15. Publish to npm as well as JSR — BUILT AND PROVEN 2026-10-28, not published
 
 🔒 Owner: "we will post this to npm as well as jsr" — **supersedes** the 2026-10-26 "we will not
-publish this to npm" (bun-migration.md, owner decision 4). JSR stays a source; npm becomes a second
-registry. Not started. What binaryang's `jsr-deno-exit-guide.md` § 5b says carries over, checked
+publish this to npm" (bun-migration.md, owner decision 4). 🔒 **Names** (owner, 2026-10-28: "jsr
+remains the same, npm is on synapticforge1"): JSR `@jrmarcum/s3d-reportcompiler`, npm
+**`@synapticforge1/s3d-reportcompiler`** (the npm org binaryang publishes under; all candidate names
+were free, read-only check 2026-10-28).
+
+**Built** (binaryang's design, adapted): `bun run npm:build` → `dist/` (git-ignored): `tsc` 7.0.2
+(pinned devDependency) emits JS + `.d.ts` for the three entry points (`tsconfig.npm.json`,
+`.ts` imports rewritten), the bin's shebang becomes `#!/usr/bin/env node`, a GENERATED
+`package.json` (version from the one version source; the exports as `{ types, default }`; `bin`
+`s3d-reportcompiler`; the runtime dependencies exact; `engines.node` `>=22.13.0` taken from
+`pdfjs-dist`'s own engines; repository links; `publishConfig` public + provenance), README, LICENSE
+and notices copied. **Proven:** `bun run npm:prove` (testing.md § npm package) — 20 / 20 on
+2026-10-28: the 44 KiB tarball installed into a scratch project; on Node 22.13.0 (the floor), 22, 24,
+26, Bun and Deno it imports and its INSTALLED CLI bakes the source's exact document; `npm exec`;
+the `.d.ts` type-check; the export list equals JSR's npm build. README installation covers both
+registries (owner request).
+
+**Left, in order:** (1) 🗓️ OWNER on npmjs.com: a trusted publisher for
+`@synapticforge1/s3d-reportcompiler` — GitHub Actions, repository `synapticforge1/S3D-ReportCompiler`,
+workflow `publish.yml` (check npm's docs on whether the package must exist first: binaryang's first
+version was published by hand); (2) a `publish.yml` job that runs `npm:build` + `npm:prove`, then
+`npm publish` from `dist/` by OIDC, then reads the provenance back — task 12 step 6; (3) the first
+release publishes to both. ⚠️ npm's trusted-publisher configuration must complete a publish within 2
+days (binaryang's record), so (1) is best done just before the release.
+
+The plan as written — what binaryang's `jsr-deno-exit-guide.md` § 5b says carries over, checked
 against this package:
 - **Dependencies on npmjs.org:** `mathjax-full`, `pdf-lib`, `pdfjs-dist` (+ `@napi-rs/canvas`) are
   all npm packages — no JSR-only `@std/*` at runtime ✓.

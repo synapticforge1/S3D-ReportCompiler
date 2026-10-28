@@ -29,6 +29,9 @@ CLAUDE.md
 # "nodeModulesDir": "manual" in deno.json.
 /node_modules
 
+# The npm copy, built by `bun run npm:build` (roadmap task 15) — generated, never committed.
+/dist/
+
 # ── Build output ──────────────────────────────────────────────────────────────
 # Not anchored, and no placeholder is committed: the build creates its output
 # directory next to whatever it is compiling, so one appears wherever you run.

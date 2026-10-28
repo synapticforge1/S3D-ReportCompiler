@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.check.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "files": ["main.ts", "src/report_core.ts", "src/report_runtime.ts"],
+  "include": []
+}

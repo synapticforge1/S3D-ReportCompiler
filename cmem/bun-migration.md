@@ -1,5 +1,16 @@
 # bun-migration.md — moving the toolchain off Deno, keeping JSR (in progress: steps 2–4 done)
 
+🔒 **Goal (owner, 2026-10-28): "the goal is to be deno free on this machine."** Deno may run only
+where JSR needs it — `deno publish` on GitHub's runner, installed per run by `setup-deno` — and
+nowhere on a developer machine. `npx jsr publish` is NOT the way out: measured 2026-10-28 on the
+`jsr` CLI 0.14.3, it downloads a pinned Deno (v2.6.7, older than ours) and runs `deno publish` as a
+subprocess, adding `--no-check` when a `package.json` exists (it does here) — Deno hidden, the type
+check dropped, provenance through a subprocess (binaryang saw that fail silently). Local Deno uses to
+remove: the compat gate's `deno doc --json` (→ the `.d.ts` tsc emits); `deno doc --lint`,
+`deno check --doc`, `deno publish --dry-run` and `check:deno` (→ CI); the Deno legs of
+`bun run runtimes` and `npm:prove` (→ the CI matrix — Deno USERS stay supported and tested there);
+`deno.json` (→ step 7). Order: CI first, then the local copies come out.
+
 **Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
 `129fd0a`); step 1 MEASURED and folded into step 7 (§ "Step 1, measured" — binaryang's step 1
 silently corrupts this package). **Next: step 5** (the `node:test` suite), then 7 (`jsr.json`, no

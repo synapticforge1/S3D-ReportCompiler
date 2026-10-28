@@ -251,6 +251,31 @@ Not a support promise, by design: Bun has no LTS line (the version on PATH is te
 whatever `deno upgrade lts` names. Node lines leave the matrix when the schedule ends them, and
 `engines.node` must be raised then too (22 ends 2027-04-30).
 
+## npm package — `bun run npm:build && bun run npm:prove` (roadmap task 15)
+
+`npm:build` ([`scripts/npm-build.ts`](../scripts/npm-build.ts)) emits JS + `.d.ts` into `dist/`
+with tsc 7 (`tsconfig.npm.json`, `rewriteRelativeImportExtensions`), gives `main.js` a Node shebang,
+and GENERATES `dist/package.json` (name `@synapticforge1/s3d-reportcompiler`, version from
+`deno.json`, `bin`, dependencies from `package.json`, `engines.node` = pdfjs-dist's own floor,
+22.13.0). `dist/` is git-ignored.
+
+`npm:prove` ([`scripts/npm-prove.ts`](../scripts/npm-prove.ts)) tests what users get, not the tree:
+`npm pack`; no `.ts` source ships; every path the manifest names, plus `LICENSE`,
+`THIRD-PARTY-NOTICES.md` and `README.md` (required whatever `files` says), is in the tarball; the bin
+has a Node shebang; the tarball installs with npm into a scratch project outside the repo; on the
+engines floor, every Node LTS line, Bun and Deno it imports `.` and `./runtime` and the INSTALLED CLI
+PASSES and bakes the source's document (`7f283563003f`); `npm exec` runs it; a consumer type-checks
+against the shipped `.d.ts`; the export list equals JSR's own npm build of the package. Measured
+2026-10-28: all ✅, exit 0.
+
+**Inverted 2026-10-28** (one-time harness, one mutant per run on a fresh build, each must exit 1
+with ITS check ❌): types path to a missing file; the Deno shebang kept; the CLI throwing on start
+(❌ on every runtime); `./runtime` dropped (❌ imports and ❌ export list vs JSR);
+a `.ts` source leaked into the tarball; `compareEachReport` deleted from the `.d.ts` (❌ consumer
+type-check); `THIRD-PARTY-NOTICES.md` dropped from `files`. 7/7 caught.
+⚠️ **Dropping `LICENSE` from `files` is not a breakage**: npm packs `LICENSE`, `README` and
+`package.json` regardless — the first mutant tried was that one, and the proof correctly passed it.
+
 ## Browser
 
 ```bash
