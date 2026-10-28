@@ -819,7 +819,15 @@ got **`403 Forbidden — You may not perform that action with these credentials`
 write permission on the `@synapticforge1` scope. Fix = a token with "Read and write" for the
 `@synapticforge1` scope (a token limited to selected PACKAGES cannot name one that does not exist
 yet), then "Re-run failed jobs" on run 40744332897 — a re-run uses the tag's own workflow and reads
-the secret afresh. After the first npm version: on npm, the
+the secret afresh. **The first token was STAGE-ONLY** (owner pasted npm's text: stage-only tokens
+"cannot publish new package versions directly", only `npm stage publish` + a 2FA maintainer's
+promotion). Per GitHub's changelog (2026-09-18) staged publishing "works with existing npm
+packages" — not a first publish — and direct publishing with bypass-2FA tokens continues until a
+January 2027 target. So the bootstrap token must be a granular token, Read and write on
+`@synapticforge1`, **bypass 2FA**, not stage-only. The owner renamed the secret to `NPM_TOKEN`;
+main's job reads `NPM_TOKEN || NPM_PUBLISH` (the v1.1.2 tag's copy reads only `NPM_PUBLISH`). For
+LATER versions on npm, the npm-recommended pairing is trusted publishing + staged publishing
+(owner's call). After the first npm version: on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.

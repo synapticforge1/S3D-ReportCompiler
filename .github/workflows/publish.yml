@@ -226,7 +226,8 @@ jobs:
         working-directory: dist
         shell: bash
         env:
-          NPM_TOKEN: ${{ secrets.NPM_PUBLISH }}
+          # The owner named the secret NPM_PUBLISH, then NPM_TOKEN (2026-10-28); either works.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN || secrets.NPM_PUBLISH }}
         run: |
           NAME=$(node -p 'require("./package.json").name')
           if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
@@ -234,7 +235,7 @@ jobs:
             exit 0
           fi
           if [ -n "${NPM_TOKEN}" ]; then
-            echo "::warning::Publishing with the NPM_PUBLISH secret (first-publish bootstrap). Set up trusted publishing on the package, revoke the token and delete the secret."
+            echo "::warning::Publishing with the bootstrap token secret (first-publish bootstrap). Set up trusted publishing on the package, revoke the token and delete the secret."
             # npm expands ${NPM_TOKEN} itself; the token is never written into a file.
             echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' > "$HOME/.npmrc"
           fi
