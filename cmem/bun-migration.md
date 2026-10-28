@@ -249,8 +249,8 @@ The manifest move and the `deno.json` deletion become ONE step, last before CI, 
   "no top-level `node:` import" rule. The `--external` flag is REQUIRED (Bun silently stubs
   `node:fs` without it).
 - **WebAssembly engine (F10)** does not apply: nothing here judges a module with the host engine.
-- **npm as a second registry** (guide § 5b): 🔒 **NO for this package** (owner, 2026-10-26: "we will
-  not publish this to npm"). JSR only; `package.json` stays `"private": true`.
+- **npm as a second registry** (guide § 5b): 🔁 **SUPERSEDED 2026-10-28** — owner: "we will post this
+  to npm as well as jsr" (roadmap task 15). Was, 2026-10-26: "we will not publish this to npm".
 - ✅ **The bump gate** (workspace working-rules § Git: a surface snapshot that sets the floor and
   refuses a lower bump) — built 2026-10-28, `83a2023`: `scripts/compat.ts` + `api-surface.txt`, run by
   `bump` and `release` (testing.md § Compatibility gate; workspace letter H6). Its CI half belongs to
@@ -262,7 +262,8 @@ The manifest move and the `deno.json` deletion become ONE step, last before CI, 
    the same rule makes `bun fmt` the formatter (step 3).
 2. `spike-pdfmake.ts`: "retire it if it is not being used" → retired (unused, measured).
 3. The test suite: "yes add the test suite" → step 5.
-4. npm: "we will not publish this to npm" → JSR only.
+4. npm: "we will not publish this to npm" → JSR only. 🔁 **Superseded 2026-10-28:** "we will post this
+   to npm as well as jsr" → roadmap task 15.
 5. Order: "yes" → push first and decide the H19 purge before step 1, because a purge rewrites
    history and must not land between these branches. ✅ Both done 2026-10-26 (pushed; purged and
    force-pushed — [history-purge-2026-10-26.md](history-purge-2026-10-26.md)). Step 1 is clear.

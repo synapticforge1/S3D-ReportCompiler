@@ -473,9 +473,10 @@ and each lands here with its migration.
 - **The PDF is not byte-reproducible.** Chrome stamps its own render time into `/CreationDate` and
   `/ModDate`, so two builds of identical input differ in hash — on the same runtime. The *baked
   HTML* is byte-identical across Deno, Node and Bun; that is the artifact worth comparing.
-- **`Cannot polyfill Path2D` / `DOMMatrix`** from pdfjs is expected and harmless. It is those
-  optional packages being absent, which is the intended state — chasing it leads back to installing
-  a dependency with known advisories that this build cannot use anyway.
+- **`Cannot polyfill Path2D` / `DOMMatrix`** from pdfjs should no longer appear (since pdfjs-dist 6,
+  which takes both from `@napi-rs/canvas`). If it does, the optional `@napi-rs/canvas` binary for
+  your platform was not installed — check that your install does not skip optional dependencies.
+  The verification does not need either, so the build's verdict is unaffected.
 
 ## Licence
 

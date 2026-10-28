@@ -20,7 +20,8 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26) |
 | Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; Deno only for `deno publish`, the JSR doc checks and `deno doc` for the API surface, and `deno.json` until task 12 step 7 (2026-10-28) |
-| API surface | `api-surface.txt`, 66 lines; floor since v1.0.4 = patch (`bun run compat`, 2026-10-28) |
+| API surface | `api-surface.txt`, 69 lines; floor since v1.0.4 = **minor** — `compareEachReport` added — so the next release is ≥ 1.1.0 (`bun run compat`, 2026-10-28) |
+| Verification | set-wide AND per-report conservation (task 7, 2026-10-28); pdfjs-dist 6.4.299, no polyfill warnings (task 14) |
 | `npm audit` | **0 vulnerabilities** since the `@xmldom/xmldom` 0.9.12 override (task 13; 2026-10-28) |
 
 🔁 **Corrected 2026-10-26:** this memory said "1.0.4 is staged and unreleased" for two and a half
@@ -223,7 +224,18 @@ committing any binary derived from client input, extract its text and look.
 
 ---
 
-## 🔴 4. Finish removing the session log from the machine
+## 🟡 4. Finish removing the session log from the machine — all but the live one done (2026-10-28)
+
+Owner: "perform" (2026-10-28). Exported with `bun tests/controls/export-transcript.ts` into the
+git-ignored `cmem/transcript/`: **part 3** (the 2026-10-22 session, logged under the project's OLD
+folder slug, 32 turns — verified 16 user / 16 assistant, no base64 left — then its `.jsonl` DELETED)
+and **part 4** (the 2026-10-26 → 28 session, 1,787 turns, a SNAPSHOT: that session was the one
+running the export, so its log could not be deleted from inside it). Both slugs' `memory/`
+subfolders checked: EMPTY (the no-machine-local-memory rule held). **Left:** when that session ends,
+re-export its `<session-id>.jsonl` (under `~/.claude/projects/<slug>/`) over part 4 and delete it —
+and the same for any later session. (Slugs and session ids are machine-specific: they encode this
+machine's folder layout, so they stay out of committed files — `cmem/transcript/README.md`, which is
+git-ignored, may name them.)
 
 The transcript and file-history entries were migrated into `cmem/` and deleted. But the session log is
 **live** — Claude Code recreates and appends to it for the remainder of any session.
@@ -244,8 +256,8 @@ blocker.
 ⚠️ **The record is in two parts** — see `transcript/README.md`. The log was exported and deleted
 mid-session, and Claude Code recreated it for the remainder, so `session-transcript-part2.md` holds
 the migration work. Continuing this project in the new location produces a **third** log under a
-different directory slug (`d--Programs-…` rather than `C--Users-<user>`). Export each one; do not
-assume a single file covers everything.
+different directory slug (one per project folder the work ran in). Export each one; do not assume a
+single file covers everything. (Now four parts — `transcript/README.md`.)
 
 ---
 
@@ -758,3 +770,31 @@ instead — prebuilt N-API binaries, no `tar` chain. Plan, as its own task after
   Biome lesson), so the `.npmrc` line changes, and `canvas` must not come back through another path;
 - measure Bun (N-API) and Deno (npm N-API addons) loading it, and that the warnings are gone;
 - the two majors' breaking changes read first (`main.ts` `readPdf()`, `tests/controls/verify-pdf-text.ts`).
+
+---
+
+## 🔴 15. Publish to npm as well as JSR — owner, 2026-10-28
+
+🔒 Owner: "we will post this to npm as well as jsr" — **supersedes** the 2026-10-26 "we will not
+publish this to npm" (bun-migration.md, owner decision 4). JSR stays a source; npm becomes a second
+registry. Not started. What binaryang's `jsr-deno-exit-guide.md` § 5b says carries over, checked
+against this package:
+- **Dependencies on npmjs.org:** `mathjax-full`, `pdf-lib`, `pdfjs-dist` (+ `@napi-rs/canvas`) are
+  all npm packages — no JSR-only `@std/*` at runtime ✓.
+- **Ship compiled JavaScript + `.d.ts`:** Node will not strip types inside `node_modules`, so a
+  `.ts`-only npm package does not load on Node. A build step is needed (tsc with
+  `rewriteRelativeImportExtensions`, since the sources import `./src/*.ts`).
+- **One version source:** generate the npm manifest at build time from the manifest that holds the
+  version (step 7 makes that `jsr.json`). Put `bin` there — npm runs a CLI through `npx`, which JSR
+  cannot (known-issues #29), so this also gives Bun / Node users a global command.
+- **The name** is claimed permanently by the first publish: `@jrmarcum/s3d-reportcompiler` matches JSR
+  — or the `synapticforge1` npm org binaryang uses. 🗓️ OWNER.
+- **Trusted publishing (OIDC, provenance)** set up on npmjs.org by the owner BEFORE the first publish
+  (workspace letter H20 — npm's policy may pin owner / repository ids; create it under the org), and
+  provenance checked on that first publish, not assumed.
+- **Prove the TARBALL, not the tree:** pack, install into a scratch project, import every export and
+  run the CLI on each Node LTS line, Bun and Deno (`testing.md` § Runtime matrix, the installed-
+  package column); JSR's own npm build of the same version is an independent reference.
+- `package.json` is `"private": true` today and its `bin` points at `main.ts` — both change.
+- Order: after task 12 step 7 (the version source settles) and with step 6 (the CI release path
+  publishes both).

@@ -127,8 +127,9 @@ integration, so a local `deno publish` would succeed and produce an *unattested*
 
 **The publishing path, and what pins it** (workspace letter H20, checked 2026-10-28). One registry,
 JSR; one path: `.github/workflows/publish.yml` on a `v*` tag, `id-token: write`, `deno publish` with
-GitHub OIDC — no token anywhere. No npm, PyPI or other trusted-publisher policy exists (owner: no
-npm). JSR links the package to the GitHub repository **by repository id**: its API reads
+GitHub OIDC — no token anywhere. No npm, PyPI or other trusted-publisher policy exists yet — but npm
+is now planned (owner, 2026-10-28: "npm as well as jsr", roadmap task 15), and its trusted publisher
+must be created under the org before the first npm publish (H20's lesson). JSR links the package to the GitHub repository **by repository id**: its API reads
 `githubRepository` = `synapticforge1/S3D-ReportCompiler`, id `1328030455` — GitHub's id for that
 repository (owner `synapticforge1`, id `342141589`, Organization). ⚠️ **JSR does not follow a
 transfer or a rename on its own** (binaryang measured it, its `cmem/publishing.md`): the link here
@@ -204,9 +205,12 @@ entries in the lockfile are exactly `@napi-rs/canvas` and its 11 platform binari
 `@mapbox/node-pre-gyp → tar` (one critical, one high advisory) and never built, so `omit=optional`
 took the install from 18 packages to 16 and `npm audit` from 2 to 0. Both gone with pdfjs 6.
 
-⚠️ **Do not "fix" the `Cannot polyfill Path2D` / `DOMMatrix` notice from pdfjs.** That message *is*
-those optional packages being absent, which is the intended state. It appears on every runtime and is
-harmless. Chasing it leads straight back to installing a vulnerable dependency this build cannot use.
+⚠️ **A `Cannot polyfill Path2D` / `DOMMatrix` notice now means the optional binary is MISSING** (an
+install that skips optional dependencies, or no prebuilt binary for the platform) — not the intended
+state any more. Measured 2026-10-28: with `@napi-rs/canvas` installed, none appears on Deno, Bun or
+Node, and every verification count is identical either way (the verification never draws). *Until
+2026-10-28 the instruction here was the opposite — "do not fix it" — while pdfjs 4's only source was
+the vulnerable old `canvas`.*
 
 ## Browser bundle
 

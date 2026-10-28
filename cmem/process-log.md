@@ -254,6 +254,21 @@ a live command is a run of it.**
 | the surface diff is clean between releases | `VERSION`'s literal type is the version string — every bump would have read as BREAKING; normalized before the first commit |
 | the inversion harness passed | one run selected NO case and still printed "every inversion behaves" — the harness now refuses an empty run |
 
+Later the same day, owner: "override, upgrade, and perform items 7 and 8":
+- **Task 13** (`6cdd614`): `@xmldom/xmldom` overridden to 0.9.12 — first measured that the build never
+  loads `speech-rule-engine`; `npm audit` 0; every output unchanged.
+- **Task 14** (`8e6ed61`): pdfjs-dist 4.6.82 → 6.4.299 with `@napi-rs/canvas` 1.0.11; `omit=optional`
+  removed. Accepted only on an identical verification capture (68 lines: samples ×3 runtimes, the
+  48-report set, six controls) — the one difference, the polyfill warnings, gone.
+- **Task 7** (`a555e17`): per-report conservation; the hidden-row control now fails, every correct
+  build still passes. The first cut was wrong (below).
+- **Task 4:** the 2026-10-22 session log exported and deleted; this session's exported as a snapshot.
+- **Owner reversed the npm decision:** JSR and npm both (task 15).
+
+| believed | measured |
+|---|---|
+| cutting the PDF at each report's heading isolates the report | each report prints its tab strip BEFORE its heading — every earlier report had been credited its successor's opening, the set-union gap inside the fix; only the LAST report showed it. Whole pages fixed it |
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is
