@@ -534,9 +534,9 @@ npm warn deprecated mathjax-full@3.2.2: Version 4 replaces this package with the
 ```
 
 **This is a deprecation notice, not a security advisory.** `npm audit` reported **0 vulnerabilities**
-on 2026-08-08. 🔁 On 2026-10-26 it reports 1 high + 1 moderate, both `@xmldom/xmldom` 0.9.10 pinned
-exactly by `speech-rule-engine` 4.1.4 under `mathjax-full` — a fix exists (0.9.12), so it is an
-override (task 13), not a reason for v4.
+on 2026-08-08. 🔁 On 2026-10-26 it reported 1 high + 1 moderate, both `@xmldom/xmldom` 0.9.10 pinned
+exactly by `speech-rule-engine` 4.1.4 under `mathjax-full` — fixed by an override to 0.9.12 on
+2026-10-28 (task 13; `npm audit` 0 again), not a reason for v4.
 `mathjax-full@3.2.2` is Apache-2.0, exact-pinned, and typesets all 8,286 expressions with 0 failures.
 
 ### Why staying is the right default here
@@ -714,7 +714,21 @@ TeX input only — UNMEASURED); then one `"overrides": { "@xmldom/xmldom": "0.9.
 
 ---
 
-## 🔴 14. Upgrade `pdfjs-dist` 4.6.82 → 6.x — owner: "upgrade pdfjs" (2026-10-26)
+## ✅ 14. Upgrade `pdfjs-dist` 4.6.82 → 6.4.299 — DONE 2026-10-28
+
+Owner: "upgrade pdfjs" (2026-10-26), "yes, upgrade" (2026-10-28). `pdfjs-dist` 6.4.299 (2026-10-03),
+`@napi-rs/canvas` pinned 1.0.11 by `overrides` (the newest past two weeks; `^1.0.10` would take the
+7-day-old 1.0.13), `.npmrc`'s `omit=optional` removed; the lockfile's optional entries are exactly
+`@napi-rs/canvas` + its 11 platform binaries; the old `canvas → node-pre-gyp → tar` chain gone;
+`npm audit` 0. Both type checks pass unchanged. **Acceptance = identical verification:** a one-time
+capture of every verification line and exit code — samples on Deno / Bun / Node 24, the 48-report
+set, all six controls — before and after: 68 lines identical; the ONLY difference is that the
+"Cannot polyfill `DOMMatrix` / `Path2D`" warnings are gone, on Deno too. Full gate green; samples
+`7F283563003F`, all six runtimes; API surface unchanged (floor patch); `verify-pdf-text` 146,878
+chars, no warnings. Consequence for users: pdfjs 6 requires Node ≥ 22.13 (or ≥ 24), so the next
+release's installed-package floor rises from 22.6 (README).
+
+The plan as written:
 
 Why: pdfjs 4.6.82 fills in `DOMMatrix` / `Path2D` from the optional `canvas` ^2.11.2, which this repo
 does not install (`.npmrc` `omit=optional` — it drags in `tar` critical + `node-pre-gyp` high), so

@@ -10,8 +10,10 @@ commercially.
 |---|---|---|---|
 | `mathjax-full` | 3.2.2 | **Apache-2.0** | typesets the maths at build time |
 | `pdf-lib` | 1.17.1 | **MIT** | object-stream repack |
-| `pdfjs-dist` | 4.6.82 | **Apache-2.0** | text/operator extraction for verification |
-| `@types/node` | ^22.10.2 (dev) | MIT | needed only by `deno check` |
+| `pdfjs-dist` | 6.4.299 | **Apache-2.0** | text/operator extraction for verification (4.6.82 until 2026-10-28) |
+| `@napi-rs/canvas` (+ one platform binary) | 1.0.11 | **MIT** | optional dependency of `pdfjs-dist` 6; licence files read 2026-10-28 |
+| `@xmldom/xmldom` (transitive) | 0.9.12 | MIT | overridden from 0.9.10 (roadmap task 13) |
+| `@types/node` | 22.20.1 (dev) | MIT | type checking only |
 
 ⚠️ **Corrected 2026-08-08:** an earlier version of this file said "`pdf-lib` pulls `pdfkit`, `xmldoc`
 and `linebreak` — all MIT." **None of those three is in the tree.** They are dependencies of

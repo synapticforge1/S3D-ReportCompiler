@@ -222,7 +222,10 @@ serves compiled JavaScript; 22.6.0 PASSES) but not for a clone, whose `main.ts` 
 unflagged type stripping — 22.6.0 and 22.17.1 fail with `ERR_UNKNOWN_FILE_EXTENSION`, 22.18.0
 passes. `engines.node` is now `>=22.18.0`, and `bun run runtimes` checks that floor.
 
-### Not a bug: pdfjs polyfill warnings (measured 2026-10-26)
+### ✅ Gone 2026-10-28: pdfjs polyfill warnings (measured 2026-10-26)
+
+**Resolved by roadmap task 14** (pdfjs-dist 6.4.299 + `@napi-rs/canvas` 1.0.11): no "Cannot polyfill"
+line on Deno, Bun or Node, and every verification count unchanged. The 2026-10-26 record follows.
 
 The verification step prints pdfjs's own warnings, and they differ by runtime:
 

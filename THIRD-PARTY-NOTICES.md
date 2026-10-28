@@ -31,7 +31,7 @@ above ships one, so Apache-2.0 §4(d) imposes nothing here.
 |---|---|---|---|
 | `mathjax-full` | 3.2.2 | Apache-2.0 | typesets the LaTeX to CHTML at build time |
 | `pdf-lib` | 1.17.1 | MIT | repacks the PDF into object streams |
-| `pdfjs-dist` | 4.6.82 | Apache-2.0 | text and operator extraction for the verification pass |
+| `pdfjs-dist` | 6.4.299 | Apache-2.0 | text and operator extraction for the verification pass |
 
 ### Transitive
 
@@ -41,7 +41,7 @@ above ships one, so Apache-2.0 §4(d) imposes nothing here.
 | `mhchemparser` | 4.2.1 | Apache-2.0 | `mathjax-full` |
 | `mj-context-menu` | 0.6.1 | Apache-2.0 | `mathjax-full` |
 | `speech-rule-engine` | 4.1.4 | Apache-2.0 | `mathjax-full` |
-| `@xmldom/xmldom` | 0.9.10 | MIT | `speech-rule-engine` |
+| `@xmldom/xmldom` | 0.9.12 | MIT | `speech-rule-engine` (overridden from 0.9.10 — `package.json` `overrides`) |
 | `commander` | 13.1.0 | MIT | `speech-rule-engine` |
 | `wicked-good-xpath` | 1.3.0 | MIT | `speech-rule-engine` |
 | `@pdf-lib/standard-fonts` | 1.0.0 | MIT | `pdf-lib` |
@@ -60,16 +60,19 @@ above ships one, so Apache-2.0 §4(d) imposes nothing here.
 declaration governs; noted only so a reviewer running an automated file-based scan is not surprised
 when it reports one package without a licence text.
 
-### Optional dependencies, deliberately not installed
+### Optional dependency (installed)
 
-`pdfjs-dist` declares `canvas` and `path2d` as optional. Both exist only to rasterise a PDF page to a
-canvas; this build never rasterises. `.npmrc` sets `omit=optional`, which takes the install from 18
-packages to 16 and `npm audit` from 2 vulnerabilities to 0 — `canvas` pulled in
-`@mapbox/node-pre-gyp → tar`, which carried one critical and one high advisory. Its native binding was
-never even built, so the package could not load.
+| Package | Version | Licence | Comes in via |
+|---|---|---|---|
+| `@napi-rs/canvas` | 1.0.11 | MIT | `pdfjs-dist` (optional; pinned by `overrides`) |
+| `@napi-rs/canvas-<platform>` | 1.0.11 | MIT | `@napi-rs/canvas` — one prebuilt N-API binary per platform; npm installs only the one matching the machine |
 
-⚠️ Do not "fix" the `Cannot polyfill Path2D` / `DOMMatrix` notice from pdfjs. That message *is* those
-packages being absent, which is the intended state.
+`pdfjs-dist` 6 fills in `DOMMatrix` and `Path2D` from `@napi-rs/canvas`. The verification pass does
+not draw, but with it installed pdfjs no longer warns "Cannot polyfill …" on any runtime.
+
+*Until 2026-10-28* `pdfjs-dist` 4.6.82 declared the old `canvas` and `path2d` instead, and `.npmrc`
+skipped all optional dependencies: `canvas` pulled in `@mapbox/node-pre-gyp → tar` (one critical, one
+high advisory) and never built. That chain is gone with pdfjs 6 (`npm audit`: 0).
 
 ## Runtimes and the browser
 

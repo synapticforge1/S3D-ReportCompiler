@@ -111,8 +111,11 @@ where its dependencies come from, and `deno publish` will not accept a bare spec
 resolve.
 
 ⚠️ **`"nodeModulesDir": "manual"` is load-bearing, not boilerplate.** It keeps Deno reading the same
-`node_modules` that `npm install` produced, which is what preserves the `.npmrc` `omit=optional`
-behaviour below. Without it Deno resolves from its own global cache, which does not honour that flag.
+`node_modules` that `npm install` produced — the same packages, `overrides` included (the
+`@xmldom/xmldom` and `@napi-rs/canvas` pins below). Without it Deno resolves from its own global
+cache, independently of this lockfile — whether it would then apply `package.json` `overrides` is
+UNMEASURED, so do not rely on it. (Until 2026-10-28 the reason given here was
+`.npmrc`'s `omit=optional`, since removed.)
 Verified after the change: the full 48-report build still produces 380 pages / 3.35 MB with 8,286
 expressions and 0 failures, and the baked HTML is still byte-identical across Deno, Node and Bun.
 
@@ -189,16 +192,17 @@ warning.
 "Malformed package.json … expected value at line 1 column 1". PowerShell's `Set-Content -Encoding utf8`
 writes one.
 
-### `.npmrc` — optional dependencies are omitted deliberately
+### Optional dependencies — installed since pdfjs 6 (2026-10-28)
 
-`pdfjs-dist` declares **`canvas`** and **`path2d`** as optional. They exist only to rasterise a PDF page
-to a canvas; this build never rasterises — it reads text runs and operator lists for verification and
-nothing more.
+`pdfjs-dist` 6.4.299 declares one optional dependency, **`@napi-rs/canvas`** (pinned 1.0.11 by
+`overrides`), which supplies `DOMMatrix` / `Path2D` from prebuilt N-API binaries — no node-gyp, no
+`tar`; it loads on Deno, Bun and Node. It is itself split into OPTIONAL per-platform packages, so the
+old `.npmrc` `omit=optional` was REMOVED (it would drop the binary — the Biome trap). The 12 optional
+entries in the lockfile are exactly `@napi-rs/canvas` and its 11 platform binaries.
 
-`canvas` pulls in `@mapbox/node-pre-gyp → tar`, which carried **one critical and one high advisory**.
-Its native binding was not even being built, so the package could never load. `omit=optional` takes the
-install from 18 packages to 16 and `npm audit` from **2 vulnerabilities to 0**, with byte-identical
-output on Deno, Node and Bun.
+*History:* pdfjs 4.6.82 declared the old `canvas` and `path2d`; `canvas` pulled in
+`@mapbox/node-pre-gyp → tar` (one critical, one high advisory) and never built, so `omit=optional`
+took the install from 18 packages to 16 and `npm audit` from 2 to 0. Both gone with pdfjs 6.
 
 ⚠️ **Do not "fix" the `Cannot polyfill Path2D` / `DOMMatrix` notice from pdfjs.** That message *is*
 those optional packages being absent, which is the intended state. It appears on every runtime and is
