@@ -251,9 +251,10 @@ The manifest move and the `deno.json` deletion become ONE step, last before CI, 
 - **WebAssembly engine (F10)** does not apply: nothing here judges a module with the host engine.
 - **npm as a second registry** (guide § 5b): 🔒 **NO for this package** (owner, 2026-10-26: "we will
   not publish this to npm"). JSR only; `package.json` stays `"private": true`.
-- **The bump gate** (workspace working-rules § Git: a surface snapshot that sets the floor and
-  refuses a lower bump) does not exist here; binaryang built it into its bump script. Separate item,
-  but step 4 rewrites `bump.ts` anyway.
+- ✅ **The bump gate** (workspace working-rules § Git: a surface snapshot that sets the floor and
+  refuses a lower bump) — built 2026-10-28, `83a2023`: `scripts/compat.ts` + `api-surface.txt`, run by
+  `bump` and `release` (testing.md § Compatibility gate; workspace letter H6). Its CI half belongs to
+  step 6.
 
 ## Owner decisions (2026-10-26)
 

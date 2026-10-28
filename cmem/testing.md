@@ -12,6 +12,7 @@ bun run check                            # types (bun check; `bun run check:deno
 bun run format:check                     # formatting (main.ts, src/, scripts/) + its canary
 bun run lint                             # Biome + its canary
 bun run runtimes                         # every Node LTS line, Bun, Deno — one baked document
+bun run compat                           # api-surface.txt current? floor since the last tag
 deno doc --lint src/*.ts                 # docs coverage — a scored JSR criterion
 deno check --doc src/*.ts                # the JSDoc examples actually compile
 deno publish --dry-run --allow-dirty     # JSR validation, incl. slow types

@@ -240,6 +240,20 @@ Claims that turned out WRONG, kept so they are not believed again:
 The lesson under most of them: **a check you have not seen fail tells you nothing, and a probe of
 a live command is a run of it.**
 
+## Phase 10 — closing the correspondence; the compatibility gate (2026-10-28)
+
+- **Ledger:** C20 and C21 (this repo's findings for binaryang and wasmtk) verified read-only and
+  closed; H6, H15, H20 answered. JSR refusing workstation publishes recorded (owner: its default for
+  a linked repository).
+- **The compatibility gate** (`83a2023`): the API surface as a committed snapshot, the floor since
+  the last tag enforced by `bump` and `release`, the previous tag's samples as Rule 3 — inverted 12/12.
+
+| believed | measured |
+|---|---|
+| npm 12 refuses JSR packages | it refuses only the ALIAS install `jsr add` performs; a direct `@jsr/…` install works (binaryang re-measured, confirmed here) |
+| the surface diff is clean between releases | `VERSION`'s literal type is the version string — every bump would have read as BREAKING; normalized before the first commit |
+| the inversion harness passed | one run selected NO case and still printed "every inversion behaves" — the harness now refuses an empty run |
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is
