@@ -127,9 +127,11 @@ integration, so a local `deno publish` would succeed and produce an *unattested*
 
 **The publishing path, and what pins it** (workspace letter H20, checked 2026-10-28). One registry,
 JSR; one path: `.github/workflows/publish.yml` on a `v*` tag, `id-token: write`, `deno publish` with
-GitHub OIDC — no token anywhere. No npm, PyPI or other trusted-publisher policy exists yet — but npm
-is now planned (owner, 2026-10-28: "npm as well as jsr", roadmap task 15), and its trusted publisher
-must be created under the org before the first npm publish (H20's lesson). JSR links the package to the GitHub repository **by repository id**: its API reads
+GitHub OIDC — no token anywhere. **npm is the second registry** (owner, 2026-10-28; roadmap task 15):
+`@synapticforge1/s3d-reportcompiler`, built by `bun run npm:build` into `dist/` (compiled JS +
+`.d.ts`, a generated manifest with a `bin`) and proven by `bun run npm:prove` — not yet published.
+Its trusted publisher does not exist yet; the owner creates it under the `synapticforge1` npm org
+before the first npm publish (H20's lesson: a policy can pin ids). JSR links the package to the GitHub repository **by repository id**: its API reads
 `githubRepository` = `synapticforge1/S3D-ReportCompiler`, id `1328030455` — GitHub's id for that
 repository (owner `synapticforge1`, id `342141589`, Organization). ⚠️ **JSR does not follow a
 transfer or a rename on its own** (binaryang measured it, its `cmem/publishing.md`): the link here

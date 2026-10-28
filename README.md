@@ -39,7 +39,44 @@ and then checks its own work.
 
 ### Installation
 
-#### As a project dependency
+The same package is published to two registries, under two names:
+
+| Registry | Name | Best for |
+|---|---|---|
+| **npm** | `@synapticforge1/s3d-reportcompiler` | Node and Bun — a plain `npm install`, a global command, `npx` |
+| **JSR** | `@jrmarcum/s3d-reportcompiler` | Deno — and Node / Bun through `jsr add` |
+
+#### From npm — `@synapticforge1/s3d-reportcompiler`
+
+⏳ **From the first npm release on** (the npm copy is built and proven, not yet published — the
+JSR package below is available today). Compiled JavaScript with its type declarations, so it runs
+on Node with no flags, no `.npmrc` and no JSR registry setting.
+
+As a project dependency:
+
+```bash
+npm install @synapticforge1/s3d-reportcompiler
+bun add @synapticforge1/s3d-reportcompiler
+```
+
+```ts
+import { assembleDocument, bakeBody, bakeStyle } from "@synapticforge1/s3d-reportcompiler";
+```
+
+As a command — the npm package has a `bin`, which JSR's npm layer cannot provide:
+
+```bash
+npm install -g @synapticforge1/s3d-reportcompiler    # then: s3d-reportcompiler [reports-dir] [output.pdf]
+npx @synapticforge1/s3d-reportcompiler                # run without installing
+```
+
+Measured before any publish, on the packed tarball installed into a fresh project: the library
+imports and the installed CLI bakes the identical document on Node 22.13 (the floor), 22, 24 and
+26, Bun and Deno, and `npm exec s3d-reportcompiler -- --version` runs (`bun run npm:prove`).
+
+#### From JSR — `@jrmarcum/s3d-reportcompiler`
+
+##### As a project dependency
 
 Deno:
 
@@ -83,7 +120,7 @@ the dependency to `package.json` — commit both. Then one import line works on 
 import { assembleDocument, bakeBody, bakeStyle } from "@jrmarcum/s3d-reportcompiler";
 ```
 
-#### As a global CLI tool
+##### As a global CLI tool
 
 Deno — note the **`/cli`** on the end:
 
@@ -110,9 +147,10 @@ Either wait a day, or opt out for this install:
 deno install -g -n s3d-reportcompiler -A --min-dep-age=0 jsr:@jrmarcum/s3d-reportcompiler/cli
 ```
 
-Bun and Node: **there is no global command from JSR.** JSR's npm packages carry no `bin`
-entry (measured on 1.0.4: the package manifest has none), so `bun install -g` and `bunx` find
-nothing to run. Install the package into a project as above and run its compiled CLI:
+Bun and Node: **there is no global command from JSR** — use the npm package above for that. JSR's
+npm packages carry no `bin` entry (measured on 1.0.4: the package manifest has none), so
+`bun install -g` and `bunx` on the JSR package find nothing to run. Installed from JSR, run its
+compiled CLI directly:
 
 ```bash
 node node_modules/@jrmarcum/s3d-reportcompiler/main.js [reports-dir] [output.pdf]
@@ -122,6 +160,16 @@ bun  node_modules/@jrmarcum/s3d-reportcompiler/main.js [reports-dir] [output.pdf
 or name it once in that project's `package.json` — `"scripts": { "compile": "node
 node_modules/@jrmarcum/s3d-reportcompiler/main.js" }` — and run `npm run compile` /
 `bun run compile`. A global command is Deno's (above) or a clone's (below).
+
+##### Run on demand without installing
+
+Deno:
+
+```bash
+deno run -A jsr:@jrmarcum/s3d-reportcompiler/cli
+```
+
+Bun and Node: not from JSR (no `bin`) — `npx @synapticforge1/s3d-reportcompiler` from npm, above.
 
 #### From a checkout
 
@@ -139,17 +187,6 @@ and no waiting on the registry. `cli:install-jsr` installs the released package 
 
 Both install the command as `s3d-reportcompiler`, and `--force` means re-running
 either one simply replaces whatever is installed.
-
-#### Run on demand without installing
-
-Deno:
-
-```bash
-deno run -A jsr:@jrmarcum/s3d-reportcompiler/cli
-```
-
-Bun and Node: there is no install-free form (no `bin`, see above) — `bunx` and `npx` on this
-package find nothing to run.
 
 ### Requirements
 
@@ -308,12 +345,17 @@ import * as rt from "@jrmarcum/s3d-reportcompiler/runtime";
 
 ### Bun and Node
 
-Identical, once the package is added with `bunx jsr add --bun` / `npx jsr add` (see
-[Installation](#installation) for npm 12):
+Identical, under the name of the registry you installed from ([Installation](#installation)):
 
 ```typescript
+// from npm (`npm install` / `bun add`) — from the first npm release
+import { assembleDocument, bakeBody, bakeStyle } from "@synapticforge1/s3d-reportcompiler";
+
+// from JSR (`npx jsr add` / `bunx jsr add --bun`; see Installation for npm 12)
 import { assembleDocument, bakeBody, bakeStyle } from "@jrmarcum/s3d-reportcompiler";
 ```
+
+The `/runtime` export has the same path under either name.
 
 ### Web
 

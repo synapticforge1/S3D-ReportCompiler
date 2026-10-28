@@ -19,6 +19,8 @@
     "cli:install-jsr": "deno install -g -A --force --min-dep-age=0 -n s3d-reportcompiler jsr:@jrmarcum/s3d-reportcompiler/cli",
     "cli:uninstall": "deno uninstall -g s3d-reportcompiler",
     "update-version": "bun scripts/sync-version.ts",
+    "npm:build": "bun scripts/npm-build.ts",
+    "npm:prove": "bun scripts/npm-prove.ts",
     "surface": "bun scripts/compat.ts surface --write",
     "compat": "bun scripts/compat.ts check",
     "bump": "bun scripts/bump.ts",
@@ -36,7 +38,8 @@
     "pdfjs-dist": "6.4.299"
   },
   "devDependencies": {
-    "@types/node": "22.20.1"
+    "@types/node": "22.20.1",
+    "typescript": "7.0.2"
   },
   "overrides": {
     "@xmldom/xmldom": "0.9.12",
