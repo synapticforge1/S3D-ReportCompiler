@@ -269,6 +269,26 @@ Later the same day, owner: "override, upgrade, and perform items 7 and 8":
 |---|---|
 | cutting the PDF at each report's heading isolates the report | each report prints its tab strip BEFORE its heading — every earlier report had been credited its successor's opening, the set-union gap inside the fix; only the LAST report showed it. Whole pages fixed it |
 
+## Phase 11 — no Deno here; the suite; releases 1.1.0–1.1.4 on two registries (2026-10-28)
+
+Owner: "the goal is to be deno free on this machine", then steps 5 and 7, "release 1.1.0", npm.
+- **Deno off the machine:** compat reads tsc's `.d.ts` (`c434fa9`); CI (`ci.yml`) runs JSR's checks
+  and the Deno legs; `jsr.json` replaced `deno.json`, proved by a committed fake-JSR upload check
+  (`jsr-upload-check.ts`, also in `publish.yml`); the global CLI is a Bun global.
+- **Step 5:** `tests/build.test.ts`, 13 tests on `bun test` and `node --test`, inverted 8/8.
+- **Releases:** JSR 1.1.0–1.1.4, all attested; npm `@synapticforge1/s3d-reportcompiler` 1.1.0 (by
+  hand) and 1.1.4 (trusted publisher, provenance). 🔒 JSR and npm release together from now on.
+- **Ledger C26** sent to binaryang (five findings for its exit guide).
+
+| believed | measured |
+|---|---|
+| `deno publish`'s exit code says the upload happened | answered "version exists", it uploaded nothing and exited 0 — the upload check reads the tarball |
+| the npm tarball is proven by pack + install | `npm publish` DROPPED the `"./main.js"` bin at publish time; only a publish dry run shows it |
+| Chrome's page count is a stable baseline | 100 pages on Windows, 103 on Ubuntu — layout, not content; never pinned |
+| CI can publish a new npm package with a token | a stage-only token cannot publish; a write token hit 2FA (`EOTP`); a trusted publisher needs the package to EXIST — the first version had to be by hand |
+| "Run workflow" runs the workflow I just fixed | it runs the copy on the branch picked in "Use workflow from" — three runs picked `release/v*` and ran stale copies |
+| the root manifest's `"private": true` is boilerplate | it stopped an `npm publish` typed in the repo root from publishing the whole repository |
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is

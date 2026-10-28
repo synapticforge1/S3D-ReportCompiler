@@ -1,4 +1,4 @@
-# bun-migration.md — moving the toolchain off Deno, keeping JSR (steps 2–7 done, 1.1.0 released attested 2026-10-28; left: publish.yml gated on CI, the npm job)
+# bun-migration.md — moving the toolchain off Deno, keeping JSR (steps 2–7 done; 1.1.0–1.1.4 released, JSR + npm by OIDC; left: publish.yml gated on CI, Deno uninstalled here + one no-Deno local gate run)
 
 🔒 **Goal (owner, 2026-10-28): "the goal is to be deno free on this machine."** Deno may run only
 where JSR needs it — `deno publish` on GitHub's runner, installed per run by `setup-deno` — and

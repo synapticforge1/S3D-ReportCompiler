@@ -697,7 +697,7 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 
 ---
 
-## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–7 DONE (1.1.0 released attested); left: `publish.yml` gated on CI
+## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–7 DONE (1.1.0–1.1.4 released); left: `publish.yml` gated on CI; Deno uninstalled here (owner) + one no-Deno local gate run
 
 Done and merged 2026-10-26: step 2 `bun check` (`a222adf`), step 3 `bun fmt` + Biome (`78f9ac8`),
 step 4 every script and control on Bun, with three release defects fixed (`129fd0a`). 2026-10-28
