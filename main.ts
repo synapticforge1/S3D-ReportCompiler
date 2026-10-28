@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run -A
+#!/usr/bin/env bun
 /**
  * @module
  *
@@ -13,9 +13,9 @@
 //
 // Compiles every .html file in a folder into a single combined PDF.
 //
+//   bun         main.ts [htmlDir] [output.pdf] [options]
+//   node        main.ts [htmlDir] [output.pdf] [options]
 //   deno run -A main.ts [htmlDir] [output.pdf] [options]
-//   node          main.ts [htmlDir] [output.pdf] [options]
-//   bun run       main.ts [htmlDir] [output.pdf] [options]
 //
 //     --no-keep-html  discard the baked HTML after rendering
 //     --no-optimize   skip the recompression pass
@@ -36,8 +36,10 @@
 // what makes the tool relocatable: installed globally from JSR, the script lives
 // in a cache directory that will never contain anyone's reports. Both paths are
 // overridable positionally. Keeping input and output apart means the input scan
-// can never see a build artifact of its own. Node and Bun need `npm install`
-// first; Deno resolves the same dependencies without it.
+// can never see a build artifact of its own. From a clone, run `npm install`
+// first: Bun, Node and Deno all read that node_modules (jsr.json sets Deno's
+// "nodeModulesDir": "manual"). Installed from npm or JSR, the dependencies come
+// with the package.
 //
 // ---------------------------------------------------------------------------
 // Layout
