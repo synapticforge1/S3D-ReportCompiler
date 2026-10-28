@@ -178,10 +178,17 @@ execute a build — so the fix is the extra export rather than pointing `.` at `
 
 | Task | Installs from | Use when |
 |---|---|---|
-| `bun run cli:install` | this working tree, as the npm package (`npm:build`, then `npm install -g --install-links ./dist`) | developing, or you keep a clone — no publish, no registry lag |
-| `bun run cli:install-published` | `@synapticforge1/s3d-reportcompiler` from npm | you want exactly what users get (from the first npm release) |
+| `bun run cli:install` | this working tree, as the npm package (`npm:build`, then `bun add -g ./dist`) | developing, or you keep a clone — no publish, no registry lag |
+| `bun run cli:install-published` | `@synapticforge1/s3d-reportcompiler` from npm (`bun add -g`) | you want exactly what users get |
+| `bun run cli:uninstall` | — (`bun remove -g`) | |
 
-**npm, not Deno, since 2026-10-28** (owner: no Deno on this machine; accepted that the published
+**Bun globals since 2026-10-28** (owner: "report compiler uninstalled from deno and install with
+bun"). Measured that day: `bun add -g ./dist` installs a COPY (the command still ran after `dist/`
+was deleted), so no `--install-links` equivalent is needed; the command lands in Bun's global bin
+(`.exe` + `.bunx` shims) and, with no `node` on PATH, runs ON BUN ("Compiling 13 report(s) on
+bun", PASS) — no Node or npm needed. `cli:install-published` switched the global from the tree
+copy to the registry's `^1.1.4`. Uninstall → off PATH. *Earlier the same day these were npm
+globals, and before that `deno install -g`:* **npm, not Deno** (owner: no Deno on this machine; accepted that the published
 route waits for the first npm release). `--install-links` makes npm install a real copy with its
 dependencies instead of a symlink to `dist/`, which `npm:build` deletes and recreates. Measured
 2026-10-28 (Node 24 via fnm): 17 packages added, the installed `s3d-reportcompiler --version`

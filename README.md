@@ -178,12 +178,12 @@ bun run cli:install-published   # global command from npm
 bun run cli:uninstall
 ```
 
-These need **Bun and npm** on your `PATH` — the global command is an npm one, run by Node.
-`bun run cli:install` is the one to use while developing or if you keep a clone: it builds the npm
-package from your working tree and installs it (`npm install -g --install-links ./dist`), so there
-is no publish step and no waiting on the registry. `cli:install-published` installs the released
-npm package. Both install the command as `s3d-reportcompiler`; re-running either replaces it.
-Like any npm global, it belongs to the Node version that was active when you installed it.
+These need only **Bun** — they install a Bun global (`bun add -g`), and with no `node` on your
+`PATH` Bun runs the command itself. `bun run cli:install` is the one to use while developing or if
+you keep a clone: it builds the npm package from your working tree and installs a copy of it
+(`bun add -g ./dist`), so there is no publish step and no waiting on the registry.
+`cli:install-published` installs the released npm package. Both install the command as
+`s3d-reportcompiler`; re-running either replaces it.
 
 ### Requirements
 

@@ -791,7 +791,10 @@ npm's staged-publishing / trust setup; deprecate or unpublish within npm's windo
 install of 1.1.4 (npm 12.2, Node 24): 0 vulnerabilities, the CLI compiles the 13 samples PASS
 (13/13 per report), the library imports with `compareEachReport`. JSR has 1.1.0–1.1.4, all attested.
 From now on one tag publishes both (🔒 owner: "jsr and npm are updated at the same time always").
-Left: "require 2FA and disallow tokens" on the package, if not already set (owner).
+Left: "require 2FA and disallow tokens" on the package, if not already set (owner). **Owner,
+2026-10-28: the npm tokens are revoked** (and the `NPM_TOKEN` secret deleted before 1.1.4's
+re-run) — no npm token exists for this package. The global CLI on this machine: the Deno one
+uninstalled by the owner, now a Bun global of npm 1.1.4 (architecture.md § Installing it).
 
 *The record of how it got here, kept:*
 
