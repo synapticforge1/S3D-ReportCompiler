@@ -16,8 +16,10 @@ remove: the compat gate's `deno doc --json` (→ the `.d.ts` tsc emits); `deno d
 workflow and push it") runs the Bun checks, compat, the sample build, JSR's Deno checks, and the
 runtime matrix and npm proof WITH their Deno legs (`--deno`, `--install-node`). Locally those legs
 are off by default and print `· deno: runs in CI`; `check:deno` and `build:deno` are gone; `cli:*`
-install through npm. Still to come: the first green CI run (the proof the move worked), then
-uninstalling Deno here (owner), `.vscode/settings.json` (`deno.enable`) and `deno.json` at step 7,
+install through npm. **First run green 2026-10-28** (Actions run 40725430831, commit `a2825af`):
+all four jobs — checks, JSR checks (Deno), runtime matrix, npm package. The Deno legs cannot have
+been skipped: with `--deno` both scripts count Deno among the required runtimes and fail if it is
+missing or fails. Still to come: uninstalling Deno here (owner), `.vscode/settings.json` (`deno.enable`) and `deno.json` at step 7,
 and `publish.yml` gating on CI plus the npm job.
 
 **Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
