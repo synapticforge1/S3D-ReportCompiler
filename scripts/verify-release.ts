@@ -67,8 +67,9 @@ console.log(`Checking ${jsrJson.name}@${version} …`);
 
 // JSR ingests asynchronously, so a check straight after a release needs to wait.
 // Without --wait this is a single look, which is what you want when auditing an
-// older version.
-const attempts = wait ? 20 : 1;
+// older version. 60 × 15 s = 15 min: since 2026-10-28 publish.yml first waits for CI to pass on
+// the tagged commit (~5–6 min), and 1.1.5 outlasted the old 5-minute window (exit 2, then attested).
+const attempts = wait ? 60 : 1;
 let info: VersionInfo | null = null;
 
 for (let i = 1; i <= attempts; i++) {
