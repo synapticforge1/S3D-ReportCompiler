@@ -2,13 +2,15 @@
 
 ## The build tests itself
 
-There is no separate test suite. The build verifies its own output and **exits non-zero** if the PDF no
-longer reproduces its sources, so running the build *is* the test.
+The build verifies its own output and **exits non-zero** if the PDF no longer reproduces its
+sources, so running the build *is* the test. Since 2026-10-28 `bun run test` runs it, and every
+control, as a `node:test` suite (§ Test suite below).
 
 Defaults resolve from the **working directory**, so which folder you stand in selects the input set:
 
 ```bash
 bun run check                            # types (bun check)
+bun run test                             # the samples + every control (bun test; test:node = node --test)
 bun run format:check                     # formatting (main.ts, src/, scripts/) + its canary
 bun run lint                             # Biome + its canary
 bun run runtimes                         # every Node LTS line and Bun — one baked document
@@ -183,6 +185,51 @@ bun scripts/sanitize-report.ts --check negctl_report.html
 and quieting those false positives means widening the ignore list until the check can no longer fail.
 The ignore list currently holds exactly one word (`design`), and every entry in it must be a word
 *observed* surviving for an innocent reason — not one guessed at in advance.
+
+## Test suite — `bun run test` / `bun run test:node` (bun-migration step 5, 2026-10-28)
+
+[`tests/build.test.ts`](../tests/build.test.ts): `node:test` + `node:assert` only, so ONE file runs on
+`bun test` and `node --test` (`--test-concurrency=1`; every case renders with Chrome). Each case
+builds with the runtime running the test (`process.execPath`) and asserts the exit code AND its
+reason. It automates the negative controls above and `tests/controls/README.md`:
+
+| test | asserts |
+|---|---|
+| the 13 samples | exit 0; 2203 expressions, 0 failed; ≥ 1 page per report (never an exact count — below); 0 missing; per-report 13/13; 13 images, 13 diagrams; 0 LaTeX, 0 blank; PASS |
+| unknown delimiter | exit 1; "97 expressions, 0 failed" AND the guard's error, 250 TeX commands; never verifies; no PDF |
+| colliding `{{..}}` | exit 1; the guard's error, 205 TeX commands; no PDF |
+| hidden content, one report | exit 1; 171 words / 114 numbers missing; 1 blank page; "content missing from the PDF" |
+| a row hidden in the 2nd of two copies | exit 1; set-wide **0 missing** (pinned — the union limit), per-report `b_report.html: 5 word(s) … internal, forces, absolute, force, bending`; NOT "missing from the PDF" |
+| custom delimiters declared | exit 0; 169 expressions; ≥ 1 page; PASS |
+| `$$..$$` in a second report | exit 0; 338 expressions; the two-delimiter-set warning; per-report 2/2; no `$$` in the bake |
+| unknown flag | exit 1; `Unknown option(s): --no-optimise`; nothing compiled |
+| stale PDF, a "Chrome" that writes nothing | non-zero; "Chrome produced no PDF"; no `Created`; the stale PDF is gone (the stub is the test's own runtime as `CHROME_PATH`) |
+| relative input/output paths (#22) | exit 0; `out/custom-name.pdf` and `.html` exist |
+| sanitizer, clean / leaked | invented values planted in all three fields of a sample under a temp `local/` (no client data): ✓ 6 tokens verified absent / ❌ `1 removed term(s) still present: Zorblax` |
+| every `tests/controls/control-*.ts` is exercised | "a run of nothing is not a pass" |
+
+⚠️ **The page count is layout, not content — never pin it.** The first CI run (40733829258) failed
+`/^100 pages,/`: GitHub's Ubuntu runner renders the 13 samples to **103** pages (Windows: 100),
+with everything else identical — 0 missing, 13/13 per report, PASS. Fonts differ by platform. The
+suite asserts ≥ 1 page per report instead; conservation is what the counts of words, numbers,
+images and diagrams prove.
+
+⚠️ The sample is ALREADY sanitized, so its fields hold the placeholders the sanitizer writes —
+re-sanitizing it reports them as leaks (7 "survivors"). The fixture plants invented values instead.
+
+Measured 2026-10-28: 13/13 on `bun test` (≈20 s), `node --test` on Node 24 and the 22.18 floor.
+**Inverted 2026-10-28** (one-time harness: mutate, run `bun test`, require exactly the intended test
+to fail): guard disabled → the two guard tests; set-wide conservation never missing → hidden content;
+per-report check disabled → the two-copy row; unknown flags accepted → unknown flag; stale PDF not
+removed → stale PDF; positional paths not made absolute → relative paths; sanitizer ignoring the
+leaked word → both sanitizer tests (the clean one pins its token count); an unrun control file → the
+coverage test. 8/8. NOT inverted: the positive controls' baselines and the `$$` assertion. (First
+run: all 8 caught but the harness read 0 passes — `bun test` prints only failures off a TTY.)
+CI runs both runners in its checks job. The format scope names `tests/build.test.ts` as a FILE;
+the format canary still refuses `tests` or any other path under it.
+
+🔁 Corrected 2026-10-28: control 3 above was recorded as 172 words / 119 numbers missing; the
+current samples give **171 / 114** (measured by this suite).
 
 ## Compatibility gate — "backward compatible" is a gate result (workspace letter H6)
 

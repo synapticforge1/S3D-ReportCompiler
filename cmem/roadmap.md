@@ -18,7 +18,8 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · **1.0.4 ✅** Rekor `2439323008` (`deno task verify-release 1.0.4`, 2026-10-26) |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
-| Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26) |
+| Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26); Deno's leg runs in CI only since 2026-10-28 |
+| CI | `.github/workflows/ci.yml` on every push/PR — checks, JSR checks + upload check (Deno), runtime matrix, npm proof; green on main (run 40728999111, 2026-10-28) |
 | Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; no Deno locally since 2026-10-28 (🔒 owner goal, [bun-migration.md](bun-migration.md)): compat reads tsc `.d.ts`; `cli:*` install via npm; JSR's checks (`deno check`, `doc --lint`, `check --doc`, `publish --dry-run`, the upload check) and the Deno legs of `runtimes` / `npm:prove` run in `.github/workflows/ci.yml`; Deno publishes from `publish.yml`; the manifest is `jsr.json` (no `deno.json`, task 12 step 7) |
 | API surface | `api-surface.txt`, 69 lines; floor since v1.0.4 = **minor** — `compareEachReport` added — so the next release is ≥ 1.1.0 (`bun run compat`, 2026-10-28) |
 | Verification | set-wide AND per-report conservation (task 7, 2026-10-28); pdfjs-dist 6.4.299, no polyfill warnings (task 14) |
@@ -696,7 +697,7 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 
 ---
 
-## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–4, 6 (CI part), 7 DONE; left 5 and 6's release
+## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–5, 6 (CI part), 7 DONE; left 6's release part
 
 Done and merged 2026-10-26: step 2 `bun check` (`a222adf`), step 3 `bun fmt` + Biome (`78f9ac8`),
 step 4 every script and control on Bun, with three release defects fixed (`129fd0a`). 2026-10-28
@@ -704,7 +705,8 @@ step 4 every script and control on Bun, with three release defects fixed (`129fd
 `.github/workflows/ci.yml`, first run green (run 40725430831); **step 7** — `jsr.json` is the one
 manifest, `deno.json` deleted, `deno publish` with no `--config`, proved by
 `scripts/jsr-upload-check.ts` (a fake-JSR capture of the real upload, in CI and in `publish.yml`
-before the real publish). Remaining: **5** the `node:test` suite; **6, release part** —
+before the real publish); **step 5** — `tests/build.test.ts`, the samples and every control on
+`bun test` and `node --test`, inverted 8/8, in CI. Remaining: **6, release part** —
 `publish.yml` gated on CI, the npm job (task 15), and one real release proving provenance; the
 owner uninstalls Deno here. Details and every measurement: [bun-migration.md](bun-migration.md).
 
