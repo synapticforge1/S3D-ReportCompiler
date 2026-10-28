@@ -36,7 +36,7 @@
 // what makes the tool relocatable: installed globally from JSR, the script lives
 // in a cache directory that will never contain anyone's reports. Both paths are
 // overridable positionally. Keeping input and output apart means the input scan
-// can never see a build artifact of its own. From a clone, run `npm install`
+// can never see a build artifact of its own. From a clone, run `bun install`
 // first: Bun, Node and Deno all read that node_modules (jsr.json sets Deno's
 // "nodeModulesDir": "manual"). Installed from npm or JSR, the dependencies come
 // with the package.

@@ -6,7 +6,8 @@ This file lists the third-party software it depends on. Every entry was verified
 package's own `package.json` and `LICENSE` file, not from memory or from the registry summary.
 
 **Last verified: 2026-08-08, against the tree pinned by `package-lock.json`. `npm audit`: 0
-vulnerabilities.**
+vulnerabilities.** Since 2026-10-28 the tree is pinned by `bun.lock` instead — the same 20 package
+versions, measured — and `bun audit` reports no vulnerabilities (49 packages checked).
 
 ## Does this package redistribute any of it?
 

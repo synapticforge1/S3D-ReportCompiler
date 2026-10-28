@@ -39,8 +39,10 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install npm dependencies
-        run: npm ci
+      # bun.lock is the lockfile since 2026-10-28 (owner: "dependency installs should go to bun,
+      # because it is faster"); --frozen-lockfile fails rather than drift from it.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Types
         run: bun run check
@@ -78,14 +80,14 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Setup Node
-        uses: actions/setup-node@v5
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
+          bun-version: 1.4.4
 
-      # jsr.json sets "nodeModulesDir": "manual" — Deno reads the node_modules npm creates.
-      - name: Install npm dependencies
-        run: npm ci
+      # jsr.json sets "nodeModulesDir": "manual" — Deno reads the node_modules Bun creates.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Type check under Deno
         run: deno check main.ts src/report_core.ts src/report_runtime.ts
@@ -102,11 +104,6 @@ jobs:
 
       - name: JSR validation, slow types included
         run: deno publish --dry-run
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
 
       # A dry run never shows the rewritten files, and `deno publish` has reported success on a
       # corrupted upload (cmem/bun-migration.md § "Step 1, measured"). This publishes to a FAKE JSR
@@ -141,8 +138,8 @@ jobs:
           curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell --install-dir "$HOME/.fnm"
           echo "$HOME/.fnm" >> "$GITHUB_PATH"
 
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       # The Node lines come from Node's own schedule; --install-node installs each one first.
       - name: Every runtime builds the samples to one baked document
@@ -175,8 +172,8 @@ jobs:
           curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell --install-dir "$HOME/.fnm"
           echo "$HOME/.fnm" >> "$GITHUB_PATH"
 
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Build
         run: bun run npm:build

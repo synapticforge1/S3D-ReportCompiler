@@ -84,14 +84,17 @@ jobs:
       #
       #   error: Could not find "mathjax-full" in a node_modules folder.
       #
-      # `npm ci` rather than `npm install`: it installs the committed lockfile exactly, and it honours
-      # .npmrc's `omit=optional`, so CI gets the same 16-package, 0-vulnerability tree the build was
-      # verified against locally. `deno install` would not apply that npm-side flag.
-      #
-      # "manual" is deliberate — see cmem/architecture.md. It is what keeps Deno reading the same
-      # node_modules as Node and Bun, which is what makes the three runtimes produce identical output.
-      - name: Install npm dependencies
-        run: npm ci
+      # `bun install --frozen-lockfile` installs bun.lock exactly (the lockfile since 2026-10-28;
+      # `npm ci` and package-lock.json before — the same 20 package versions, measured) and fails
+      # rather than drift. "manual" is deliberate — see cmem/architecture.md: it keeps Deno reading
+      # the same node_modules as Node and Bun, which is what makes the three produce identical output.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       # Provenance requires a GitHub OIDC token. The `id-token: write` permission above is what
       # injects ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN into the runner. If they are absent despite the
@@ -105,11 +108,6 @@ jobs:
           else
             echo "::warning::OIDC token NOT available (URL present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}, TOKEN present: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}). deno publish will skip provenance. Verify id-token:write is honored — check org/enterprise Settings → Actions → General OIDC policy."
           fi
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
 
       # The last gate before an IMMUTABLE version: publish to a fake JSR on 127.0.0.1 (dummy token,
       # no provenance) and read the tarball — `deno publish` has exited 0 on a corrupted upload.
@@ -218,8 +216,8 @@ jobs:
         with:
           bun-version: 1.4.4
 
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Build the npm package
         run: bun run npm:build
@@ -243,6 +241,12 @@ jobs:
         working-directory: dist
         shell: bash # -eo pipefail: a failing dry run must not hide behind `tee`
         run: |
+          # A version npm already has cannot be dry-run ("cannot publish over…"); the next step
+          # skips it anyway, so there is nothing to check.
+          if npm view "$(node -p 'require("./package.json").name')@${VERSION}" version >/dev/null 2>&1; then
+            echo "already on npm — the publish step will skip it"
+            exit 0
+          fi
           npm publish --dry-run --access public 2>&1 | tee ../npm-dry-run.log
           if grep -Eq 'auto-corrected|errors corrected|was invalid and removed' ../npm-dry-run.log; then
             echo "::error::npm would change the manifest on publish — refusing (see the dry run above)."
