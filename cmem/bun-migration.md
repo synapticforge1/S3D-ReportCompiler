@@ -270,8 +270,8 @@ UPLOAD, not the exit code**: keep the fake-registry capture as a committed check
 compares every rewritten specifier against the expected list before a tag.
 
 **Handed over as ledger C20 (2026-10-26) — CLOSED 2026-10-28:** binaryang's
-`jsr-deno-exit-guide.md` F1 and § 4 now carry this caveat and the upload check (`a846dc68f`, on its
-`origin/main`); wasmtk's `deno-exit-plan.md` P1 must prove its upload's specifiers (`67686067a60`).
+`jsr-deno-exit-guide.md` F1 and § 4 now carry this caveat and the upload check (`39c127def`, on its
+`origin/main`; `a846dc68f` before binaryang's 2026-10-28 history rewrite, ledger C26); wasmtk's `deno-exit-plan.md` P1 must prove its upload's specifiers (`67686067a60`).
 Both verified read-only by this repo, as the item's creator.
 
 ### The revised order

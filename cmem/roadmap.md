@@ -693,23 +693,28 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 
 **Correspondence this repo opened** (`../cmem/workspace-correspondence.md`):
 - **C20 ✅ closed 2026-10-28** — `--config jsr.json` corrupts a package with dependencies: binaryang's
-  `jsr-deno-exit-guide.md` F1 / § 4 carry the caveat (`a846dc68f`, on its `origin/main`); wasmtk's
+  `jsr-deno-exit-guide.md` F1 / § 4 carry the caveat (`39c127def`, was `a846dc68f`, on its `origin/main`); wasmtk's
   `deno-exit-plan.md` P1 must prove its upload (`67686067a60`). Verified read-only by this repo.
 - **C21 ✅ closed 2026-10-28** — six findings from task 12 steps 2–4: binaryang's guide § 5a carries
-  all six (`a3d338e8e`, five re-measured), wasmtk's plan maps each to a phase (`67686067a60`).
+  all six (`97c2c0375`, was `a3d338e8e`, five re-measured), wasmtk's plan maps each to a phase (`67686067a60`).
   binaryang NARROWED (5) — only `jsr add`'s alias install is refused by npm 12 — re-measured here and
   carried into known-issues #27 and the README.
 - **C27 ✅ closed 2026-10-28** (filed as C26, renumbered after a collision) — five findings from
   steps 5–7 and 1.1.0 for binaryang's guide; answered `60025f640` (local `main` at closing),
   verified read-only (bun-migration.md § "binaryang's guide update … reviewed").
 
-**Correspondence addressed TO this repo, open:**
-- **binaryang's C26 (2026-10-28)** — binaryang rewrote its history a second time; any binaryang
-  commit id this repo quotes is now stale and translates through the table in
-  `../cmem/handoffs.md` § "Notes from binaryang, 2026-10-26" (the C26 bullet). This repo quotes
-  binaryang ids in `bun-migration.md` and above (e.g. `a846dc68f`, `a3d338e8e`, `899b3fa5d`,
-  `701d1043d`, `60025f640`). NOT yet translated — waiting on the owner's go; binaryang creates and
-  closes that row, this repo writes its answer into it.
+**Correspondence addressed TO this repo:**
+- **binaryang's C26 (2026-10-28) — ANSWERED 2026-10-28** (owner: "proceed with items 4 and 5"):
+  binaryang rewrote its history a second time, so quoted binaryang ids went stale; translated
+  through the table in `../cmem/handoffs.md` (the C26 bullet). Measured with a one-time read-only
+  scan of every TRACKED file here for binaryang commit ids: **three were stale and are translated**
+  — `a846dc68f` → `39c127def` (bun-migration.md, C20 above), `a3d338e8e` → `97c2c0375` (C21
+  above), and `899b3fa5d` → `54cc098ea` (quoted only in this paragraph's earlier text); the old ids
+  stay beside the new as "was". Still current, checked on a binaryang branch: `701d1043d`,
+  `60025f640`, `8d9ba0cb9`; `b8fafaa3f` (best-practices 6.1) is quoted ON PURPOSE as the id
+  before binaryang's FIRST purge and stays. The answer is in binaryang's row; binaryang closes it.
+  (The workspace ledger's C20/C21 rows quote the old ids too — those are the workspace's to
+  translate, as C26 lists.)
 
 - Answered here; the workspace closes them: **H26 ✅ closed** by the workspace 2026-10-28; **H15** and
   **H19** still open in the ledger on 2026-10-28 (multi-repo rows — other repos' parts and the
