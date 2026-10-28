@@ -174,6 +174,18 @@ if (diffCode !== 0) {
     console.warn(`  (could not reach JSR to check whether ${version} exists — continuing)`);
   }
 
+  // The compatibility gate on the version about to be tagged (workspace letter H6): the committed
+  // api-surface.txt must be current, the bump since the last tag must not be below the surface
+  // floor, and for a patch or minor the previous tag's samples must PASS on this code.
+  console.log("");
+  const gate = spawnSync(self[0], [...self.slice(1), "scripts/compat.ts", "release", version], {
+    stdio: "inherit",
+  });
+  if (gate.status !== 0) {
+    console.error(`\n❌ The compatibility gate refused ${tag} — nothing tagged.`);
+    process.exit(1);
+  }
+
   const sha = capture(["git", "rev-parse", "--short", "HEAD"]);
   const subject = capture(["git", "log", "-1", "--pretty=%s"]);
   console.log(`\n  tagging ${sha}  ${subject}`);

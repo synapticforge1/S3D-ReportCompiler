@@ -176,6 +176,39 @@ and quieting those false positives means widening the ignore list until the chec
 The ignore list currently holds exactly one word (`design`), and every entry in it must be a word
 *observed* surviving for an innocent reason — not one guessed at in advance.
 
+## Compatibility gate — "backward compatible" is a gate result (workspace letter H6)
+
+`scripts/compat.ts`, since 2026-10-28. **`bun run compat`** reports whether the committed
+[`api-surface.txt`](../api-surface.txt) is current and the floor since the last tag; **`bun run
+surface`** re-baselines it (Rule 5: an intended surface change is its OWN commit, before any bump).
+`bun run bump <kind>` runs the gate before writing anything; `bun run release` runs it on the version
+it is about to tag.
+
+**The surface** (66 lines on 2026-10-28): the `exports` map; every symbol `deno doc --json` documents
+for each export (JSON v2 `nodes[file].symbols`), its declarations canonicalized — locations and doc
+comments stripped, keys sorted; the CLI's options and `USAGE` shapes from `--help`. `VERSION`'s literal
+is normalized to `<VERSION>` (its type is the version string, which every bump changes — without that,
+every bump read as breaking). At a tag with no snapshot (`v1.0.4`), the surface is GENERATED from the
+tag: `git archive` into a temp dir with this repo's `node_modules` linked (a bare archive cannot resolve
+the npm types — measured); `v1.0.4`'s generated surface equals today's.
+
+**The floor:** removed or changed → major; added → minor; nothing → patch ("changed" includes widening,
+so the floor can be high, never low). **Rule 3:** for a patch or minor, the PREVIOUS tag's sample
+reports must build and PASS on the new code. **Blind spots, by design:** exit codes and the CLI's prose;
+the npm dependencies' own types; behaviour the samples do not exercise (the `node:test` suite of task 12
+step 5 joins Rule 3 when it exists). CI does not repeat the check on the tag yet (task 12 step 6).
+
+**Inverted 2026-10-28** (one-time harness, scratch clone carrying the uncommitted gate, the real
+`v1.0.4`; the release cases pushed to a SCRATCH bare origin): 12 / 12 — baseline patch allowed with
+v1.0.4's samples PASS; stale snapshot refused; removed export → patch and minor refused, major allowed;
+added export → patch refused, minor allowed; retyped parameter → major; a CLI flag renamed in `--help`
+→ major; equations rendered as `""` with the surface unchanged → v1.0.4's samples FAIL, patch refused;
+floor read from a tag's COMMITTED snapshot; `release 1.0.5` allowed, `1.0.4` refused; a refused bump
+writes nothing; bump → release tags `v1.0.5`; a hand-edited version below the floor → release refused,
+nothing tagged. (Two cases first failed for harness reasons — stderr ordering, and a mutation that hit
+the header comment's `--no-optimize` instead of the help line — and a filter that selected NO case
+printed "every inversion behaves"; the harness now refuses an empty run.)
+
 ## Runtime matrix — every Node LTS line, Bun, Deno
 
 🔒 Owner, 2026-10-26: "make sure this repo is able to be used by all LTS versions of node, and bun,

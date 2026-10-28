@@ -19,7 +19,8 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26) |
-| Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `release`; Deno only for `deno publish` + the JSR doc checks, and `deno.json` until task 12 step 7 (2026-10-26) |
+| Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; Deno only for `deno publish`, the JSR doc checks and `deno doc` for the API surface, and `deno.json` until task 12 step 7 (2026-10-28) |
+| API surface | `api-surface.txt`, 66 lines; floor since v1.0.4 = patch (`bun run compat`, 2026-10-28) |
 | `npm audit` | 1 high + 1 moderate, `@xmldom/xmldom` 0.9.10 under `mathjax-full` (task 13; 2026-10-26) |
 
 🔁 **Corrected 2026-10-26:** this memory said "1.0.4 is staged and unreleased" for two and a half
@@ -372,6 +373,7 @@ All three exist because of a release that went wrong; none is theoretical:
 
 | Refuses when | Because |
 |---|---|
+| the compatibility gate refuses (since 2026-10-28): a stale `api-surface.txt`, a bump below the surface floor since the last tag, or the last tag's samples failing on the new code | SemVer is a gate result, not a judgment (workspace letter H6; testing.md § Compatibility gate) |
 | `deno.json`, `package.json` or `src/report_core.ts` differ from `HEAD` beyond their version line (since 2026-10-26) | the release `git add`s those three, so anything else in them would ship under "bump version" — known-issues #30 |
 | the working tree has uncommitted tracked changes | they are not in the commit being tagged, so they are not in the release |
 | HEAD is behind its upstream | commits from elsewhere would be missing from the release |
@@ -659,7 +661,10 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
   carried into known-issues #27 and the README.
 - Answered here; the workspace closes them: **H26 ✅ closed** by the workspace 2026-10-28; **H15** and
   **H19** still open in the ledger on 2026-10-28 (multi-repo rows — other repos' parts and the
-  owner's GitHub Support requests remain), nothing left in them for this repo.
+  owner's GitHub Support requests remain), nothing left in them for this repo. **H6** answered
+  2026-10-28 (SemVer, the ★ block, the memory layout, and the compatibility gate —
+  testing.md § Compatibility gate); **H20** answered 2026-10-28 (one JSR path by GitHub OIDC, linked
+  by repository id, already re-linked to the org — architecture.md § JSR packaging).
 
 ---
 

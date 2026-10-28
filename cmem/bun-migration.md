@@ -131,7 +131,9 @@ Node and Bun with the baked HTML's sha256 unchanged, plus the step's own done-co
    it the test fails and is re-recorded (★ 2.6). Guard "ran nothing": every control file must be
    exercised. Each assertion inverted once before it counts. Needs Chrome, so it is a CI job with a
    browser, not a unit test. May land before step 4 if it runs the controls through Deno at first.
-6. **CI and the release path.** Add a `ci.yml` gate (none exists): `bun check`, the formatter, and
+6. **CI and the release path.** (Also: CI must repeat the compatibility gate on the tagged commit —
+   `bun scripts/compat.ts release <version>`, workspace H6 Rule 2; the gate itself exists since
+   2026-10-28.) Add a `ci.yml` gate (none exists): `bun check`, the formatter, and
    **`bun run runtimes`** (exists since 2026-10-26 — the floor, every Node LTS line from the
    schedule, Bun and Deno, one baked document; on the runner it needs fnm installed, or a
    `setup-node` matrix feeding the same checks), plus the INSTALLED-package matrix of

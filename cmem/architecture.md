@@ -122,6 +122,20 @@ Published as `@jrmarcum/s3d-reportcompiler` from GitHub Actions, never from a wo
 records a provenance attestation for a publish that arrives through its native GitHub OIDC
 integration, so a local `deno publish` would succeed and produce an *unattested* release.
 
+**The publishing path, and what pins it** (workspace letter H20, checked 2026-10-28). One registry,
+JSR; one path: `.github/workflows/publish.yml` on a `v*` tag, `id-token: write`, `deno publish` with
+GitHub OIDC — no token anywhere. No npm, PyPI or other trusted-publisher policy exists (owner: no
+npm). JSR links the package to the GitHub repository **by repository id**: its API reads
+`githubRepository` = `synapticforge1/S3D-ReportCompiler`, id `1328030455` — GitHub's id for that
+repository (owner `synapticforge1`, id `342141589`, Organization). ⚠️ **JSR does not follow a
+transfer or a rename on its own** (binaryang measured it, its `cmem/publishing.md`): the link here
+was re-linked on 2026-10-20 at 23:37:36 UTC, 93 s after binaryang's, so it already names the org.
+binaryang's 1.13.1 proved the same path publishes with provenance from the org. **Not yet
+measured for THIS package:** its first release from the org — `bun run release` ends with
+`verify-release`, which is the check. **Before any release after a future move:** read
+`api.jsr.io/scopes/jrmarcum/packages/s3d-reportcompiler` → `githubRepository` first; a stale link
+shows only as a provenance failure, on a version that can never be republished.
+
 | Export | Points at | Why |
 |---|---|---|
 | `.` | `src/report_core.ts` | the programmatic API is the pure core — importing it has no side effects |

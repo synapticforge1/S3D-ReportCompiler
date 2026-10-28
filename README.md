@@ -416,6 +416,21 @@ Two limits worth knowing before you rely on it:
 
 ---
 
+### ⚠️ Breaking Changes
+
+Versions follow [Semantic Versioning 2.0.0](https://semver.org/): a breaking change bumps the major.
+`bun run bump` will not let a release claim less — it diffs the package's API surface (the exports,
+every exported symbol's signature, and the CLI's options) against the last release and refuses a
+bump below what that diff requires. Removals are deprecated for at least one minor release first,
+and each lands here with its migration.
+
+| Version | What changed | How to migrate |
+|---|---|---|
+| _next release_ | nothing breaking | — |
+| 1.0.0 – 1.0.4 | nothing breaking (1.0.2 added the `./cli` export) | — |
+
+---
+
 ## 🗺️ Roadmap
 
 **Legend:** ✅ shipped · ⏳ planned or deliberately deferred. Incomplete items are listed last.
