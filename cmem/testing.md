@@ -195,18 +195,24 @@ reason. It automates the negative controls above and `tests/controls/README.md`:
 
 | test | asserts |
 |---|---|
-| the 13 samples | exit 0; 2203 expressions, 0 failed; 100 pages; 0 missing; per-report 13/13; 13 images, 13 diagrams; 0 LaTeX, 0 blank; PASS |
+| the 13 samples | exit 0; 2203 expressions, 0 failed; ≥ 1 page per report (never an exact count — below); 0 missing; per-report 13/13; 13 images, 13 diagrams; 0 LaTeX, 0 blank; PASS |
 | unknown delimiter | exit 1; "97 expressions, 0 failed" AND the guard's error, 250 TeX commands; never verifies; no PDF |
 | colliding `{{..}}` | exit 1; the guard's error, 205 TeX commands; no PDF |
 | hidden content, one report | exit 1; 171 words / 114 numbers missing; 1 blank page; "content missing from the PDF" |
 | a row hidden in the 2nd of two copies | exit 1; set-wide **0 missing** (pinned — the union limit), per-report `b_report.html: 5 word(s) … internal, forces, absolute, force, bending`; NOT "missing from the PDF" |
-| custom delimiters declared | exit 0; 169 expressions; 8 pages; PASS |
+| custom delimiters declared | exit 0; 169 expressions; ≥ 1 page; PASS |
 | `$$..$$` in a second report | exit 0; 338 expressions; the two-delimiter-set warning; per-report 2/2; no `$$` in the bake |
 | unknown flag | exit 1; `Unknown option(s): --no-optimise`; nothing compiled |
 | stale PDF, a "Chrome" that writes nothing | non-zero; "Chrome produced no PDF"; no `Created`; the stale PDF is gone (the stub is the test's own runtime as `CHROME_PATH`) |
 | relative input/output paths (#22) | exit 0; `out/custom-name.pdf` and `.html` exist |
 | sanitizer, clean / leaked | invented values planted in all three fields of a sample under a temp `local/` (no client data): ✓ 6 tokens verified absent / ❌ `1 removed term(s) still present: Zorblax` |
 | every `tests/controls/control-*.ts` is exercised | "a run of nothing is not a pass" |
+
+⚠️ **The page count is layout, not content — never pin it.** The first CI run (40733829258) failed
+`/^100 pages,/`: GitHub's Ubuntu runner renders the 13 samples to **103** pages (Windows: 100),
+with everything else identical — 0 missing, 13/13 per report, PASS. Fonts differ by platform. The
+suite asserts ≥ 1 page per report instead; conservation is what the counts of words, numbers,
+images and diagrams prove.
 
 ⚠️ The sample is ALREADY sanitized, so its fields hold the placeholders the sanitizer writes —
 re-sanitizing it reports them as leaks (7 "survivors"). The fixture plants invented values instead.

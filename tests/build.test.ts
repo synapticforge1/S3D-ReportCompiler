@@ -76,6 +76,16 @@ function hasNot(out: string, ...patterns: RegExp[]) {
 }
 const tail = (s: string) => s.trim().split("\n").slice(-25).join("\n");
 
+/**
+ * The page count is LAYOUT, not content: it follows the platform's fonts (the 13 samples are 100
+ * pages on Windows, 103 on GitHub's Ubuntu runner — measured 2026-10-28), so it is never pinned.
+ * What holds everywhere: every report starts on its own page.
+ */
+function atLeastOnePagePerReport(out: string, reports: number) {
+  const pages = Number(/^(\d+) pages,/m.exec(out)?.[1] ?? Number.NaN);
+  assert.ok(pages >= reports, `${pages} page(s) for ${reports} report(s):\n${tail(out)}`);
+}
+
 // ── the committed samples ────────────────────────────────────────────────────
 
 test("the 13 samples build, verify and PASS at their baseline", { timeout: TIMEOUT }, () => {
@@ -86,13 +96,13 @@ test("the 13 samples build, verify and PASS at their baseline", { timeout: TIMEO
     r.out,
     /Compiling 13 report\(s\)/,
     /math:\s+2203 expressions, 0 failed/,
-    /^100 pages,/m,
     /missing:\s+0 word\(s\), 0 number\(s\)/,
     /per-report: 13\/13 reports hold all their own words and numbers/,
     /graphics: 13 image paint\(s\), 13 expected; 13 diagram\(s\) checked, intact/,
     /latex:\s+0 surviving, 13\/13 reports, 0 blank page\(s\)/,
     /PASS: every source word and number present/,
   );
+  atLeastOnePagePerReport(r.out, 13);
   assert.ok(existsSync(pdf), "no PDF");
 });
 
@@ -171,10 +181,10 @@ test(
       r.out,
       /delims:.*@@\.\.@@.*%%\.\.%%/,
       /math:\s+169 expressions, 0 failed/,
-      /^8 pages,/m,
       /per-report: 1\/1 reports/,
       /PASS: every source word and number present/,
     );
+    atLeastOnePagePerReport(r.out, 1);
   },
 );
 
