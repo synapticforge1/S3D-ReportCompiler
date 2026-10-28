@@ -827,7 +827,9 @@ January 2027 target. So the bootstrap token must be a granular token, Read and w
 `@synapticforge1`, **bypass 2FA**, not stage-only. The owner renamed the secret to `NPM_TOKEN`;
 main's job reads `NPM_TOKEN || NPM_PUBLISH` (the v1.1.2 tag's copy reads only `NPM_PUBLISH`). For
 LATER versions on npm, the npm-recommended pairing is trusted publishing + staged publishing
-(owner's call). After the first npm version: on npm, the
+(owner's call). Run 40745632990 (dispatch, 18:29) was AGAIN started from `release/v1.1.2` → that
+copy reads only `NPM_PUBLISH` (gone) → no token → `ENEEDAUTH`. Three of three manual runs picked a
+`release/v*` branch in "Use workflow from": the trap is the UI, not a slip. After the first npm version: on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.
