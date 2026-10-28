@@ -865,7 +865,11 @@ still said `package not found` → npm holds no trusted publisher matching this 
 Fix: the trusted publisher ON the package — `npm trust github @synapticforge1/s3d-reportcompiler
 --file publish.yml --repo synapticforge1/S3D-ReportCompiler --allow-publish` (npm ≥ 11.15, logged
 in with 2FA), or its Settings → Trusted publishing; then "Re-run failed jobs" on 1.1.4's publish
-run (OIDC is tried before the token). After the first npm version: on npm, the
+run (OIDC is tried before the token). **Done by the owner 2026-10-28** (`npm trust`: type github,
+`publish.yml`, `synapticforge1/S3D-ReportCompiler`, permissions publish + stage publish). Owner:
+"rerun it without the token" — the `NPM_TOKEN` secret is deleted before the re-run (the v1.1.4
+tag's copy uses a token only if the secret exists), and main's `publish.yml` has NO token path
+any more: OIDC only. After the first npm version: on npm, the
 package's trusted publisher (`synapticforge1` / `S3D-ReportCompiler` / `publish.yml` / no
 environment) and "require 2FA and disallow tokens" → revoke the token, delete the secret. Then
 every later version publishes by OIDC with no token.

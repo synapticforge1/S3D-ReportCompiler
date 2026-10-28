@@ -217,27 +217,18 @@ jobs:
       # On failure, npm's own error goes into an ANNOTATION: job logs need a signed-in GitHub
       # session, annotations are public — the 1.1.1 failure showed only "exit code 1".
       #
-      # BOOTSTRAP: npm attaches a trusted publisher only to a package that EXISTS (owner,
-      # 2026-10-28), so the very first version cannot authenticate by OIDC. For that one publish
-      # the owner sets a short-lived granular token as the repository secret NPM_PUBLISH; npm tries
-      # OIDC, falls back to it, and still signs provenance with this run's OIDC token. Then: trusted
-      # publishing on the package, token revoked, secret deleted — and this branch goes unused.
+      # OIDC ONLY — no npm token exists for this package. The trusted publisher is set ON the
+      # package (it can only be once the package exists, so 1.1.0 was published by hand); a token
+      # bootstrap was tried for the first version and failed on npm's 2FA (EOTP), and is gone
+      # (owner, 2026-10-28: "rerun it without the token"). cmem/roadmap.md task 15 has the story.
       - name: Publish to npm
         working-directory: dist
         shell: bash
-        env:
-          # The owner named the secret NPM_PUBLISH, then NPM_TOKEN (2026-10-28); either works.
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN || secrets.NPM_PUBLISH }}
         run: |
           NAME=$(node -p 'require("./package.json").name')
           if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
             echo "::notice::${NAME}@${VERSION} is already on npm — nothing to publish."
             exit 0
-          fi
-          if [ -n "${NPM_TOKEN}" ]; then
-            echo "::warning::Publishing with the bootstrap token secret (first-publish bootstrap). Set up trusted publishing on the package, revoke the token and delete the secret."
-            # npm expands ${NPM_TOKEN} itself; the token is never written into a file.
-            echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' > "$HOME/.npmrc"
           fi
           npm --version
           # --loglevel verbose: the trusted-publishing (OIDC) exchange is logged only at verbose.
