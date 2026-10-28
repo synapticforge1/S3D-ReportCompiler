@@ -68,7 +68,7 @@ import { AllPackages } from "mathjax-full/js/input/tex/AllPackages.js";
  * Package version. Written by `bun run update-version` from jsr.json, which
  * is the single source of truth -- do not edit this by hand.
  */
-export const VERSION = "1.0.4";
+export const VERSION = "1.1.0";
 
 /**
  * CDN base the MathJax CHTML web fonts are fetched from, once, before being
