@@ -225,7 +225,17 @@ committing any binary derived from client input, extract its text and look.
 
 ---
 
-## 🟡 4. Finish removing the session log from the machine — all but the live one done (2026-10-28)
+## ✅ 4. Finish removing the session log from the machine — DONE 2026-10-28 (owner: "Delete the old session log")
+
+**Done 2026-10-28:** the 2026-10-26 → 28 session's log re-exported over **part 4** (3,122 turns,
+21.2 MB log → 1.6 MB, 0 base64 runs, through the `publish.yml` CI gate), then the `.jsonl` and its
+session folder (two saved tool outputs) DELETED, and the old-slug project folder (only an empty
+`memory/`) removed. What remains under `~/.claude/projects/` for this project: an empty `memory/`.
+⚠️ Claude Code recreates the live log for the rest of the session that deleted it: that tail, and
+every later session's log, is exported as the next part and deleted when its session ends — the
+same routine, not an open task.
+
+*The record before, kept:*
 
 Owner: "perform" (2026-10-28). Exported with `bun tests/controls/export-transcript.ts` into the
 git-ignored `cmem/transcript/`: **part 3** (the 2026-10-22 session, logged under the project's OLD
