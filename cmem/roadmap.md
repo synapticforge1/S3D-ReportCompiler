@@ -21,7 +21,7 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26) |
 | Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; Deno only for `deno publish`, the JSR doc checks and `deno doc` for the API surface, and `deno.json` until task 12 step 7 (2026-10-28) |
 | API surface | `api-surface.txt`, 66 lines; floor since v1.0.4 = patch (`bun run compat`, 2026-10-28) |
-| `npm audit` | 1 high + 1 moderate, `@xmldom/xmldom` 0.9.10 under `mathjax-full` (task 13; 2026-10-26) |
+| `npm audit` | **0 vulnerabilities** since the `@xmldom/xmldom` 0.9.12 override (task 13; 2026-10-28) |
 
 🔁 **Corrected 2026-10-26:** this memory said "1.0.4 is staged and unreleased" for two and a half
 months after 1.0.4 had shipped attested on 2026-08-12. Nothing re-read JSR in between.
@@ -690,7 +690,18 @@ pdfmake spike retired, a new `node:test` suite, no npm; push and settle the purg
 
 ---
 
-## 🔴 13. Override `@xmldom/xmldom` to 0.9.12 — owner: "Override to 0.9.12" (2026-10-26)
+## ✅ 13. Override `@xmldom/xmldom` to 0.9.12 — DONE 2026-10-28
+
+Owner: "Override to 0.9.12" (2026-10-26), "yes, override" (2026-10-28). Measured first: **the build
+never loads `speech-rule-engine`** — with it hidden the sample build PASSES with the identical baked
+document — so the advisories were never reachable from the build. `package.json` `"overrides":
+{ "@xmldom/xmldom": "0.9.12" }`; the lockfile moved by that one package (3 lines); `npm audit` →
+0 vulnerabilities. Full gate identical: samples `7F283563003F` on Deno, Bun, Node 24 and all six
+runtimes; the 48-report set 380 pages, 8,286 / 0 failed, `A19E5AD15E3F`. ⚠️ An override binds this
+repo's installs only: a user of the JSR package resolves `mathjax-full`'s dependencies with their own
+package manager (where the vulnerable code is, again, never loaded by this package).
+
+The plan as written:
 
 `npm audit` (2026-10-26): `@xmldom/xmldom` 0.9.10 **high** (a run of injection / ReDoS / quadratic
 advisories, affected range 0.9.0-beta.1 – 0.9.11) and `speech-rule-engine` **moderate** (through it).
