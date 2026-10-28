@@ -10,6 +10,8 @@ remove: the compat gate's `deno doc --json` (→ the `.d.ts` tsc emits); `deno d
 `deno check --doc`, `deno publish --dry-run` and `check:deno` (→ CI); the Deno legs of
 `bun run runtimes` and `npm:prove` (→ the CI matrix — Deno USERS stay supported and tested there);
 `deno.json` (→ step 7). Order: CI first, then the local copies come out.
+**Done 2026-10-28: the compat gate** reads tsc's emitted `.d.ts` instead of `deno doc --json`
+(proof and inversion in [testing.md](testing.md) § Compatibility gate).
 
 **Status 2026-10-26 (end of day): steps 2, 3 and 4 DONE and merged** (`a222adf`, `78f9ac8`,
 `129fd0a`); step 1 MEASURED and folded into step 7 (§ "Step 1, measured" — binaryang's step 1
