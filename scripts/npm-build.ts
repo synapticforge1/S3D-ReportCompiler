@@ -72,7 +72,9 @@ const manifest = {
   type: "module",
   exports: exportsMap,
   types: exportsMap["."].types,
-  bin: { "s3d-reportcompiler": "./main.js" },
+  // No "./": npm 12's `npm publish` calls "./main.js" an invalid bin and DROPS it (measured
+  // 2026-10-28, dry run), while `npm pack` and an install from the tarball keep it.
+  bin: { "s3d-reportcompiler": "main.js" },
   files: ["main.js", "main.d.ts", "src/", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"],
   dependencies: pkg.dependencies,
   engines: { node: `>=${floor}` },

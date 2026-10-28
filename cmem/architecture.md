@@ -133,8 +133,12 @@ JSR; one path: `.github/workflows/publish.yml` on a `v*` tag, `id-token: write`,
 GitHub OIDC — no token anywhere. **npm is the second registry** (owner, 2026-10-28; roadmap task 15):
 `@synapticforge1/s3d-reportcompiler`, built by `bun run npm:build` into `dist/` (compiled JS +
 `.d.ts`, a generated manifest with a `bin`) and proven by `bun run npm:prove` — not yet published.
-Its trusted publisher does not exist yet; the owner creates it under the `synapticforge1` npm org
-before the first npm publish (H20's lesson: a policy can pin ids). JSR links the package to the GitHub repository **by repository id**: its API reads
+**Its trusted publisher EXISTS** (owner, 2026-10-28): it names `.github/workflows/publish.yml` and no
+environment — so that file must not be renamed and its npm job must not gain an environment.
+`publish.yml`'s `npm` job (2026-10-28) runs after the JSR job on a tag, or alone on "Run workflow"
+with a tag; it checks the built version equals the tag, refuses any manifest `npm publish` would
+auto-correct, skips a version already on npm, then `npm publish` with the run's OIDC token (no npm
+token anywhere). Not yet run. JSR links the package to the GitHub repository **by repository id**: its API reads
 `githubRepository` = `synapticforge1/S3D-ReportCompiler`, id `1328030455` — GitHub's id for that
 repository (owner `synapticforge1`, id `342141589`, Organization). ⚠️ **JSR does not follow a
 transfer or a rename on its own** (binaryang measured it, its `cmem/publishing.md`): the link here

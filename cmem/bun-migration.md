@@ -84,7 +84,8 @@ folder shared with Bun hides it); Bun resolves no `npm:` specifier; `setup-deno`
   rewriting, so a new Deno is caught by CI before a tag — floating is acceptable; § 5a's exact pin
   matters where Deno output feeds snapshots, which nothing here does since compat moved to tsc.
 
-**Suggested for the guide (to hand over — ledger/letter at the owner's word):**
+**Suggested for the guide — SENT 2026-10-28 as workspace ledger row C26** (owner: "send as
+workspace correspondence"; S3D is the creator, so S3D verifies and closes):
 1. § 4 step 6 still says "`deno publish --config jsr.json`". For a package with dependencies that
    is the C20 layout; with `deno.json` DELETED, s3d measured `deno publish` with NO `--config`
    correct (C5) and released 1.1.0 that way, attested. Say "no `--config` once `deno.json` is gone".
