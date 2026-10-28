@@ -467,7 +467,7 @@ and each lands here with its migration.
 
 | Version | What changed | How to migrate |
 |---|---|---|
-| _next release_ | The API is unchanged, but **the installed package's Node floor rises from 22.6 to 22.13** (`pdfjs-dist` 6 requires it). The compatibility gate does not read engine requirements, so whether this makes the next release a major is decided by the owner. | Node 22.6–22.12: move to 22.13 or later, or stay on 1.0.4 |
+| 1.1.0 | No API removed or changed (`compareEachReport` and its two types were added). **The installed package's Node floor rises from 22.6 to 22.13** (`pdfjs-dist` 6 requires it); the compatibility gate does not read engine requirements, and the owner released this as a minor (2026-10-28). | Node 22.6–22.12: move to 22.13 or later, or stay on 1.0.4 |
 | 1.0.0 – 1.0.4 | nothing breaking (1.0.2 added the `./cli` export) | — |
 
 ---
