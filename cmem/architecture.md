@@ -114,8 +114,11 @@ upload whose imports were rewritten to `./…` (bun-migration.md § "Step 1, mea
 `scripts/jsr-upload-check.ts` refuses it, in CI and before every real publish.
 
 ⚠️ **`"nodeModulesDir": "manual"` is load-bearing, not boilerplate.** It keeps Deno reading the same
-`node_modules` that `npm install` produced — the same packages, `overrides` included (the
-`@xmldom/xmldom` and `@napi-rs/canvas` pins below). Without it Deno resolves from its own global
+`node_modules` that `bun install` produced (npm until 2026-10-28) — the same packages, `overrides`
+included (the `@xmldom/xmldom` and `@napi-rs/canvas` pins below). **Bun honours both overrides**,
+measured 2026-10-28: `bun install` migrated `package-lock.json` to `bun.lock` and installed the SAME
+20 package versions npm had (pins included), and the samples bake the same document (`7F283563003F`).
+`package-lock.json` is deleted — one lockfile. Without it Deno resolves from its own global
 cache, independently of this lockfile — whether it would then apply `package.json` `overrides` is
 UNMEASURED, so do not rely on it. (Until 2026-10-28 the reason given here was
 `.npmrc`'s `omit=optional`, since removed.)

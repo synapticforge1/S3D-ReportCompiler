@@ -280,12 +280,12 @@ original set (`HSS6x6x3/16` and all three `HSS12x12x5/8` members):
 
 ```bash
 git clone https://github.com/synapticforge1/S3D-ReportCompiler
-cd S3D-ReportCompiler && npm install
-cd tests && deno run -A ../main.ts
+cd S3D-ReportCompiler && bun install
+cd tests && bun ../main.ts
 ```
 
 ```
-Compiling 13 report(s) on deno
+Compiling 13 report(s) on bun
   math:     2203 expressions, 0 failed
 100 pages, 0.99 MB
   checked:  173 words, 342 numbers from 13 source(s)

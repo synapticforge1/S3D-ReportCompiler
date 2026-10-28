@@ -25,7 +25,7 @@ cd local && node ../main.ts              # same, on Node
 
 **On GitHub, not here: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)**, on every push
 and PR (🔒 owner, 2026-10-28: no Deno on this machine). It repeats the checks above from a bare
-checkout (`npm ci`), and runs what needs Deno, installed per run by `setup-deno`: `deno check`,
+checkout (`bun install --frozen-lockfile`; `npm ci` until 2026-10-28), and runs what needs Deno, installed per run by `setup-deno`: `deno check`,
 `deno doc --lint src/*.ts` (docs coverage, a scored JSR criterion), `deno check --doc src/*.ts` (the
 JSDoc examples compile), `deno publish --dry-run` (JSR validation, slow types included), and the
 Deno legs of `runtimes` and `npm:prove` (`--deno`; `--install-node` installs the Node lines with
@@ -40,9 +40,10 @@ with nothing installed:
 ```bash
 git clone <repo> /tmp/cirepro && cd /tmp/cirepro
 deno publish --dry-run          # must fail without deps — that IS the CI condition
-npm ci && deno publish --dry-run  # must succeed
+bun install --frozen-lockfile && deno publish --dry-run  # must succeed
 ```
 
+(That needs Deno — on this machine it runs in CI only; the JSR job does exactly this.)
 This is how bug #23 was found, one failed release too late: the workflow had no `npm ci`, so
 `deno publish` could not resolve `mathjax-full` under `"nodeModulesDir": "manual"`.
 
@@ -363,6 +364,11 @@ and REMOVED it — a published package with no command, with only a warning — 
 `npm exec` and every check above passed. `npm-build` now writes `"main.js"`, and `npm:prove`
 checks that the dry run corrects nothing (inverted: the old `"./main.js"` → ❌ with npm's own
 warning, exit 1). `publish.yml`'s npm job runs the same refusal before the real publish.
+⚠️ **The dry run runs on a COPY under `<version>-prove.0` (`--tag prove`).** Once 1.1.4 was on npm,
+a dry run of the tree's own version failed "You cannot publish over the previously published
+versions" — CI on main went red on every commit after the release (runs from 19:28Z, 2026-10-28),
+which the `publish.yml` CI gate would have turned into a refused next release. Fixed and re-inverted
+(the old bin still ❌). The workflow's step skips a version npm already has.
 
 ⚠️ **Dropping `LICENSE` from `files` is not a breakage**: npm packs `LICENSE`, `README` and
 `package.json` regardless — the first mutant tried was that one, and the proof correctly passed it.

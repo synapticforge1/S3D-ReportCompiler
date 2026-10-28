@@ -23,7 +23,7 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; no Deno locally since 2026-10-28 (🔒 owner goal, [bun-migration.md](bun-migration.md)): compat reads tsc `.d.ts`; `cli:*` install via npm; JSR's checks (`deno check`, `doc --lint`, `check --doc`, `publish --dry-run`, the upload check) and the Deno legs of `runtimes` / `npm:prove` run in `.github/workflows/ci.yml`; Deno publishes from `publish.yml`; the manifest is `jsr.json` (no `deno.json`, task 12 step 7) |
 | API surface | `api-surface.txt`, 69 lines; v1.1.0 released at floor minor (`compareEachReport` and two types added; the Node 22.13 floor counted as minor, owner); the floor resets against `v1.1.0` from here |
 | Verification | set-wide AND per-report conservation (task 7, 2026-10-28); pdfjs-dist 6.4.299, no polyfill warnings (task 14) |
-| `npm audit` | **0 vulnerabilities** since the `@xmldom/xmldom` 0.9.12 override (task 13; 2026-10-28) |
+| Dependencies | **Bun installs them** (`bun.lock`; owner, 2026-10-28: "dependency installs should go to bun, because it is faster") — the same 20 package versions as npm's lockfile, ~2× faster warm (15.4 s vs `npm ci` 29.4 s); `bun audit`: **no vulnerabilities** (49 packages; `npm audit` 0 since the `@xmldom/xmldom` 0.9.12 override, task 13) |
 
 🔁 **Corrected 2026-10-26:** this memory said "1.0.4 is staged and unreleased" for two and a half
 months after 1.0.4 had shipped attested on 2026-08-12. Nothing re-read JSR in between.
@@ -499,7 +499,8 @@ Two traps the ordinary checks do not cover, both hit for real:
 - `deno publish --dry-run` in the working tree cannot see a missing dependency-install step. See
   bug #23.
 
-`npm install` (or `npm ci`) is required after any clone, for Deno as well as Node and Bun —
+`bun install` (CI: `bun install --frozen-lockfile`; npm until 2026-10-28) is required after any
+clone, for Deno as well as Node and Bun —
 `"nodeModulesDir": "manual"` means Deno reads the same `node_modules` rather than its own cache.
 
 ⚠️ **Git refuses to operate on this drive until it is trusted.** D: does not record ownership, so every

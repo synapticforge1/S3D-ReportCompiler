@@ -23,7 +23,15 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -126,7 +134,16 @@ try {
 
   // `npm publish` validates the manifest more strictly than `npm pack` and SILENTLY repairs what it
   // dislikes — it dropped a "./main.js" bin (2026-10-28). A dry run (no registry write) shows it.
-  const dry = npm(["publish", "--dry-run", "--access", "public"], dist);
+  // It runs on a COPY under a throwaway prerelease version: between releases the tree's version is
+  // already on npm, and a dry run of it fails "cannot publish over the previously published
+  // versions" — on every commit after a release (measured 2026-10-28, after 1.1.4).
+  const dryDir = join(work, "dry-run");
+  cpSync(dist, dryDir, { recursive: true });
+  writeFileSync(
+    join(dryDir, "package.json"),
+    `${JSON.stringify({ ...manifest, version: `${manifest.version}-prove.0` }, null, 2)}\n`,
+  );
+  const dry = npm(["publish", "--dry-run", "--access", "public", "--tag", "prove"], dryDir);
   const corrected = dry.out
     .split("\n")
     .filter((l) => /auto-corrected|errors corrected|was invalid and removed/.test(l));
