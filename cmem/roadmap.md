@@ -734,14 +734,32 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
   `60025f640`, `8d9ba0cb9`; `b8fafaa3f` (best-practices 6.1) is quoted ON PURPOSE as the id
   before binaryang's FIRST purge and stays. The answer is in binaryang's row; binaryang closes it.
   (The workspace ledger's C20/C21 rows quote the old ids too — those are the workspace's to
-  translate, as C26 lists.)
+  translate, as C26 lists.) **✅ CLOSED by binaryang 2026-11-05**: its 398-pair re-scan verified
+  this repo ("S3D-ReportCompiler ✅ verified … nothing stale"); all four recipients done.
 
-- Answered here; the workspace closes them: **H26 ✅ closed** by the workspace 2026-10-28; **H15** and
-  **H19** still open in the ledger on 2026-10-28 (multi-repo rows — other repos' parts and the
-  owner's GitHub Support requests remain), nothing left in them for this repo. **H6** answered
-  2026-10-28 (SemVer, the ★ block, the memory layout, and the compatibility gate —
-  testing.md § Compatibility gate); **H20** answered 2026-10-28 (one JSR path by GitHub OIDC, linked
-  by repository id, already re-linked to the org — architecture.md § JSR packaging).
+**Status of every ledger row naming this repo — re-read 2026-11-05.** Nothing in the ledger waits on
+this repo. One item is the owner's (H19). The rows still open stay open only for OTHER repos; the
+workspace closes them.
+
+| Row | Ledger | This repo's part |
+|---|---|---|
+| H26 | ✅ closed 2026-10-28 | answered (task 11 above) |
+| H20 | ✅ closed by the workspace 2026-11-05 | answered 2026-10-28 (one JSR path by GitHub OIDC, linked by repository id — architecture.md § JSR packaging); 1.1.0 → 1.1.7 released from the org measured as the proof |
+| C26 | ✅ closed by binaryang 2026-11-05 | verified, above |
+| C20, C21, C27 | ✅ closed 2026-10-28 (this repo's own) | above |
+| H6 | open — wasmtk H6.5b (🗓️ owner) and loader-go | ✅ **verified done by the workspace 2026-11-05**: `ci.yml` runs `bun run compat`, `publish.yml` publishes nothing unless CI passed on the tagged commit (testing.md § Compatibility gate) |
+| H15 | open — loader-go | ✅ verified by the workspace 2026-10-28 (scripts and controls on Bun, `129fd0a`) |
+| H22 | open — loader-go | ✅ verified by the workspace 2026-10-28 (the path test, INDEX § Privacy) |
+| H28 | open — rsxtk, loader-go | ✅ verified by the workspace 2026-10-30 (below) |
+| H19 | open — the owner's GitHub Support requests | purged and force-pushed 2026-10-26; 🗓️ **OWNER: the GitHub Support request** to drop old commits served by hash (item 2 above) — this repo's only open item in the ledger |
+
+- **H28 ✅ this repo's part VERIFIED by the workspace 2026-10-30** (ledger: "S3D ✅ (`cmem/INDEX.md:35-37`,
+  'This repo has no such note')"). Re-measured 2026-11-05: the maintainer address is on commits
+  only — `git grep` finds no address in any tracked file (the one email-like string is
+  `test@example.invalid` in `tests/build.test.ts`), `package.json` / `jsr.json` carry no author or
+  email field, no `cmem/` contact note; wabt-ts / binaryen-ts appear only as origin tags inside
+  the verbatim ★ block (`best-practices.md`), no link, pin or `../` path. The row stays open in the
+  ledger for rsxtk and loader-go only; the workspace closes it.
 
 ---
 
