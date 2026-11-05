@@ -225,8 +225,26 @@ function diff(oldLines: string[], newLines: string[]) {
   return { floor, removed, changed, added };
 }
 
-function lastTag(): string {
-  const r = run("git", ["describe", "--tags", "--abbrev=0", "--match", "v*", "HEAD"], ROOT);
+/**
+ * The newest v* tag reachable from HEAD, never `exclude`. A release is never its own baseline:
+ * retrying an UNPUBLISHED version (publish.ts moves its tag, by design) found that version's
+ * stranded tag and refused "1.1.6 is not above v1.1.6" (2026-11-05, after CI failed the first
+ * v1.1.6 tag and nothing was published).
+ */
+function lastTag(exclude?: string): string {
+  const r = run(
+    "git",
+    [
+      "describe",
+      "--tags",
+      "--abbrev=0",
+      "--match",
+      "v*",
+      ...(exclude ? ["--exclude", exclude] : []),
+      "HEAD",
+    ],
+    ROOT,
+  );
   if (r.code !== 0) throw new Error(`no v* tag reachable from HEAD: ${r.err}`);
   return r.out.trim();
 }
@@ -308,7 +326,7 @@ function previousSamples(tag: string): boolean {
   }
 }
 
-function gate(kind: Kind, label: string): number {
+function gate(kind: Kind, label: string, exclude?: string): number {
   const now = surface(ROOT);
   const snap = committed();
   if (now.join("\n") !== snap.join("\n")) {
@@ -321,7 +339,7 @@ function gate(kind: Kind, label: string): number {
     );
     return 1;
   }
-  const tag = lastTag();
+  const tag = lastTag(exclude);
   const d = diff(surfaceAt(tag), snap);
   console.log(`compat gate for ${label} (${kind}):`);
   printDiff(d, tag);
@@ -365,7 +383,7 @@ try {
   } else if (cmd === "gate" && (arg === "patch" || arg === "minor" || arg === "major")) {
     process.exit(gate(arg, `a ${arg} bump`));
   } else if (cmd === "release" && /^\d+\.\d+\.\d+$/.test(arg ?? "")) {
-    const tag = lastTag();
+    const tag = lastTag(`v${arg}`);
     const [a, b] = [tag.slice(1).split(".").map(Number), arg.split(".").map(Number)];
     const kind: Kind | null =
       b[0] > a[0]
@@ -379,7 +397,7 @@ try {
       console.error(`❌ ${arg} is not above ${tag}.`);
       process.exit(1);
     }
-    process.exit(gate(kind, `v${arg}`));
+    process.exit(gate(kind, `v${arg}`, `v${arg}`));
   } else {
     console.error(
       "usage: compat.ts surface [--write] | check | gate <patch|minor|major> | release <X.Y.Z>",

@@ -277,6 +277,11 @@ tag was moved to the fix by the release's designed retry. Reproduced with no run
 auth; no `gh` here) by running the Chrome-free tests in WSL Ubuntu (Bun, no Chrome) on a clone.
 Fixed: POSIX checkouts and `/home/<u>`, `/Users/<u>`, `/root` homes and their slugs; the test now
 also asserts the checkout path itself is gone. 7/7 Chrome-free tests on WSL, 24/24 on Windows.
+🔁 Then the retry itself was refused: `compat.ts release 1.1.6` took the newest tag, the stranded
+`v1.1.6`, as its baseline ("1.1.6 is not above v1.1.6") — the gate never allowed for the retry
+`publish.ts` supports by design. Fixed: a release excludes its own tag (`git describe --exclude
+v<X.Y.Z>`); measured: `release 1.1.6` → vs v1.1.5, patch, samples PASS, exit 0; `release 1.1.5` →
+still refused.
 
 ⚠️ **The page count is layout, not content — never pin it.** The first CI run (40733829258) failed
 `/^100 pages,/`: GitHub's Ubuntu runner renders the 13 samples to **103** pages (Windows: 100),
