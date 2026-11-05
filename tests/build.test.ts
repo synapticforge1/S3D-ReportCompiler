@@ -440,8 +440,8 @@ test(
 
 test("the redactor removes checkout, drive and slug paths, and fails on a residue", () => {
   const redact = join(ROOT, "tests", "controls", "redact-paths.ts");
-  // Built from this checkout's real location at run time, so the file names no path. On a
-  // runner whose checkout is not on a drive letter the project rule simply does not apply.
+  // Built from this checkout's real location at run time, so the file names no path. Runs on
+  // Windows (a drive checkout) and on Linux CI (a POSIX one) -- both must come out clean.
   const root = ROOT.replace(/[\\/]+$/, "");
   const slug = root.replace(/[:\\/]/g, "-");
   const file = join(work, "transcript.md");
@@ -475,6 +475,10 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
     `a drive path survived:\n${text}`,
   );
   assert.ok(!text.includes(slug), `the project slug survived:\n${text}`);
+  // The checkout itself, as written, on every platform (a POSIX checkout once went through).
+  for (const form of [root, root.replace(/\\/g, "/")]) {
+    assert.ok(!text.includes(form), `the checkout path survived:\n${text}`);
+  }
   assert.ok(text.includes("https://github.com/synapticforge1/S3D-ReportCompiler stays"), text);
   // POSIX drive spellings, a folder name with spaces, network paths.
   for (const leak of ["/mnt/", "/j/Archive", "Vendor Tool", "Files\\", "fileserver7", "job-41"]) {

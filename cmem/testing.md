@@ -269,6 +269,15 @@ use — so a fake JSR on 127.0.0.1 drives every verdict (rows above). The fake r
 process, so those tests spawn asynchronously; `spawnSync` would block the server's event loop.
 Still unexercised: nothing in the three review rounds.
 
+⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
+on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
+(`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in
+`publish.yml` refused ("CI passed on the tagged commit": failure), so NOTHING was published; the
+tag was moved to the fix by the release's designed retry. Reproduced with no runner log (it needs
+auth; no `gh` here) by running the Chrome-free tests in WSL Ubuntu (Bun, no Chrome) on a clone.
+Fixed: POSIX checkouts and `/home/<u>`, `/Users/<u>`, `/root` homes and their slugs; the test now
+also asserts the checkout path itself is gone. 7/7 Chrome-free tests on WSL, 24/24 on Windows.
+
 ⚠️ **The page count is layout, not content — never pin it.** The first CI run (40733829258) failed
 `/^100 pages,/`: GitHub's Ubuntu runner renders the 13 samples to **103** pages (Windows: 100),
 with everything else identical — 0 missing, 13/13 per report, PASS. Fonts differ by platform. The

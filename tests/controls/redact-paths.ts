@@ -88,16 +88,30 @@ const ANY_PATH = String.raw`${DRIVE}(?:${SEP}${MID})*${SEP}${SEGMENT}`;
 // a ":" or another backslash, so a drive path's own separators never start one.
 const UNC = String.raw`(?<![\w:\\])(?:\\{4}|\\{2})[A-Za-z0-9_.$-]+\\{1,2}${SEGMENT}(?:${SEP}${MID})*(?:${SEP}${SEGMENT})?`;
 
-/** This checkout, and the folder holding it, in any separator and any drive spelling. */
+/**
+ * This checkout, and the folder holding it, in any separator and any drive spelling. A
+ * POSIX checkout (`/home/<user>/…`, as on Linux and macOS, CI included) counts as much as a
+ * Windows one: it once returned nothing there, and the checkout path and its slug went
+ * through untouched (caught by CI on the first 1.1.6 tag, 2026-11-05).
+ */
 const fromHere = (rel: string) => {
   const abs = fileURLToPath(new URL(rel, import.meta.url)).replace(/[\\/]+$/, "");
   const [drive, ...segs] = abs.split(/[\\/]+/);
-  return /^[A-Za-z]:$/.test(drive) && segs.length > 0
-    ? {
-        path: [driveRe(drive[0]), ...segs.map(escape)].join(SEP),
-        slug: [drive[0], "", ...segs].join("-"),
-      }
-    : null;
+  if (segs.length === 0) return null;
+  if (/^[A-Za-z]:$/.test(drive)) {
+    return {
+      path: [driveRe(drive[0]), ...segs.map(escape)].join(SEP),
+      slug: [drive[0], "", ...segs].join("-"),
+    };
+  }
+  if (drive === "") {
+    // "/home/u/repo": Claude's slug is "-home-u-repo".
+    return {
+      path: String.raw`(?<![\w.~-])${SEP}${segs.map(escape).join(SEP)}`,
+      slug: ["", ...segs].join("-"),
+    };
+  }
+  return null;
 };
 const PROJECT = fromHere("../../");
 const WORKSPACE = fromHere("../../../");
@@ -132,6 +146,13 @@ const RULES: Array<[RegExp, string]> = [
     : []),
   [rule(`Users${SEP}${SEGMENT}${SEP}AppData`), "<home>/AppData"],
   [rule(`Users${SEP}${SEGMENT}`), "<home>"],
+  // POSIX homes: /home/<user> (Linux), /Users/<user> (macOS), /root.
+  [
+    new RegExp(String.raw`(?<![\w.~-])/(?:home|Users)/[^/\s"']+|(?<![\w.~-])/root(?=/)`, "g"),
+    "<home>",
+  ],
+  // Claude's slug of a POSIX home path: "-home-<user>-…".
+  [/(?<![A-Za-z0-9-])-(?:home|Users)-[A-Za-z0-9_.-]+/g, "<home-slug>"],
   // Claude Code flattens a working directory into a slug for its own storage
   // paths -- e.g. "C--Users-<name>". No separators, so the rules above miss it.
   [/(?<![A-Za-z0-9])[A-Za-z]--Users-[A-Za-z0-9_.-]+/g, "<home-slug>"],
