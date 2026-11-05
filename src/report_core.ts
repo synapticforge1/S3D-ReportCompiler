@@ -63,6 +63,11 @@ import { CHTML } from "mathjax-full/js/output/chtml.js";
 import { liteAdaptor } from "mathjax-full/js/adaptors/liteAdaptor.js";
 import { RegisterHTMLHandler } from "mathjax-full/js/handlers/html.js";
 import { AllPackages } from "mathjax-full/js/input/tex/AllPackages.js";
+import { entities as MATHJAX_ENTITIES } from "mathjax-full/js/util/Entities.js";
+// Side effect: fills MATHJAX_ENTITIES with every extension table (2125 names, measured
+// 2026-11-05), synchronously. MathJax otherwise loads them on demand, asynchronously -- which a
+// synchronous convert() cannot wait for.
+import "mathjax-full/js/util/entities/all.js";
 
 /**
  * Package version. Written by `bun run update-version` from jsr.json, which
@@ -457,8 +462,11 @@ const STYLE_BLOCK = /<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
  * `"all"`.
  */
 function styleBlockKind(attrs: string): string {
+  // The attribute NAME, not its tail: `\b` also matched data-type= and
+  // data-media=, which would drop the sheet as "not CSS" or wrap it in a media
+  // query that never matches.
   const attr = (name: string) =>
-    new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i")
+    new RegExp(`(?<![\\w:.-])${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i")
       .exec(attrs)
       ?.slice(1)
       .find((v) => v !== undefined)
@@ -560,7 +568,18 @@ RegisterHTMLHandler(adaptor);
 
 const chtml = new CHTML({ fontURL: MATHJAX_FONTS });
 const mjDoc = mathjax.document("", {
-  InputJax: new TeX({ packages: AllPackages }),
+  InputJax: new TeX({
+    packages: AllPackages,
+    // ⚠️ MathJax limitation (re-check on every MathJax update; roadmap task 8): by default a TeX
+    // error does NOT throw -- MathJax typesets an inline red error box ("Misplaced &",
+    // "Undefined control sequence") and convert() returns normally, so the bake counted it as
+    // converted and the box went into the sealed PDF. Thrown, it reaches tex2html's catch, is
+    // counted as failed, and the build refuses. (Measured 2026-11-05: 0 error boxes in the 13
+    // samples and the 48-report client set, so this changes no current output.)
+    formatError: (_jax: unknown, err: Error) => {
+      throw err;
+    },
+  }),
   OutputJax: chtml,
 });
 
@@ -629,8 +648,19 @@ const TEX_ENTITIES: Record<string, string> = {
  * the bake and the verification share no logic.
  */
 function texFromMarkup(s: string): string {
-  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
-    if (e[0] !== "#") return TEX_ENTITIES[e.toLowerCase()] ?? m;
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (m, e: string) => {
+    // Every named entity, not six: an exporter that escapes text writes `&ge;`, `&times;`,
+    // `&deg;`, and an undecoded one hands TeX a bare "&". MathJax's own table (the one its
+    // browser build reads), case-SENSITIVELY -- `&Delta;` and `&delta;` are different
+    // characters, and lower-casing the name used to turn one into the other. A name in no
+    // table is left as written, so TeX rejects it and the bake refuses the build, loudly.
+    if (e[0] !== "#") {
+      return Object.hasOwn(TEX_ENTITIES, e)
+        ? TEX_ENTITIES[e]
+        : Object.hasOwn(MATHJAX_ENTITIES, e)
+          ? MATHJAX_ENTITIES[e]
+          : m;
+    }
     const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1));
     return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
   });
@@ -642,12 +672,17 @@ function texFromMarkup(s: string): string {
  * (`style="clip-path: url(&quot;#c&quot;)"`) -- the form a report saved from a
  * browser has. Group 1 is the quote, group 2 the id.
  */
-const URL_REF = /url\(\s*("|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)\1\s*\)/gi;
+// The opening and closing quote are matched separately, not by backreference:
+// `&#34;` and `&quot;` are the same character, and a serializer may mix them
+// (`url(&#34;#g&quot;)`), which a backreference refused -- the id was renamed,
+// the reference was not. Both quotes are kept exactly as written.
+const QUOTE = `(?:"|'|&quot;|&#34;|&#39;|&apos;)`;
+const URL_REF = new RegExp(String.raw`url\(\s*(${QUOTE}?)#([^"')\s&]+)(${QUOTE}?)\s*\)`, "gi");
 
 /** Prefix the id in every `url(#id)`; with `only`, just the ids it holds. */
 function namespaceUrlRefs(text: string, prefix: string, only?: Set<string>): string {
-  return text.replace(URL_REF, (m, q = "", id) =>
-    only && !only.has(id) ? m : `url(${q}#${prefix}${id}${q})`,
+  return text.replace(URL_REF, (m, open: string, id: string, close: string) =>
+    only && !only.has(id) ? m : `url(${open}#${prefix}${id}${close})`,
   );
 }
 
@@ -696,30 +731,14 @@ export function bakeBody(src: string, prefix: string): string {
   // one element deliberately dropped, and the count is reported.
   body = removeElementById(body, "loading");
 
-  // Namespace every id rather than the two this template happens to use, so
-  // many documents can share one page without colliding.
-  const ids = new Set([...body.matchAll(ID_ATTR)].map((m) => m[3] ?? m[4]));
-  body = rewriteAttr(body, ID_ATTR, (id) => `${prefix}${id}`);
-
-  // Every reference to a renamed id has to follow it, or its target vanishes
-  // without an error -- and verification counts text and image paints, not
-  // gradients, clip paths or arrowheads. main.ts's reference check catches what
-  // this misses.
-  body = rewriteAttr(body, HREF_ATTR, (v) => (/^#./.test(v) ? `#${prefix}${v.slice(1)}` : v));
-  // SVG paint servers, clips, masks, filters and markers: url(#id), in
-  // presentation attributes, inline styles and the SVG's own <style> block.
-  // Only ids this report defines, so a url(#...) in prose is left alone.
-  body = namespaceUrlRefs(body, prefix, ids);
-  // Attributes holding one id or a space-separated list of them.
-  body = rewriteAttr(body, ID_LIST_ATTR, (list) =>
-    list
-      .split(/(\s+)/)
-      .map((t) => (ids.has(t) ? `${prefix}${t}` : t))
-      .join(""),
-  );
-
   // One left-to-right pass over every configured pair, so they cannot
   // interleave. Each pair contributes one capture group, in the same order.
+  //
+  // FIRST, before any id is touched: raw LaTeX is not markup, and `x<y ... >`
+  // or `id = 4` inside an expression once read as a tag or an attribute to the
+  // rewrites below. After this the maths is MathJax's own markup -- whose ids
+  // (\label, \eqref) are then namespaced like any other, so two reports'
+  // equation numbers cannot collide either.
   body = body.replace(buildMathRegex(delims), (...args) => {
     const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
     const i = groups.findIndex((g) => g !== undefined);
@@ -729,7 +748,46 @@ export function bakeBody(src: string, prefix: string): string {
       : tex2html(texFromMarkup(inner), delims[i].display);
   });
 
+  // Namespace every id rather than the two this template happens to use, so
+  // many documents can share one page without colliding. Attributes are read
+  // INSIDE TAGS only: unquoted values are matched (HTML allows them), and run
+  // over the whole text that would also rewrite prose -- "Member id = 4" in a
+  // report's own words.
+  const ids = new Set<string>();
+  inTags(body, (tag) => {
+    for (const m of tag.matchAll(ID_ATTR)) ids.add(m[3] ?? m[4]);
+    return tag;
+  });
+  body = inTags(body, (tag) => rewriteAttr(tag, ID_ATTR, (id) => `${prefix}${id}`));
+
+  // Every reference to a renamed id has to follow it, or its target vanishes
+  // without an error -- and verification counts text and image paints, not
+  // gradients, clip paths or arrowheads. main.ts's reference check catches what
+  // this misses.
+  body = inTags(body, (tag) =>
+    rewriteAttr(
+      rewriteAttr(tag, HREF_ATTR, (v) => (/^#./.test(v) ? `#${prefix}${v.slice(1)}` : v)),
+      // Attributes holding one id or a space-separated list of them.
+      ID_LIST_ATTR,
+      (list) =>
+        list
+          .split(/(\s+)/)
+          .map((t) => (ids.has(t) ? `${prefix}${t}` : t))
+          .join(""),
+    ),
+  );
+  // SVG paint servers, clips, masks, filters and markers: url(#id), in
+  // presentation attributes, inline styles and the SVG's own <style> block --
+  // which is not a tag, so this one runs over the text. Only ids this report
+  // defines, so a url(#...) in prose is left alone.
+  body = namespaceUrlRefs(body, prefix, ids);
+
   return portableSvg(body);
+}
+
+/** Apply `fn` to every start tag (`<name …>`), leaving text, comments and end tags alone. */
+function inTags(html: string, fn: (tag: string) => string): string {
+  return html.replace(/<[a-zA-Z][^<>]*>/g, fn);
 }
 
 /**

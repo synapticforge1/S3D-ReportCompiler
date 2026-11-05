@@ -30,7 +30,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const MAIN = join(ROOT, "main.ts");
@@ -451,6 +451,17 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
     `slash ${root.replace(/\\/g, "/")}/cmem/INDEX.md`,
     "home C:\\Users\\zorblax\\AppData\\Local\\Temp\\x.txt",
     "other J:\\Archive\\clients\\job-41\\report.html",
+    // A SIBLING of the checkout and of its workspace, sharing their names as a prefix: must not
+    // be half-matched (`<workspace>-backup\client-acme` once survived, drive gone).
+    ...(/^[A-Za-z]:/.test(root)
+      ? [
+          `sibling ${root.replace(/[\\/][^\\/]+$/, "")}-backup\\client-acme\\job.html`,
+          // Inside the workspace: <workspace>\…-old\… by design (like <project>\src\…), and
+          // never half-matched as <project>-old.
+          `sibling2 ${root}-old\\notes.txt`,
+          `slugsib ~/.claude/projects/${slug}-old/x.jsonl`,
+        ]
+      : []),
     // The same checkout as Git Bash and WSL print it, when it is on a drive letter.
     ...(/^[A-Za-z]:/.test(root)
       ? [
@@ -481,7 +492,18 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
   }
   assert.ok(text.includes("https://github.com/synapticforge1/S3D-ReportCompiler stays"), text);
   // POSIX drive spellings, a folder name with spaces, network paths.
-  for (const leak of ["/mnt/", "/j/Archive", "Vendor Tool", "Files\\", "fileserver7", "job-41"]) {
+  for (const leak of [
+    "/mnt/",
+    "/j/Archive",
+    "Vendor Tool",
+    "Files\\",
+    "fileserver7",
+    "job-41",
+    "client-acme",
+    "-backup",
+    "<project>-old",
+    "<project-slug>-old",
+  ]) {
     assert.ok(!text.includes(leak), `"${leak}" survived:\n${text}`);
   }
   assert.ok(text.includes("tool.exe ran") === false && /<path> ran/.test(text), text);
@@ -496,6 +518,58 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
     1,
     "--check passed a residue",
   );
+});
+
+// ── MathJax limitations the bake works around ────────────────────────────────
+//
+// 🔁 RE-CHECK ON EVERY MATHJAX UPDATE (owner, 2026-11-05; roadmap task 8). Each assertion pins a
+// MathJax behaviour the bake depends on, not the bake's own logic; a new MathJax that changes one
+// fails here, by name, before a report can render differently.
+
+test("MathJax limitations: entities, non-breaking spaces, ids", { timeout: TIMEOUT }, async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  // A report shell with the samples' own tex2jax config, so the delimiters are the real ones.
+  const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+  const head = sample.match(/<head[^>]*>[\s\S]*?<\/head>/i)?.[0] ?? "";
+  const bake = (body: string) => {
+    const before = core.mathStats.failed;
+    const out: string = core.bakeBody(`<html>${head}<body>${body}</body></html>`, "r9-");
+    return { out, failed: core.mathStats.failed - before };
+  };
+
+  // 1. Named entities beyond MathJax's 406-name core table (&ge; is not in it) decode only
+  //    because report_core imports `mathjax-full/js/util/entities/all.js`; MathJax otherwise
+  //    loads them asynchronously, which a synchronous convert() never waits for. Case matters.
+  //    Pinned as "typesets exactly like the character itself", not by output class: MathJax
+  //    restyles some characters (Greek becomes maths italic, U+1D6E5), which is rendering.
+  const ent = bake("[mathin]a &ge; b &times; c &Delta; &delta; 5&deg;[mathin]");
+  assert.equal(ent.failed, 0, "an entity reached TeX undecoded");
+  assert.equal(ent.out, bake("[mathin]a ≥ b × c Δ δ 5°[mathin]").out, "an entity decoded wrongly");
+  //    An entity in no table stays as written, so TeX refuses it and the build fails loudly.
+  assert.equal(bake("[mathin]a &notarealentity; b[mathin]").failed, 1, "unknown entity passed");
+
+  // 2. MathJax keeps U+00A0 in \text{} but collapses ASCII spaces: &nbsp; must decode to U+00A0
+  //    (as the DOM has it), not to a space. Same as &#160;; different from two spaces.
+  const nb = bake("[mathin]\\text{A&nbsp;&nbsp;B}[mathin]").out;
+  assert.equal(nb, bake("[mathin]\\text{A&#160;&#160;B}[mathin]").out, "&nbsp; is not U+00A0");
+  assert.notEqual(nb, bake("[mathin]\\text{A  B}[mathin]").out, "MathJax now collapses U+00A0");
+
+  // 3. CHTML emits no <svg> and no <style> of its own (portableSvg rewrites every <text> and
+  //    hoists every SVG <style>, which is safe only while that holds).
+  assert.ok(!/<svg|<style/i.test(ent.out), "MathJax's CHTML now emits SVG or a style block");
+
+  // The bake's own side of the same expressions: prose that reads like an attribute is prose.
+  const prose = bake("<p>Member id = 4, for = 2</p><g id=x></g><use href=#x />").out;
+  assert.ok(prose.includes("Member id = 4, for = 2"), "prose was rewritten as an attribute");
+  assert.ok(/id=r9-x\b/.test(prose) && /href=#r9-x\b/.test(prose), "the real tag was not");
+  // A data-* attribute on a <style> is data: the sheet is still read, unconditionally.
+  const css: string = core.bakeStyle(
+    '<html><head><style data-type="theme" data-media="x">.ctl{color:red}</style></head></html>',
+    ".rs9",
+    "r9-",
+  );
+  assert.match(css, /color:\s*red/, "a data-type sheet was dropped");
+  assert.doesNotMatch(css, /@media x/, "data-media became a media query");
 });
 
 // ── the release scripts against a fake JSR ───────────────────────────────────
@@ -608,11 +682,11 @@ function releaseClone(name: string): string {
   git("config", "user.name", "test");
   git("config", "user.email", "test@example.invalid");
   git("remote", "set-url", "--push", "origin", "NO-PUSH-FROM-TESTS");
-  // The release under test is the working tree's, not the last commit's.
-  writeFileSync(
-    join(dir, "scripts", "publish.ts"),
-    readFileSync(join(ROOT, "scripts", "publish.ts")),
-  );
+  // The release under test is the working tree's, not the last commit's: every script, since
+  // they import one another (publish.ts → jsr-api.ts, compat.ts).
+  for (const f of readdirSync(join(ROOT, "scripts")).filter((n) => n.endsWith(".ts"))) {
+    writeFileSync(join(dir, "scripts", f), readFileSync(join(ROOT, "scripts", f)));
+  }
   const version = JSON.parse(readFileSync(join(dir, "jsr.json"), "utf8")).version as string;
   const pkg = readFileSync(join(dir, "package.json"), "utf8");
   const behind = pkg.replace(`"version": "${version}"`, '"version": "0.0.1"');
@@ -649,25 +723,44 @@ test(
 );
 
 test("release: an undo that cannot run says so", { timeout: TIMEOUT }, async () => {
-  // The reset fails (the index is locked while JSR is being asked): told, not claimed.
-  const locked = releaseClone("release-locked");
-  const before = headOf(locked);
-  const r = await withFakeJsr(
-    (req, res) => {
-      writeFileSync(join(locked, ".git", "index.lock"), "");
-      json({}, 503)(req, res);
-    },
-    (base) =>
-      runAsync([join(locked, "scripts", "publish.ts"), "--no-wait"], {
-        cwd: locked,
-        env: { ...process.env, S3D_JSR_API: base, S3D_JSR_TIMEOUT_MS: "2000" },
-      }),
+  /** A release in a fresh clone, with `lock` (a path under .git) created while JSR is asked. */
+  const lockedRelease = async (name: string, lock: string) => {
+    const dir = releaseClone(name);
+    const before = headOf(dir);
+    const r = await withFakeJsr(
+      (req, res) => {
+        writeFileSync(join(dir, ".git", lock), "");
+        json({}, 503)(req, res);
+      },
+      (base) =>
+        runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
+          cwd: dir,
+          env: { ...process.env, S3D_JSR_API: base, S3D_JSR_TIMEOUT_MS: "2000" },
+        }),
+    );
+    rmSync(join(dir, ".git", lock), { force: true });
+    return { r, before, after: headOf(dir) };
+  };
+
+  // The reset itself fails (the branch ref is locked): told, not claimed; the commit remains.
+  const branch = spawnSync("git", ["-C", ROOT, "rev-parse", "--abbrev-ref", "HEAD"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  const refLocked = await lockedRelease("release-ref-locked", `refs/heads/${branch}.lock`);
+  assert.equal(refLocked.r.code, 1, refLocked.r.out);
+  has(refLocked.r.out, /could NOT undo the local "bump version to v/, /do not push it/);
+  hasNot(refLocked.r.out, /undid the local/);
+  assert.notEqual(refLocked.after, refLocked.before, "expected the bump commit to remain");
+
+  // The commit is undone but the index is locked: said exactly that, with the command to finish.
+  const idxLocked = await lockedRelease("release-index-locked", "index.lock");
+  assert.equal(idxLocked.r.code, 1, idxLocked.r.out);
+  has(
+    idxLocked.r.out,
+    /undid the local "bump version to v.*" commit, but could not unstage/,
+    /git reset -q HEAD --/,
   );
-  rmSync(join(locked, ".git", "index.lock"), { force: true });
-  assert.equal(r.code, 1, r.out);
-  has(r.out, /could NOT undo the local "bump version to v/, /do not push it/);
-  hasNot(r.out, /undid the local/);
-  assert.notEqual(headOf(locked), before, "expected the bump commit to remain");
+  assert.equal(idxLocked.after, idxLocked.before, "the bump commit should be undone");
 
   // HEAD moves while JSR is being asked: left alone, and said.
   const moved = releaseClone("release-moved");
@@ -688,6 +781,81 @@ test("release: an undo that cannot run says so", { timeout: TIMEOUT }, async () 
     spawnSync("git", ["-C", moved, "log", "-1", "--pretty=%s"], { encoding: "utf8" }).stdout.trim(),
     "someone else",
   );
+});
+
+test(
+  "release: a file staged beforehand is not swept into the bump",
+  { timeout: TIMEOUT },
+  async () => {
+    const dir = releaseClone("release-staged");
+    const before = headOf(dir);
+    writeFileSync(
+      join(dir, "README.md"),
+      `${readFileSync(join(dir, "README.md"), "utf8")}\nstaged\n`,
+    );
+    assert.equal(spawnSync("git", ["-C", dir, "add", "README.md"]).status, 0);
+    // No JSR is needed: the dirty check refuses before the lookup.
+    const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
+    assert.equal(r.code, 1, r.out);
+    has(
+      r.out,
+      /Uncommitted changes — these would NOT be in v/,
+      /README\.md/,
+      /undid the local "bump/,
+    );
+    assert.equal(headOf(dir), before, "the bump commit remains");
+    const staged = spawnSync("git", ["-C", dir, "diff", "--cached", "--name-only"], {
+      encoding: "utf8",
+    });
+    assert.match(staged.stdout, /README\.md/, "README.md is no longer staged");
+  },
+);
+
+test("release: the JSR test hook can never let a release tag", { timeout: TIMEOUT }, async () => {
+  // A fake JSR answering "not published" (404): the release still refuses, because it is fake.
+  const dir = releaseClone("release-hook-404");
+  const before = headOf(dir);
+  const r = await withFakeJsr(json({}, 404), (base) =>
+    runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
+      cwd: dir,
+      env: { ...process.env, S3D_JSR_API: base },
+    }),
+  );
+  assert.equal(r.code, 1, r.out);
+  has(r.out, /S3D_JSR_API is set — a release never tags against a test JSR/, /undid the local/);
+  hasNot(r.out, /tagging /);
+  assert.equal(headOf(dir), before);
+
+  // A non-loopback hook is refused outright, by both scripts.
+  const away = { ...process.env, S3D_JSR_API: "https://jsr.example.invalid" };
+  const r2 = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
+    cwd: dir,
+    env: away,
+  });
+  assert.equal(r2.code, 1, r2.out);
+  has(r2.out, /is not a loopback address/);
+  const r3 = await runAsync([join(ROOT, "scripts", "verify-release.ts"), "9.9.9"], { env: away });
+  assert.notEqual(r3.code, 0, r3.out);
+  has(r3.out, /is not a loopback address/);
+  // A typo in a timing hook is an error, not a zero-length (or NaN) wait.
+  const r4 = await runAsync([join(ROOT, "scripts", "verify-release.ts"), "9.9.9"], {
+    env: { ...process.env, S3D_JSR_RETRY_MS: "abc" },
+  });
+  assert.notEqual(r4.code, 0, r4.out);
+  has(r4.out, /S3D_JSR_RETRY_MS="abc" is not a positive number/);
+});
+
+test("compat: a tagged version is refused unless the release says it is unpublished", () => {
+  // The newest tag in this checkout is a released version: a stand-alone gate run must not
+  // compare it against the tag before it and call re-releasing it "allowed".
+  const tag = spawnSync("git", ["describe", "--tags", "--abbrev=0", "--match", "v*"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.match(tag, /^v\d+\.\d+\.\d+$/, "no release tag in this checkout");
+  const r = run([join(ROOT, "scripts", "compat.ts"), "release", tag.slice(1)]);
+  assert.equal(r.code, 1, r.out);
+  has(r.out, new RegExp(`${tag.replace(/\./g, "\\.")} already exists`));
 });
 
 // ── "a run of nothing is not a pass" ─────────────────────────────────────────

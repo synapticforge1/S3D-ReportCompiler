@@ -635,35 +635,44 @@ const combinedHtml = assembleDocument(bodies, styles, mathCss);
 // or under that report's prefix (a broken link in a source stays broken, and is
 // not this build's doing). A count let one broken reference hide behind a
 // source-only dangling one the bake happened to remove (inside the loader, say).
+// And PER REPORT: each baked fragment (its scoped sheet + its body) against its
+// own source only. One shared set let report 0's dangling `#grad` excuse report
+// 1's broken `#grad` -- the same spelling, in different reports.
 function refScan(html: string): { refs: number; unresolved: Set<string> } {
   const text = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  // Attributes are read inside start tags only, so prose ("id = 4") is not one.
+  const tags = text.match(/<[a-zA-Z][^<>]*>/g) ?? [];
   // The attribute named id (not data-id=), quoted either way or not at all.
   const value = String.raw`\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`;
   const pick = (m: RegExpMatchArray) => m[1] ?? m[2] ?? m[3] ?? "";
-  const ids = new Set(
-    [...text.matchAll(new RegExp(String.raw`(?<![\w:.-])id${value}`, "gi"))].map(pick),
-  );
+  const inTags = (re: RegExp) => tags.flatMap((t) => [...t.matchAll(re)].map(pick));
+  const ids = new Set(inTags(new RegExp(String.raw`(?<![\w:.-])id${value}`, "gi")));
   const targets = [
-    // url(#x) bare, quoted, or entity-quoted as a browser serializes a style.
+    // url(#x) bare, quoted, or entity-quoted as a browser serializes a style -- in a
+    // style sheet as well as an attribute, so over the whole text.
     ...[...text.matchAll(/url\(\s*(?:"|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)/gi)].map(
       (m) => m[1],
     ),
-    ...[...text.matchAll(new RegExp(String.raw`(?<![\w:.-])(?:xlink:)?href${value}`, "gi"))]
-      .map(pick)
+    ...inTags(new RegExp(String.raw`(?<![\w:.-])(?:xlink:)?href${value}`, "gi"))
       .filter((v) => /^#./.test(v))
       .map((v) => v.slice(1)),
   ];
   return { refs: targets.length, unresolved: new Set(targets.filter((t) => !ids.has(t))) };
 }
 {
-  const baked = refScan(combinedHtml);
-  const excused = new Set<string>();
-  sources.forEach((s, i) => {
-    for (const t of refScan(s).unresolved) excused.add(t).add(`r${i}-${t}`);
+  let refs = 0;
+  let unresolved = 0;
+  const broken: string[] = [];
+  bodies.forEach((body, i) => {
+    const baked = refScan(`${styles[i]}\n${body}`);
+    const excused = new Set<string>();
+    for (const t of refScan(sources[i]).unresolved) excused.add(t).add(`r${i}-${t}`);
+    refs += baked.refs;
+    unresolved += baked.unresolved.size;
+    for (const t of baked.unresolved) if (!excused.has(t)) broken.push(`${entries[i]}: #${t}`);
   });
-  const broken = [...baked.unresolved].filter((t) => !excused.has(t));
   console.log(
-    `  refs:     ${baked.refs} id reference(s), ${baked.unresolved.size} unresolved, ` +
+    `  refs:     ${refs} id reference(s), ${unresolved} unresolved, ` +
       `${broken.length} broken by the bake`,
   );
   if (broken.length > 0) {

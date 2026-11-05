@@ -283,6 +283,22 @@ also asserts the checkout path itself is gone. 7/7 Chrome-free tests on WSL, 24/
 v<X.Y.Z>`); measured: `release 1.1.6` → vs v1.1.5, patch, samples PASS, exit 0; `release 1.1.5` →
 still refused.
 
+**Same day, the review of the 1.1.6 range (owner: "If it is possible, we will need a fix for any
+future reports where that possible becomes probable"):** 28/28 on `bun test`, `node --test` on Node
+24.21 and the 22.18 floor; the 11 Chrome-free tests 11/11 on Linux (WSL); the 48-report client set
+unchanged (8286 / 0 failed, 0 missing, 48/48, 380 pages). New: the **MathJax limitations** test
+(roadmap task 8 § "MathJax limitations", M1–M4 — 🔒 owner: re-check on every MathJax update) calls
+`bakeBody`/`bakeStyle` directly, no Chrome; it also pins prose `id = 4` staying prose (attributes
+are read inside tags only, after the maths is converted) and a `data-type` `<style>` being read.
+Release tests: a file staged beforehand stays staged and is refused, not committed as the bump
+(pathspec commit; the undo is now `--soft` + unstage the three, which keeps the developer's
+index); the JSR test hook is loopback-only, announced, and can never let a release tag; a timing
+typo is an error; a reset that fails vs an index that cannot be unstaged are reported separately;
+`compat.ts release <tagged>` refuses without `--unpublished`. **Inverted:** no rethrowing
+`formatError` → "unknown entity passed"; attributes read over the whole text → "prose was
+rewritten as an attribute". MathJax's error boxes, measured: 0 `<mjx-merror` elements in both
+bakes (the 1 match each was the stylesheet rule).
+
 ⚠️ **The page count is layout, not content — never pin it.** The first CI run (40733829258) failed
 `/^100 pages,/`: GitHub's Ubuntu runner renders the 13 samples to **103** pages (Windows: 100),
 with everything else identical — 0 missing, 13/13 per report, PASS. Fonts differ by platform. The

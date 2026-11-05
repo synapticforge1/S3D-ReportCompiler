@@ -39,6 +39,7 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { lookupVersion, usingTestApi } from "./jsr-api.ts";
 
 const manifest = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url), "utf8")) as {
   name: string;
@@ -72,12 +73,16 @@ function run(cmd: string[]): void {
  */
 let bumpCommit: string | null = null;
 
+/** The three files a version bump touches — the only ones step 3 may commit. */
+const VERSION_FILES = ["jsr.json", "package.json", "src/report_core.ts"];
+
 /**
  * Stop the release. Before the push, a refusal also takes back step 3's commit: until
  * 2026-11-05 a release the pre-flight refused left "bump version to vX" on main, and the next
- * plain push published it -- the stray-bump history step 0 exists to prevent. `reset --mixed`
- * puts the tree back exactly as `bun run bump` left it (step 0 proved the three files differ
- * from the previous commit only in their version lines). Only when HEAD is still that commit.
+ * plain push published it -- the stray-bump history step 0 exists to prevent. A soft reset, then
+ * the three version files unstaged, puts the tree AND the index back exactly as they were (step
+ * 0 proved those files differ from the previous commit only in their version lines; anything
+ * the developer had staged stays staged). Only when HEAD is still that commit.
  */
 function refuse(code: number): never {
   if (bumpCommit !== null) {
@@ -89,9 +94,24 @@ function refuse(code: number): never {
       head === bumpCommit &&
       subject === `bump version to ${tag}`
     ) {
-      const reset = spawnSync("git", ["reset", "--quiet", "--mixed", "HEAD~1"]);
+      // --soft, then unstage only the three version files: exactly the state before the release.
+      // A --mixed reset cleared the WHOLE index, so a file the developer had staged themselves
+      // came back unstaged.
+      const reset = spawnSync("git", ["reset", "--quiet", "--soft", "HEAD~1"]);
+      const unstage =
+        reset.status === 0
+          ? spawnSync("git", ["reset", "--quiet", "HEAD", "--", ...VERSION_FILES])
+          : reset;
       const after = capture(["git", "rev-parse", "HEAD"]);
-      if (reset.status === 0 && after !== bumpCommit && after !== "") {
+      const undone = reset.status === 0 && after !== bumpCommit && after !== "";
+      if (undone && unstage.status !== 0) {
+        // The commit is gone; only the index is left as the bump commit had it.
+        console.error(`   (undid the local "bump version to ${tag}" commit, but could not unstage`);
+        console.error(
+          `    ${VERSION_FILES.join(", ")}: ${new TextDecoder().decode(unstage.stderr ?? new Uint8Array()).trim() || "git failed"}.`,
+        );
+        console.error(`    Run: git reset -q HEAD -- ${VERSION_FILES.join(" ")})`);
+      } else if (undone) {
         console.error(`   (undid the local "bump version to ${tag}" commit; the bump is unstaged)`);
       } else {
         console.error(`   ⚠️ could NOT undo the local "bump version to ${tag}" commit`);
@@ -154,10 +174,14 @@ run([...self, "scripts/sync-version.ts"]);
 // 2. Stage the three files sync-version touches
 run(["git", "add", "jsr.json", "package.json", "src/report_core.ts"]);
 
-// 3. Commit (skip if nothing staged — the version was already synced)
-const diffCode = spawnSync("git", ["diff", "--cached", "--quiet"]).status;
+// 3. Commit THE THREE FILES ONLY (skip if they hold nothing new — the version was already synced).
+//    A pathspec commit, because a plain `git commit` takes everything staged: a file staged
+//    beforehand went out under "bump version to vX", unseen by step 0 (three files only) and by
+//    step 4's dirty check (it was committed by then) — the known-issues #30 class again. Now
+//    anything else staged stays staged, and step 4 refuses it.
+const diffCode = spawnSync("git", ["diff", "--cached", "--quiet", "--", ...VERSION_FILES]).status;
 if (diffCode !== 0) {
-  run(["git", "commit", "-m", `bump version to ${tag}`]);
+  run(["git", "commit", "-m", `bump version to ${tag}`, "--", ...VERSION_FILES]);
   bumpCommit = capture(["git", "rev-parse", "HEAD"]);
 }
 
@@ -196,7 +220,6 @@ if (diffCode !== 0) {
   // Forcing the tag would move the GitHub release off the code JSR actually
   // holds, and `deno publish` would fail anyway. Turning the warning below into
   // a check, because a comment does not stop anyone.
-  const [scope, name] = manifest.name.replace(/^@/, "").split("/");
   // Three answers, not two: 404 is "not published" and the only one that lets the release on;
   // a record is "already published"; anything else -- a 5xx, a 429, a timeout, no network --
   // is "could not tell". That used to read as "not published" (a 503 silently, a network
@@ -205,21 +228,14 @@ if (diffCode !== 0) {
   // what made this guard useless the first time (under Deno: no --allow-net, the catch
   // swallowed it, a tag was force-pushed onto a published version), and `deno publish` SKIPS
   // an already-published version with exit 0 and runs on into the release steps
-  // (roadmap task 11). A release can wait for JSR to answer.
-  let answer: "missing" | "published" | string;
+  // (roadmap task 11). A release can wait for JSR to answer. The lookup is shared with
+  // verify-release (scripts/jsr-api.ts).
+  let answer: string;
   try {
-    const res = await fetch(
-      // Test hooks (tests/build.test.ts's fake JSR); unset in real use.
-      `${process.env.S3D_JSR_API ?? "https://api.jsr.io"}/scopes/${scope}/packages/${name}/versions/${version}`,
-      {
-        headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(Number(process.env.S3D_JSR_TIMEOUT_MS ?? 20_000)),
-      },
-    );
-    await res.body?.cancel();
-    answer = res.status === 404 ? "missing" : res.ok ? "published" : `HTTP ${res.status}`;
+    const look = await lookupVersion(manifest.name, version);
+    answer = "missing" in look ? "missing" : "info" in look ? "published" : look.error;
   } catch (e) {
-    answer = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    answer = e instanceof Error ? e.message : String(e); // the test hook's fence refused
   }
   if (answer === "published") {
     console.error(`\n❌ ${manifest.name}@${version} is ALREADY published on JSR.`);
@@ -234,14 +250,24 @@ if (diffCode !== 0) {
     console.error(`   https://api.jsr.io answers.`);
     refuse(1);
   }
+  // A "not published" from a fake JSR is not one from JSR: never tag on it. (The test hook only
+  // ever drives refusals; a hook left set in a shell must not be what lets a release through.)
+  if (usingTestApi()) {
+    console.error(`\n❌ S3D_JSR_API is set — a release never tags against a test JSR. Unset it.`);
+    refuse(1);
+  }
 
   // The compatibility gate on the version about to be tagged (workspace letter H6): the committed
   // api-surface.txt must be current, the bump since the last tag must not be below the surface
   // floor, and for a patch or minor the previous tag's samples must PASS on this code.
+  // `--unpublished`: JSR just answered 404, so a v<version> tag that exists is a stranded retry
+  // (publish.ts moves it, by design), not a release — the gate may set it aside as a baseline.
   console.log("");
-  const gate = spawnSync(self[0], [...self.slice(1), "scripts/compat.ts", "release", version], {
-    stdio: "inherit",
-  });
+  const gate = spawnSync(
+    self[0],
+    [...self.slice(1), "scripts/compat.ts", "release", version, "--unpublished"],
+    { stdio: "inherit" },
+  );
   if (gate.status !== 0) {
     console.error(`\n❌ The compatibility gate refused ${tag} — nothing tagged.`);
     refuse(1);

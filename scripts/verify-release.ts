@@ -28,6 +28,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { JSR_RETRY_MS, JSR_TIMEOUT_MS, type Look, lookupVersion } from "./jsr-api.ts";
 
 const jsrJson = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url), "utf8")) as {
   name: string;
@@ -39,56 +40,25 @@ const args = argv.filter((a) => !a.startsWith("-"));
 const wait = argv.includes("--wait");
 const version = args[0] ?? jsrJson.version;
 
-const [scope, name] = jsrJson.name.replace(/^@/, "").split("/");
-// Test hooks, so tests/build.test.ts can stand a fake JSR on 127.0.0.1 and drive every verdict
-// (yanked, unattested, 404, 5xx, a stalled request). Unset in real use.
-const JSR_API = process.env.S3D_JSR_API ?? "https://api.jsr.io";
-const JSR_TIMEOUT_MS = Number(process.env.S3D_JSR_TIMEOUT_MS ?? 20_000);
-const JSR_RETRY_MS = Number(process.env.S3D_JSR_RETRY_MS ?? 15_000);
-const url = `${JSR_API}/scopes/${scope}/packages/${name}/versions/${version}`;
-
-type VersionInfo = { rekorLogId?: string | null; yanked?: boolean };
-
-/** One look at JSR: the version's record, a definite "not there" (404), or why it failed. */
-type Look = { info: VersionInfo } | { missing: true } | { error: string };
-
-/**
- * Look the version up once. Bounded: with no timeout, one stalled request (a proxy, a
- * half-open connection) held the whole poll -- and `bun run release` -- forever. Only a 404
- * means "not published"; a 5xx, a 429 or a network failure is "could not tell", which the
- * poll retries and the verdict reports as such rather than as "not on JSR".
- */
-async function fetchVersion(): Promise<Look> {
-  try {
-    const res = await fetch(url, {
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(JSR_TIMEOUT_MS),
-    });
-    if (res.status === 404) {
-      await res.body?.cancel();
-      return { missing: true };
-    }
-    if (!res.ok) {
-      await res.body?.cancel();
-      return { error: `HTTP ${res.status}` };
-    }
-    return { info: (await res.json()) as VersionInfo };
-  } catch (e) {
-    return { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
-  }
-}
-
 console.log(`Checking ${jsrJson.name}@${version} …`);
 
 // JSR ingests asynchronously, so a check straight after a release needs to wait.
 // Without --wait this is a single look, which is what you want when auditing an
-// older version. 60 × 15 s = 15 min: since 2026-10-28 publish.yml first waits for CI to pass on
-// the tagged commit (~5–6 min), and 1.1.5 outlasted the old 5-minute window (exit 2, then attested).
+// older version. 60 attempts, 15 s apart: since 2026-10-28 publish.yml first waits for CI to pass
+// on the tagged commit (~5–6 min), and 1.1.5 outlasted the old 5-minute window. The window is 15
+// min while JSR answers promptly, and up to 60 × (15 s + the 20 s request timeout) = 35 min when
+// every request stalls -- bounded either way, never a hang.
 const attempts = wait ? 60 : 1;
+if (wait) {
+  const worst = Math.ceil((attempts * (JSR_RETRY_MS + JSR_TIMEOUT_MS)) / 60_000);
+  console.log(
+    `  (waiting up to ${Math.ceil((attempts * JSR_RETRY_MS) / 60_000)} min; ${worst} if JSR stalls)`,
+  );
+}
 let look: Look = { error: "not asked" };
 
 for (let i = 1; i <= attempts; i++) {
-  look = await fetchVersion();
+  look = await lookupVersion(jsrJson.name, version);
   if ("info" in look) break;
   if (i < attempts) {
     console.log(

@@ -14,7 +14,7 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Maths | 8,286 expressions typeset, **0 failed** (2026-08-08) |
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages (2026-08-08) |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08) |
-| Published | **1.1.5 on both registries** (2026-10-28, owner: "bump and release"): JSR `@jrmarcum/s3d-reportcompiler` (1.1.0–1.1.5 attested) and npm `@synapticforge1/s3d-reportcompiler` (1.1.0 by hand; 1.1.4 and **1.1.5 by OIDC with provenance**; plus a stray `0.0.0-stage`). 1.1.5 = the first release through `publish.yml`'s CI gate (publish run 40759837547: "CI passed on the tagged commit" ✅, then JSR, then npm) and the first installed from `bun.lock`. 🔒 One tag releases both |
+| Published | **1.1.6 on both registries** (2026-11-05, owner: "do the patch release"): the three code-review rounds' fixes. JSR (1.1.0–1.1.6 attested; 1.1.6 Rekor `3696801217`) and npm (1.1.4–**1.1.6 by OIDC with provenance**, 1.1.6 `latest`, 10 files). Took three tags-worth of attempts, none published wrongly: the first `v1.1.6` failed CI on Linux (the redactor missed POSIX paths) and the CI gate published nothing; the retry was refused by the compat gate (it took the stranded tag as its baseline); fixed both, and publish run 42070536432 went green on `f26f030`. Before that: **1.1.5** (2026-10-28, owner: "bump and release"): JSR `@jrmarcum/s3d-reportcompiler` (1.1.0–1.1.5 attested) and npm `@synapticforge1/s3d-reportcompiler` (1.1.0 by hand; 1.1.4 and 1.1.5 by OIDC with provenance; plus a stray `0.0.0-stage`). 1.1.5 = the first release through `publish.yml`'s CI gate (publish run 40759837547: "CI passed on the tagged commit" ✅, then JSR, then npm) and the first installed from `bun.lock`. 🔒 One tag releases both |
 | Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · 1.1.1 ✅ Rekor `3544876876` · 1.1.2 ✅ Rekor `3545629708` · 1.1.3 ✅ Rekor `3546011937` · 1.1.4 ✅ Rekor `3546339510` · **1.1.5 ✅ Rekor `3547861777`** (`verify-release`, 2026-10-28); npm 1.1.4 and 1.1.5 ✅ SLSA provenance. ⚠️ `bun run release`'s wait outlasted by the CI gate on 1.1.5 (exit 2 "not on JSR yet", then attested) — `verify-release --wait` raised from 5 to 15 min — the first release from the org, with no `deno.json`, run from Bun |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
@@ -601,6 +601,25 @@ change, not a version bump. The build would need re-verifying and the page count
 
 **Triggers that would justify it:** a security advisory against `mathjax-full`, a TeX construct v3
 cannot render, or v3 breaking on a future runtime.
+
+### 🔁 MathJax limitations the bake works around — RE-CHECK ON EVERY MATHJAX UPDATE
+
+🔒 Owner, 2026-11-05: "We need to note these as what they are, MathJax limitations. These will need
+to be checked whenever MathJax is updated to the next version." Each is a MathJax behaviour (3.2.2,
+measured 2026-11-05), not this repo's logic; the workaround lives in `src/report_core.ts`, and
+**`bun run test`'s "MathJax limitations" test pins all four** — run it first after any MathJax
+change (any version, 3.x patch included, and the v4 migration above). A failure there names the
+limitation; re-measure it, then update the workaround, the test and this list together.
+
+| # | Limitation | Workaround | Pinned by |
+|---|---|---|---|
+| M1 | **Entity tables load asynchronously.** The core table has 406 names and lacks common ones (`&ge;` `&ne;` `&plusmn;` `&minus;` `&middot;` `&sum;` … — 45 of 76 probed); the other 2125 load on demand, which a synchronous `convert()` cannot wait for. | `import "mathjax-full/js/util/entities/all.js"` fills the table synchronously; `texFromMarkup` reads it case-sensitively (`&Delta;` ≠ `&delta;`). | each entity typesets exactly like its character; an unknown one fails |
+| M2 | **`\text{}` keeps U+00A0 but collapses ASCII spaces** (maths mode treats them alike). | `&nbsp;` decodes to U+00A0, as the DOM does, never to a space. | `&nbsp;` ≡ `&#160;` ≠ two spaces |
+| M3 | **A TeX error does not throw.** By default MathJax typesets an inline red error box ("Misplaced &", "Undefined control sequence") and returns normally — the bake would count it as converted and seal the box into the PDF. | `formatError` rethrows, so the error is counted as failed and the build refuses. 0 error boxes in the 13 samples and the 48-report client set when added. | an unknown entity (a bare `&`) counts as failed |
+| M4 | **CHTML must emit no `<svg>` or `<style>`.** `portableSvg` rewrites every `<text>` and hoists every SVG `<style>`, safe only while MathJax's own output has neither (see the ordering note on `portableSvg`). | none needed while it holds; switching the output to SVG would break it. | the typeset output holds no `<svg` / `<style` |
+
+Also MathJax-dependent, and covered by the full build rather than this test: the woff-v2 font path
+(`MATHJAX_FONTS`, above) and the page count (the degradation baseline below).
 
 ### 📌 Decision (2026-08-08, owner): deferred until a migration is verified to cause no breakage or degradation
 

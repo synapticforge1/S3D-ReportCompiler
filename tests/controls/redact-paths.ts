@@ -126,15 +126,28 @@ const slugRule = (slug: string) =>
     "gi",
   );
 
+// A whole folder name ends here: a separator, whitespace, a quote, or the end. Without it the
+// rules matched the FRONT of a longer sibling (`…\synapticforge1-backup\client-acme\…` became
+// `<workspace>-backup\client-acme\…`, with no drive left for the residue check to find); now a
+// sibling falls through to the generic path rules below, which take it whole.
+const END = String.raw`(?![^\\/\s"'])`;
+const SLUG_END = String.raw`(?![A-Za-z0-9_.-])`;
+
 // Longest first: the project path extends the home path, so replacing the home
 // path first would strand the remainder.
 const RULES: Array<[RegExp, string]> = [
   // This checkout and its workspace, found from where this script lives.
-  ...(PROJECT ? ([[new RegExp(PROJECT.path, "gi"), "<project>"]] as Array<[RegExp, string]>) : []),
-  ...(WORKSPACE
-    ? ([[new RegExp(WORKSPACE.path, "gi"), "<workspace>"]] as Array<[RegExp, string]>)
+  ...(PROJECT
+    ? ([[new RegExp(`${PROJECT.path}${END}`, "gi"), "<project>"]] as Array<[RegExp, string]>)
     : []),
-  ...(PROJECT ? ([[slugRule(PROJECT.slug), "<project-slug>"]] as Array<[RegExp, string]>) : []),
+  ...(WORKSPACE
+    ? ([[new RegExp(`${WORKSPACE.path}${END}`, "gi"), "<workspace>"]] as Array<[RegExp, string]>)
+    : []),
+  ...(PROJECT
+    ? ([
+        [new RegExp(`${slugRule(PROJECT.slug).source}${SLUG_END}`, "gi"), "<project-slug>"],
+      ] as Array<[RegExp, string]>)
+    : []),
   // A named work folder, if one was given, is the longest match and goes first.
   ...(WORK_FOLDER
     ? [

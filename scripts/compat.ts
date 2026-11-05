@@ -383,7 +383,24 @@ try {
   } else if (cmd === "gate" && (arg === "patch" || arg === "minor" || arg === "major")) {
     process.exit(gate(arg, `a ${arg} bump`));
   } else if (cmd === "release" && /^\d+\.\d+\.\d+$/.test(arg ?? "")) {
-    const tag = lastTag(`v${arg}`);
+    // The version's own tag is set aside ONLY when the caller says it is unpublished (publish.ts,
+    // which has just had JSR answer 404). Unconditionally, a stand-alone run for a version that
+    // IS released compared it against the tag before and passed, reporting that re-releasing a
+    // published version was allowed. Without the flag an existing own tag is refused, by name.
+    const ownTag = `v${arg}`;
+    const unpublished = process.argv.includes("--unpublished");
+    const ownTagExists =
+      run("git", ["rev-parse", "-q", "--verify", `refs/tags/${ownTag}`], ROOT).code === 0;
+    if (ownTagExists && !unpublished) {
+      console.error(
+        `❌ ${ownTag} already exists — ${arg} has been tagged (and is probably released).`,
+      );
+      console.error(
+        "   Only an unpublished retry may reuse it: `bun run release` checks JSR and says so.",
+      );
+      process.exit(1);
+    }
+    const tag = lastTag(unpublished ? ownTag : undefined);
     const [a, b] = [tag.slice(1).split(".").map(Number), arg.split(".").map(Number)];
     const kind: Kind | null =
       b[0] > a[0]
@@ -397,10 +414,10 @@ try {
       console.error(`❌ ${arg} is not above ${tag}.`);
       process.exit(1);
     }
-    process.exit(gate(kind, `v${arg}`, `v${arg}`));
+    process.exit(gate(kind, ownTag, unpublished ? ownTag : undefined));
   } else {
     console.error(
-      "usage: compat.ts surface [--write] | check | gate <patch|minor|major> | release <X.Y.Z>",
+      "usage: compat.ts surface [--write] | check | gate <patch|minor|major> | release <X.Y.Z> [--unpublished]",
     );
     process.exit(2);
   }
