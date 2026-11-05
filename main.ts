@@ -420,21 +420,31 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & { pageTexts: 
 // Build
 // ---------------------------------------------------------------------------
 
-// Files this tool owns are never inputs. The baked document is written beside
-// the PDF, and the browser example sits beside the reports; either one ingested
-// as a report would inflate the build and, in the baked document's case,
-// compound on every run. Everything else in the folder is treated as a report,
-// so keep other HTML out of it.
+// The baked document is written beside the PDF, under the PDF's name.
+const outputHtml = `${outputPdf.replace(/\.pdf$/i, "")}.html`;
+
+// Files this tool owns are never inputs. The browser example sits beside the
+// reports; ingesting it as a report would inflate the build. Everything else in
+// the folder is treated as a report, so keep other HTML out of it.
 //
-// This matters more now that the output directory can sit INSIDE the input one
-// (running from the reports folder puts CompiledPDF/ there). Two things keep
-// that safe: the scan is one level deep and filters to files, so nothing inside
-// CompiledPDF/ is ever visible to it, and this guard catches the baked document
-// by name if the two directories are ever pointed at the same place.
-const TOOL_OWNED = new Set([
-  rt.baseName(`${outputPdf.replace(/\.pdf$/i, "")}.html`).toLowerCase(),
-  "browser_example.html",
-]);
+// The baked document is NOT excluded by name. It used to be, wherever the output
+// was, so `reports out/member_3_report.pdf` silently dropped
+// reports/member_3_report.html from the package -- and from both sides of the
+// verification, so the build still passed. The scan is one level deep and
+// filters to files, so an output folder inside the input one (CompiledPDF/) is
+// never visible to it; only an output written INTO the input folder can collide,
+// and that is handled below by content, not by name.
+const TOOL_OWNED = new Set(["browser_example.html"]);
+
+// A real path as a comparison key: one separator, no trailing one, one case.
+// Case-folding everywhere is the conservative direction: on a case-sensitive
+// filesystem it can only refuse a build, never let one overwrite a report.
+const pathKey = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+/** A document this tool baked: its fixed title and its first report wrapper. */
+const isBakedDocument = (html: string) =>
+  html.includes("<title>Combined Design Report</title>") &&
+  html.includes('<div class="report-sheet rs0">');
 
 // Now that the defaults come from the working directory, "ran it from the wrong
 // folder" is the ordinary mistake, and a raw ENOENT stack trace is a poor way to
@@ -460,7 +470,48 @@ try {
   rt.exit(1);
 }
 
-const entries = sortReportNames(allHtml.filter((n) => !TOOL_OWNED.has(n.toLowerCase())));
+// Read once, here: every input is needed below to tell reports from previous
+// bakes, and again to compile.
+const contents = new Map<string, string>();
+for (const name of allHtml) contents.set(name, await rt.readTextFile(rt.joinPath(htmlDir, name)));
+
+// A previous run's baked document is never an input, WHATEVER its name: a bake
+// left in the folder by a run named a.pdf would otherwise be compiled into a run
+// named b.pdf as one more "report" -- every report twice, and verification
+// passes, because the copy is on both sides of it. Recognised by content.
+const bakedLeftovers = new Set(allHtml.filter((n) => isBakedDocument(contents.get(n) ?? "")));
+
+// An output must never land on a source report: the baked HTML would overwrite
+// it (and --no-keep-html then delete it), and an output named *.html would be
+// deleted as a "stale PDF" before Chrome writes over it. Compared by REAL path,
+// not by spelling: a junction, symlink, subst drive or 8.3 name reaching the
+// input folder another way still names the same file. An output path that does
+// not exist yet cannot overwrite anything. Only a previous bake may be replaced,
+// and only by the baked HTML.
+const inputByRealPath = new Map<string, string>();
+for (const name of allHtml) {
+  inputByRealPath.set(pathKey(await rt.realPath(rt.joinPath(htmlDir, name))), name);
+}
+for (const out of new Set([outputPdf, outputHtml])) {
+  let real: string;
+  try {
+    real = pathKey(await rt.realPath(out));
+  } catch {
+    continue; // nothing there yet
+  }
+  const name = inputByRealPath.get(real);
+  if (name === undefined) continue;
+  if (out === outputHtml && out !== outputPdf && bakedLeftovers.has(name)) continue;
+  console.error(`The output would overwrite a source report:\n  ${rt.joinPath(htmlDir, name)}\n`);
+  console.error("Every .html in the input folder is a report. Choose an output name that is");
+  console.error("not one of them, or write the output to another folder (the default is");
+  console.error(`${OUTPUT_DIR}/ under the working directory).`);
+  rt.exit(1);
+}
+
+const entries = sortReportNames(
+  allHtml.filter((n) => !TOOL_OWNED.has(n.toLowerCase()) && !bakedLeftovers.has(n)),
+);
 
 if (entries.length === 0) {
   // Reaching here without positional[0] means the working directory had no
@@ -503,6 +554,7 @@ if (!chrome) {
 console.log(`Compiling ${entries.length} report(s) on ${rt.RUNTIME}`);
 if (skipped > 0) {
   console.log(`  skipped:  ${skipped} tool-owned .html file(s)`);
+  for (const name of bakedLeftovers) console.log(`            ${name} (a previous bake)`);
 }
 
 const sources: string[] = [];
@@ -510,7 +562,7 @@ const bodies: string[] = [];
 const styles: string[] = [];
 
 for (let i = 0; i < entries.length; i++) {
-  const src = await rt.readTextFile(rt.joinPath(htmlDir, entries[i]));
+  const src = contents.get(entries[i]) ?? "";
   sources.push(src);
 
   // Every report carries its own stylesheet, scoped to its own wrapper, and its
@@ -572,6 +624,59 @@ const mathCss = await inlineFonts(
 
 const combinedHtml = assembleDocument(bodies, styles, mathCss);
 
+// Every id is renamed per report, so every reference to one has to follow it. A
+// reference that stops resolving fails without an error -- a gradient, clip or
+// arrowhead just disappears -- and the PDF checks below count text and image
+// paints, not paint servers. So: a reference that resolved in its own source
+// must still resolve in the bake. Derived from the HTML alone, written apart
+// from the renaming it checks; the one thing it assumes is the documented
+// namespace, `r<i>-`. Compared as SETS, not counts: every target the bake leaves
+// unresolved must be one its own source already left unresolved -- as written,
+// or under that report's prefix (a broken link in a source stays broken, and is
+// not this build's doing). A count let one broken reference hide behind a
+// source-only dangling one the bake happened to remove (inside the loader, say).
+function refScan(html: string): { refs: number; unresolved: Set<string> } {
+  const text = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  // The attribute named id (not data-id=), quoted either way or not at all.
+  const value = String.raw`\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`;
+  const pick = (m: RegExpMatchArray) => m[1] ?? m[2] ?? m[3] ?? "";
+  const ids = new Set(
+    [...text.matchAll(new RegExp(String.raw`(?<![\w:.-])id${value}`, "gi"))].map(pick),
+  );
+  const targets = [
+    // url(#x) bare, quoted, or entity-quoted as a browser serializes a style.
+    ...[...text.matchAll(/url\(\s*(?:"|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)/gi)].map(
+      (m) => m[1],
+    ),
+    ...[...text.matchAll(new RegExp(String.raw`(?<![\w:.-])(?:xlink:)?href${value}`, "gi"))]
+      .map(pick)
+      .filter((v) => /^#./.test(v))
+      .map((v) => v.slice(1)),
+  ];
+  return { refs: targets.length, unresolved: new Set(targets.filter((t) => !ids.has(t))) };
+}
+{
+  const baked = refScan(combinedHtml);
+  const excused = new Set<string>();
+  sources.forEach((s, i) => {
+    for (const t of refScan(s).unresolved) excused.add(t).add(`r${i}-${t}`);
+  });
+  const broken = [...baked.unresolved].filter((t) => !excused.has(t));
+  console.log(
+    `  refs:     ${baked.refs} id reference(s), ${baked.unresolved.size} unresolved, ` +
+      `${broken.length} broken by the bake`,
+  );
+  if (broken.length > 0) {
+    console.error("");
+    console.error("ERROR: the bake broke id references that resolved in the sources.");
+    console.error(`  broken: ${broken.slice(0, 10).join(", ")}`);
+    console.error("");
+    console.error("A graphic's gradient, clip path or marker would silently vanish; refusing");
+    console.error("to emit a PDF. Every renamed id must carry its references with it.");
+    rt.exit(1);
+  }
+}
+
 const externalRefs = (combinedHtml.match(/(?:href|src)="https?:/gi) ?? []).length;
 const scripts = (combinedHtml.match(/<script/gi) ?? []).length;
 if (externalRefs > 0 || scripts > 0) {
@@ -584,11 +689,16 @@ if (externalRefs > 0 || scripts > 0) {
 // build artifact in its own right and belongs beside the PDF it produced.
 const workDir = await rt.makeTempDir("compiled_reports_");
 
+// Set inside the try and acted on after the finally: rt.exit() is process.exit(),
+// which skips finally blocks, so exiting in place left the temp Chrome profile
+// behind on every failed verification.
+let verificationFailed = false;
+
 try {
   // Both outputs live in the output directory: the baked HTML is the exact
   // input Chrome was given, so keeping it next to the PDF is what makes a
   // result reproducible and inspectable after the fact.
-  const htmlPath = `${outputPdf.replace(/\.pdf$/i, "")}.html`;
+  const htmlPath = outputHtml;
 
   // Encode once: String.length counts UTF-16 code units, not bytes, so
   // reporting it as a size would understate anything non-ASCII.
@@ -720,11 +830,13 @@ try {
       for (const f of check.failures) console.error(`  - ${f}`);
       console.error("");
       console.error(`${outputPdf} does not faithfully reproduce its sources.`);
-      rt.exit(1);
+      verificationFailed = true;
+    } else {
+      console.log("  PASS: every source word and number present, nothing split or unrendered.");
     }
-
-    console.log("  PASS: every source word and number present, nothing split or unrendered.");
   }
 } finally {
   await rt.removeQuietly(workDir, true);
 }
+
+if (verificationFailed) rt.exit(1);

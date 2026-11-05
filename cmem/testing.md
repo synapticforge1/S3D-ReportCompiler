@@ -199,15 +199,75 @@ reason. It automates the negative controls above and `tests/controls/README.md`:
 | the 13 samples | exit 0; 2203 expressions, 0 failed; ≥ 1 page per report (never an exact count — below); 0 missing; per-report 13/13; 13 images, 13 diagrams; 0 LaTeX, 0 blank; PASS |
 | unknown delimiter | exit 1; "97 expressions, 0 failed" AND the guard's error, 250 TeX commands; never verifies; no PDF |
 | colliding `{{..}}` | exit 1; the guard's error, 205 TeX commands; no PDF |
-| hidden content, one report | exit 1; 171 words / 114 numbers missing; 1 blank page; "content missing from the PDF" |
+| hidden content, one report | exit 1; 171 words / 114 numbers missing; 1 blank page; "content missing from the PDF"; **no new `compiled_reports_*` temp profile left** (2026-11-05) |
 | a row hidden in the 2nd of two copies | exit 1; set-wide **0 missing** (pinned — the union limit), per-report `b_report.html: 5 word(s) … internal, forces, absolute, force, bending`; NOT "missing from the PDF" |
 | custom delimiters declared | exit 0; 169 expressions; ≥ 1 page; PASS |
 | `$$..$$` in a second report | exit 0; 338 expressions; the two-delimiter-set warning; per-report 2/2; no `$$` in the bake |
+| `&lt;` / `&gt;` inside expressions (2026-11-05) | exit 0; 169 expressions, 0 failed (the same report as custom delimiters); PASS |
+| SVG `url(#id)` references (2026-11-05) | exit 0; PASS; the bake holds `url(#r0-ctl-grad)`, `url(#r0-ctl-clip)`, `url('#r0-ctl-grad')`, `marker-end` → `r0-ctl-arrow`, no old id, and `url(#ctl-undefined)` untouched. Reads the bake: verification cannot see a lost paint server |
+| `<style type="text/css">`, a quoted SVG `font-family`, a `media="print"` block (2026-11-05) | exit 0; the audit line identical to custom delimiters' (1 loader, 1 gate, 3 height, 0 @page, 1 stray token); PASS; no hoist warning; the bake has `font-family="&quot;Arial&quot;, sans-serif"`, `@media print { … }`, no `<style>` left in the SVG |
+| the redactor (2026-11-05) | a fixture built at run time from the checkout's own path: checkout (`\`, `\\`, `/`), home, other-drive and slug paths all replaced, a URL kept, exit 0; a username outside any path → exit 1 "not safe to publish", and `--check` exits 1 too |
+| `verify-release`, fake JSR (2026-11-05) | attested → 0; attested + yanked → 3; **unattested + yanked → 1** (provenance first); unattested → 1; 404 → 2 "not on JSR"; 503 → 2 "Could not ask … not a verdict"; a server that never answers → 2 at the 500 ms test timeout; `--wait` over two 503s then attested → 0, "could not ask JSR (1/60): HTTP 503 — retrying", 3 requests |
+| release refuses when JSR cannot answer (2026-11-05) | throwaway clone (package.json one version behind, push URL not a remote), fake JSR 503 → exit 1 "Could not ask JSR … (HTTP 503)", "undid the local bump", HEAD back where it was, nothing tagged |
+| release undo that cannot run (2026-11-05) | `.git/index.lock` written while JSR is asked → "could NOT undo … do not push it", the bump commit remains; a commit made while JSR is asked → "HEAD is not the bump commit any more; left as is", that commit untouched |
+| output named like a report, other folder (2026-11-05) | exit 0; 1 report compiled; no `skipped:` |
+| output onto a source report (2026-11-05) | `d_report.pdf`, `d_report.html`, `D_REPORT.pdf` into the input folder: each exit 1, "would overwrite a source report", nothing compiled, the report byte-identical |
+| a previous bake in the input folder (2026-11-05) | second run exit 0; 1 report; `skipped: 1 tool-owned` (recognised by content, not name) |
 | unknown flag | exit 1; `Unknown option(s): --no-optimise`; nothing compiled |
 | stale PDF, a "Chrome" that writes nothing | non-zero; "Chrome produced no PDF"; no `Created`; the stale PDF is gone (the stub is the test's own runtime as `CHROME_PATH`) |
 | relative input/output paths (#22) | exit 0; `out/custom-name.pdf` and `.html` exist |
 | sanitizer, clean / leaked | invented values planted in all three fields of a sample under a temp `local/` (no client data): ✓ 6 tokens verified absent / ❌ `1 removed term(s) still present: Zorblax` |
 | every `tests/controls/control-*.ts` is exercised | "a run of nothing is not a pass" |
+
+**2026-11-05 (owner: "yes" to the code review's fixes 1–4 and 7):** 18/18 on `bun test` (31 s),
+`node --test` on Node 24.21 and the 22.18 floor. ⚠️ Node here comes from **fnm**, whose PATH is
+per-shell: a fresh shell has no `node`, and under `bun run` the name falls to Bun's own shim, which
+fails on `node:test`'s `after()` ("Cannot use afterAll() outside of the test runner"). That is the
+shell, not the suite: load fnm first (`fnm env --shell powershell | Out-String | Invoke-Expression`,
+then `fnm use <version>`). Node 24's default reporter prints no `# tests` line; `--test-reporter=tap`
+does.
+Run against the pre-fix `main.ts` and `report_core.ts` with the new tests kept: exactly the five
+new checks failed (temp profile, entities, SVG references, named-like-report, overwrite), 13 passed.
+The previous-bake test passes on both, by design: it guards the content-based skip that replaced
+the name-based one.
+
+**Same day, the review's remaining six (owner: "fix items 1-6"):** 20/20 on `bun test` and on
+`node --test` (Node 24.21). Against the pre-fix `report_core.ts`: the style, entity and SVG tests
+fail — the SVG one now by the build's own new guard ("the bake broke id references that resolved
+in the sources", main.ts, a distinct-unresolved-target count against the sources), so a dangling
+reference fails the BUILD, not only the test. The 13 samples hold 0 id references, so only that
+control exercises the guard. `publish.ts`'s undo, proved in a throwaway clone with an unusable push
+URL: package.json one version behind → the bump commit made → "ALREADY published on JSR" → "undid
+the local bump commit", HEAD unchanged, package.json left modified. `verify-release`: 1.1.5 →
+exit 0 (Rekor `3547861777`), 9.9.9 → exit 2; the yanked (exit 3) and HTTP-error branches are
+unexercised (no yanked version, no outage to hand).
+
+**Same day, the review of those fixes (owner: "fix the 10 issues"):** 21/21 on `bun test` and
+`node --test` (Node 24.21). New coverage: the SVG control adds `url(&quot;#id&quot;)` (how a
+browser serializes a saved inline style), a `data-id` (must stay untouched — `\bid=` used to
+match it), and an unquoted `id=`/`href=` pair, and pins the guard's line (`1 unresolved, 0 broken
+by the bake`); the previous-bake test adds a run under ANOTHER output name (the old bake is
+skipped and named, not compiled as a second copy); a new test refuses an output reached through a
+junction / directory symlink; the redactor test adds Git Bash `/d/…`, WSL `/mnt/d/…`, a folder
+name with spaces, and UNC paths single and JSON-escaped; the `D_REPORT.pdf` case runs on Windows
+only (it is the same file only where the filesystem folds case). **Inverted** (one fix reverted at
+a time, then restored): no entity quotes → the BUILD fails, "broken: ctl-clip"; name-only bake
+skip → the previous-bake test; string paths instead of real paths → the link test. The guard's
+set comparison (vs the old count) was not inverted in that round — 🔁 **done the same day, next
+round:** the SVG control now plants a reference already dangling in the source INSIDE the loading
+spinner the bake removes; with the bake broken on purpose (no entity quotes), the old COUNT guard
+let the build PASS (only the test's own read of the bake failed), the SET guard failed the build,
+"broken: ctl-clip". `&nbsp;` in maths now decodes to U+00A0, measured with a one-time MathJax 3.2.2 probe: maths
+mode renders it like a space, `\text{A  B}` does not (two U+00A0 kept, two spaces collapse). The
+undo in `publish.ts` re-proved in a throwaway clone; its pre-flight now REFUSES when JSR cannot be
+asked (it used to continue).
+
+**Same day, the untested items (owner: "run tests on the yet untested items"):** 24/24 on `bun
+test`, `node --test` on Node 24.21 and the 22.18 floor. The release scripts read the JSR API's base
+URL from `S3D_JSR_API` (and `S3D_JSR_TIMEOUT_MS`, `S3D_JSR_RETRY_MS`) — test hooks, unset in real
+use — so a fake JSR on 127.0.0.1 drives every verdict (rows above). The fake runs in the test's own
+process, so those tests spawn asynchronously; `spawnSync` would block the server's event loop.
+Still unexercised: nothing in the three review rounds.
 
 ⚠️ **The page count is layout, not content — never pin it.** The first CI run (40733829258) failed
 `/^100 pages,/`: GitHub's Ubuntu runner renders the 13 samples to **103** pages (Windows: 100),

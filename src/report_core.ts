@@ -421,45 +421,102 @@ export function scopeCss(css: string, scope: string, prefix: string): string {
  */
 export function portableSvg(html: string): string {
   return html.replace(/<svg\b[\s\S]*?<\/svg>/gi, (svg) => {
-    const block = svg.match(/<style>([\s\S]*?)<\/style>/i);
-    if (!block) return svg;
+    // Every block, with any attributes: `<style type="text/css">` is the same
+    // stylesheet, and matching only a bare `<style>` used to skip it.
+    const blocks = [...svg.matchAll(STYLE_BLOCK)];
+    if (blocks.length === 0) return svg;
 
     let out = svg;
     let allHoisted = true;
 
-    for (const [, selectorList, declarations] of block[1].matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const decls = declarations
-        .split(";")
-        .map((d) => d.trim())
-        .filter(Boolean)
-        .map((d) => {
-          const i = d.indexOf(":");
-          return [d.slice(0, i).trim(), d.slice(i + 1).trim()] as const;
-        })
-        .filter(([prop, value]) => prop && value);
-
-      if (decls.length === 0) continue;
-
-      for (const selector of selectorList
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)) {
-        if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(selector)) {
-          svgStyleWarnings.add(selector);
-          allHoisted = false;
-          continue;
-        }
-        // Inserted immediately after the tag name so it precedes any attribute
-        // already on the element. In HTML the first occurrence of a duplicated
-        // attribute wins, which preserves "stylesheet beats presentation
-        // attribute" -- the precedence the rule had before it was hoisted.
-        const attrs = decls.map(([p, v]) => `${p}="${v}"`).join(" ");
-        out = out.replace(new RegExp(`<${selector}\\b`, "gi"), `<${selector} ${attrs}`);
+    for (const [, attrs, sheet] of blocks) {
+      const kind = styleBlockKind(attrs);
+      if (kind === "ignored") continue; // not CSS: the browser ignores it too
+      if (kind !== "all") {
+        // A media-qualified rule is conditional; an attribute is not. Keep it.
+        svgStyleWarnings.add(`<style media="${kind}">`);
+        allHoisted = false;
+        continue;
       }
+      allHoisted =
+        hoistSvgRules(sheet, (selector, decls) => {
+          out = out.replace(new RegExp(`<${selector}\\b`, "gi"), `<${selector} ${decls}`);
+        }) && allHoisted;
     }
 
-    return allHoisted ? out.replace(/<style>[\s\S]*?<\/style>/gi, "") : out;
+    return allHoisted ? out.replace(STYLE_BLOCK, "") : out;
   });
+}
+
+/** `<style ...>` blocks, capturing the attributes and the sheet. */
+const STYLE_BLOCK = /<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
+
+/**
+ * What a `<style>` block's attributes make of it, as a browser reads them:
+ * `"ignored"` for a non-CSS `type`, the `media` query when one narrows it, or
+ * `"all"`.
+ */
+function styleBlockKind(attrs: string): string {
+  const attr = (name: string) =>
+    new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i")
+      .exec(attrs)
+      ?.slice(1)
+      .find((v) => v !== undefined)
+      ?.trim();
+  const type = attr("type");
+  if (type !== undefined && type !== "" && type.toLowerCase() !== "text/css") return "ignored";
+  const media = attr("media");
+  return media === undefined || media === "" || media.toLowerCase() === "all" ? "all" : media;
+}
+
+/** A CSS value as an attribute value: no `!important`, quotes and `&` escaped. */
+function attrValue(v: string): string {
+  return v
+    .replace(/\s*!important\s*$/i, "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
+}
+
+/**
+ * Hand each hoistable rule of an SVG sheet to `apply` as (selector, attributes).
+ * Returns false when any selector could not be hoisted (recorded as a warning).
+ */
+function hoistSvgRules(sheet: string, apply: (selector: string, attrs: string) => void): boolean {
+  let allHoisted = true;
+  for (const [, selectorList, declarations] of sheet
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const decls = declarations
+      .split(";")
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => {
+        const i = d.indexOf(":");
+        return [d.slice(0, i).trim(), d.slice(i + 1).trim()] as const;
+      })
+      .filter(([prop, value]) => prop && value);
+
+    if (decls.length === 0) continue;
+
+    for (const selector of selectorList
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(selector)) {
+        svgStyleWarnings.add(selector);
+        allHoisted = false;
+        continue;
+      }
+      // Inserted immediately after the tag name so it precedes any attribute
+      // already on the element. In HTML the first occurrence of a duplicated
+      // attribute wins, which preserves "stylesheet beats presentation
+      // attribute" -- the precedence the rule had before it was hoisted.
+      // Escaped: `font-family: "Arial"` would otherwise end the attribute early.
+      apply(selector, decls.map(([p, v]) => `${p}="${attrValue(v)}"`).join(" "));
+    }
+  }
+  return allHoisted;
 }
 
 /**
@@ -469,7 +526,11 @@ export function portableSvg(html: string): string {
  * nested tags of the same name.
  */
 function removeElementById(html: string, id: string): string {
-  const openTag = new RegExp(`<([a-zA-Z][\\w-]*)[^>]*\\bid\\s*=\\s*["']${id}["'][^>]*>`, "i");
+  // The attribute named id, not data-id= (whose element is not the one asked for).
+  const openTag = new RegExp(
+    `<([a-zA-Z][\\w-]*)[^>]*(?<![\\w:.-])id\\s*=\\s*["']${id}["'][^>]*>`,
+    "i",
+  );
   const m = html.match(openTag);
   if (!m || m.index === undefined) return html;
 
@@ -547,6 +608,65 @@ export function mathStyleSheet(): string {
 // Bake
 // ---------------------------------------------------------------------------
 
+const TEX_ENTITIES: Record<string, string> = {
+  // U+00A0, as the DOM has it -- not a space. Measured 2026-11-05 (MathJax 3.2.2):
+  // identical in maths mode, but \text{A&nbsp;&nbsp;B} keeps both and two ASCII
+  // spaces collapse to one, so a space would change a sealed calculation's text.
+  nbsp: " ",
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+};
+
+/**
+ * The text a browser's MathJax reads from an expression: it scans the DOM's
+ * decoded text, so `\lambda &lt; 200` in the markup is `\lambda < 200` to TeX.
+ * Passing the raw markup instead hands TeX an `&` -- its alignment character --
+ * and the expression fails or prints "lt;". One pass, so `&amp;lt;` decodes
+ * once, to the literal text `&lt;`. Deliberately separate from decodeEntities:
+ * the bake and the verification share no logic.
+ */
+function texFromMarkup(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+    if (e[0] !== "#") return TEX_ENTITIES[e.toLowerCase()] ?? m;
+    const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+  });
+}
+
+/**
+ * `url(#id)` in every quoting a document carries: bare, `'`/`"`, and the
+ * entity forms a browser writes when it serializes an inline style
+ * (`style="clip-path: url(&quot;#c&quot;)"`) -- the form a report saved from a
+ * browser has. Group 1 is the quote, group 2 the id.
+ */
+const URL_REF = /url\(\s*("|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)\1\s*\)/gi;
+
+/** Prefix the id in every `url(#id)`; with `only`, just the ids it holds. */
+function namespaceUrlRefs(text: string, prefix: string, only?: Set<string>): string {
+  return text.replace(URL_REF, (m, q = "", id) =>
+    only && !only.has(id) ? m : `url(${q}#${prefix}${id}${q})`,
+  );
+}
+
+// An attribute NAME, not the tail of one: `\bid=` also matched `data-id=` (the
+// boundary falls after "-"), renaming a data value and adding it to the ids that
+// steer every reference rewrite. Values quoted either way, or unquoted.
+const attrRe = (names: string) =>
+  new RegExp(`(?<![\\w:.-])(${names})\\s*=\\s*(?:(["'])([^"']*)\\2|([^\\s"'>]+))`, "gi");
+const ID_ATTR = attrRe("id");
+const HREF_ATTR = attrRe("xlink:href|href");
+const ID_LIST_ATTR = attrRe("for|headers|aria-labelledby|aria-describedby|aria-controls|aria-owns");
+
+/** Rewrite each matching attribute's value, keeping its name and quoting. */
+function rewriteAttr(html: string, re: RegExp, value: (v: string) => string): string {
+  return html.replace(re, (_m, name: string, q: string | undefined, quoted, bare) =>
+    q === undefined ? `${name}=${value(bare)}` : `${name}=${q}${value(quoted)}${q}`,
+  );
+}
+
 /**
  * Turn one report's `<body>` into a fragment ready to concatenate with others.
  *
@@ -578,10 +698,24 @@ export function bakeBody(src: string, prefix: string): string {
 
   // Namespace every id rather than the two this template happens to use, so
   // many documents can share one page without colliding.
-  body = body.replace(/\bid\s*=\s*(["'])([^"']*)\1/gi, (_m, q, id) => `id=${q}${prefix}${id}${q}`);
-  body = body.replace(
-    /\bhref\s*=\s*(["'])#([^"']*)\1/gi,
-    (_m, q, id) => `href=${q}#${prefix}${id}${q}`,
+  const ids = new Set([...body.matchAll(ID_ATTR)].map((m) => m[3] ?? m[4]));
+  body = rewriteAttr(body, ID_ATTR, (id) => `${prefix}${id}`);
+
+  // Every reference to a renamed id has to follow it, or its target vanishes
+  // without an error -- and verification counts text and image paints, not
+  // gradients, clip paths or arrowheads. main.ts's reference check catches what
+  // this misses.
+  body = rewriteAttr(body, HREF_ATTR, (v) => (/^#./.test(v) ? `#${prefix}${v.slice(1)}` : v));
+  // SVG paint servers, clips, masks, filters and markers: url(#id), in
+  // presentation attributes, inline styles and the SVG's own <style> block.
+  // Only ids this report defines, so a url(#...) in prose is left alone.
+  body = namespaceUrlRefs(body, prefix, ids);
+  // Attributes holding one id or a space-separated list of them.
+  body = rewriteAttr(body, ID_LIST_ATTR, (list) =>
+    list
+      .split(/(\s+)/)
+      .map((t) => (ids.has(t) ? `${prefix}${t}` : t))
+      .join(""),
   );
 
   // One left-to-right pass over every configured pair, so they cannot
@@ -590,7 +724,9 @@ export function bakeBody(src: string, prefix: string): string {
     const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
     const i = groups.findIndex((g) => g !== undefined);
     const inner = groups[i]; // undefined when i < 0: no pair matched
-    return inner === undefined ? (args[0] as string) : tex2html(inner, delims[i].display);
+    return inner === undefined
+      ? (args[0] as string)
+      : tex2html(texFromMarkup(inner), delims[i].display);
   });
 
   return portableSvg(body);
@@ -612,8 +748,14 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   // into document scope.
   const head = src.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? src;
 
-  let css = [...head.matchAll(/<style>([\s\S]*?)<\/style>/gi)]
-    .map((m) => m[1])
+  // Any attributes, as a browser reads them: `<style type="text/css">` is the
+  // same sheet (a bare `<style>` match used to drop it silently), a non-CSS
+  // type is ignored, and a `media` attribute stays a condition.
+  let css = [...head.matchAll(STYLE_BLOCK)]
+    .map(([, attrs, sheet]) => {
+      const kind = styleBlockKind(attrs);
+      return kind === "ignored" ? "" : kind === "all" ? sheet : `@media ${kind} {\n${sheet}\n}`;
+    })
     .join("\n")
     // At-rules with no block would confuse the brace walker.
     .replace(/@(?:import|charset|namespace)[^;]*;/gi, "")
@@ -622,6 +764,9 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, "");
 
   audit.atPageDropped += (css.match(/@page\b/gi) ?? []).length;
+  // scopeCss namespaces ids in selectors; a declaration's url(#id) names an id
+  // too. Every id in the report is renamed, so every such reference follows.
+  css = namespaceUrlRefs(css, prefix);
   css = scopeCss(css, scope, prefix);
 
   // The gate the removed JavaScript would have opened.

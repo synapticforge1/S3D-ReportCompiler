@@ -20,7 +20,7 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26); Deno's leg runs in CI only since 2026-10-28 |
 | CI | `.github/workflows/ci.yml` on every push/PR — checks, JSR checks + upload check (Deno), runtime matrix, npm proof; green on main (run 40728999111, 2026-10-28) |
-| Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; no Deno locally since 2026-10-28 (🔒 owner goal, [bun-migration.md](bun-migration.md)): compat reads tsc `.d.ts`; `cli:*` install via npm; JSR's checks (`deno check`, `doc --lint`, `check --doc`, `publish --dry-run`, the upload check) and the Deno legs of `runtimes` / `npm:prove` run in `.github/workflows/ci.yml`; Deno publishes from `publish.yml`; the manifest is `jsr.json` (no `deno.json`, task 12 step 7) |
+| Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; no Deno locally since 2026-10-28 (🔒 owner goal, [bun-migration.md](bun-migration.md)) — **proved 2026-11-05: the whole local gate passes with Deno absent from the PATH** (task 12): compat reads tsc `.d.ts`; `cli:*` install via npm; JSR's checks (`deno check`, `doc --lint`, `check --doc`, `publish --dry-run`, the upload check) and the Deno legs of `runtimes` / `npm:prove` run in `.github/workflows/ci.yml`; Deno publishes from `publish.yml`; the manifest is `jsr.json` (no `deno.json`, task 12 step 7) |
 | API surface | `api-surface.txt`, 69 lines; v1.1.0 released at floor minor (`compareEachReport` and two types added; the Node 22.13 floor counted as minor, owner); the floor resets against `v1.1.0` from here |
 | Verification | set-wide AND per-report conservation (task 7, 2026-10-28); pdfjs-dist 6.4.299, no polyfill warnings (task 14) |
 | Dependencies | **Bun installs them** (`bun.lock`; owner, 2026-10-28: "dependency installs should go to bun, because it is faster") — the same 20 package versions as npm's lockfile, ~2× faster warm (15.4 s vs `npm ci` 29.4 s); `bun audit`: **no vulnerabilities** (49 packages; `npm audit` 0 since the `@xmldom/xmldom` 0.9.12 override, task 13) |
@@ -725,7 +725,18 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 
 ---
 
-## 🟡 12. Move the toolchain off Deno, keep JSR — steps 2–7 DONE, `publish.yml` gated on CI (2026-10-28); left: Deno uninstalled here (owner) + one no-Deno local gate run
+## ✅ 12. Move the toolchain off Deno, keep JSR — DONE 2026-11-05: the no-Deno local gate run passed
+
+**Closed 2026-11-05 (owner: "I do not think Task 12 is dependent on deno not being installed. we
+can run it with bun specifically to check that everything is ok").** Uninstalling Deno was never
+the test; nothing resolving to Deno is. One run with Deno ABSENT from the PATH (the scoop shims
+folder dropped for that shell; Bun and fnm from their real install folders, `bunx` as a hardlink
+to `bun.exe` — the lint canary spawns `bunx` by name): `bun install --frozen-lockfile`, `check`,
+`lint` (+ canary), `format:check`, `compat`, `test`, `runtimes`, `npm:build`, `npm:prove` all exit
+0, and `node --test` (Node 24.21) 20/20. `runtimes` and `npm:prove` print "deno: runs in CI", as
+designed. Deno stays installed here; whether to uninstall it is now only a preference.
+⚠️ Learned: removing the shims folder from PATH also removes `bun` and `bunx` (scoop shims them
+too) — a first attempt failed lint on a missing `bunx`, not on Deno.
 
 **`publish.yml` gated on CI (2026-10-28; owner: "make the publish.yml"):** a first job `ci-green`
 waits for `ci.yml`'s run on the tagged SHA (`gh api …/workflows/ci.yml/runs?head_sha=`, every

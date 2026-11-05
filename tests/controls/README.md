@@ -37,6 +37,9 @@ that (see [../../cmem/verification.md](../../cmem/verification.md)).
 |---|---|---|
 | `control-custom-delimiters.ts` | `@@..@@` and `%%..%%` **declared in the config** | identical to baseline: 169 expressions, 8 pages, 9,486 chars |
 | `control-dollar-delimiters.ts` | second report switched to `$$..$$` | both render correctly; 0 stray `$` |
+| `control-math-entities.ts` | every relational `<` / `>` inside an expression written as `&lt;` / `&gt;` | identical to baseline: 169 expressions, 0 failed (failed every one before 2026-11-05: TeX read the `&`) |
+| `control-style-attributes.ts` | every `<style>` as `<style type="text/css">`, a quoted SVG `font-family`, one `media="print"` block | PASS with the baseline's audit counts; the quoted value escaped, the print block still `@media print` (before 2026-11-05 the typed sheets were dropped silently) |
+| `control-svg-references.ts` | a gradient, clip path and marker in the diagram, used via `url(#id)` — bare, quoted, and `&quot;`-quoted as a saved page has it; plus a `data-id` that must stay untouched and an unquoted `id=`/`href=` pair | PASS, and the bake's references name the renamed ids (`r0-…`). The build passed before 2026-11-05 too, with the references dangling, so the test reads the bake |
 
 ## Controls that taught something by not working
 
@@ -65,4 +68,4 @@ it imported `npm:pdfmake`, deliberately not a dependency, which would not surviv
 |---|---|
 | `verify-pdf-text.ts` | dump what text a PDF actually contains, page by page. The standalone precursor to the built-in verification; the simplest way to inspect an arbitrary PDF. Defaults to the build output |
 | `export-transcript.ts` | export a Claude Code session log to readable Markdown, so the record travels with the repo. Strips base64 page renders, truncates tool results |
-| `redact-paths.ts` | replace absolute machine paths with `<project>` / `<home>` / `<home-slug>` / `<path-slug>` placeholders. `--check` reports without writing; `--user=NAME` and `--folder=NAME` override what is detected from the environment |
+| `redact-paths.ts` | replace absolute machine paths with `<project>` / `<workspace>` / `<home>` / `<path>` and their slugs with `<project-slug>` / `<home-slug>` / `<path-slug>`; the checkout and workspace are found from the script's own location. Exits 1 if the username or any drive path survives (since 2026-11-05; it used to say "redacted." and exit 0). `--check` reports without writing; `--user=NAME` and `--folder=NAME` override what is detected from the environment |

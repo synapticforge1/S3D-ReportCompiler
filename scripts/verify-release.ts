@@ -23,7 +23,8 @@
  * run automatically at the end of `bun run release`, it confirms the Actions
  * publish was actually attested.
  *
- * Exit codes: 0 attested · 1 published but NOT attested · 2 not published yet.
+ * Exit codes: 0 attested · 1 published but NOT attested (yanked or not) · 2 not published
+ * yet, or JSR could not be asked · 3 attested but YANKED.
  */
 
 import { readFileSync } from "node:fs";
@@ -39,27 +40,41 @@ const wait = argv.includes("--wait");
 const version = args[0] ?? jsrJson.version;
 
 const [scope, name] = jsrJson.name.replace(/^@/, "").split("/");
-const url = `https://api.jsr.io/scopes/${scope}/packages/${name}/versions/${version}`;
+// Test hooks, so tests/build.test.ts can stand a fake JSR on 127.0.0.1 and drive every verdict
+// (yanked, unattested, 404, 5xx, a stalled request). Unset in real use.
+const JSR_API = process.env.S3D_JSR_API ?? "https://api.jsr.io";
+const JSR_TIMEOUT_MS = Number(process.env.S3D_JSR_TIMEOUT_MS ?? 20_000);
+const JSR_RETRY_MS = Number(process.env.S3D_JSR_RETRY_MS ?? 15_000);
+const url = `${JSR_API}/scopes/${scope}/packages/${name}/versions/${version}`;
 
 type VersionInfo = { rekorLogId?: string | null; yanked?: boolean };
 
+/** One look at JSR: the version's record, a definite "not there" (404), or why it failed. */
+type Look = { info: VersionInfo } | { missing: true } | { error: string };
+
 /**
- * The JSR record for this version, or `null` if it is not published yet.
- *
- * (Under Deno a missing `--allow-net` permission exited here rather than
- * returning `null`. Bun and Node have no permission system, so that case no
- * longer exists; a network failure still reads as "not published yet".)
+ * Look the version up once. Bounded: with no timeout, one stalled request (a proxy, a
+ * half-open connection) held the whole poll -- and `bun run release` -- forever. Only a 404
+ * means "not published"; a 5xx, a 429 or a network failure is "could not tell", which the
+ * poll retries and the verdict reports as such rather than as "not on JSR".
  */
-async function fetchVersion(): Promise<VersionInfo | null> {
+async function fetchVersion(): Promise<Look> {
   try {
-    const res = await fetch(url, { headers: { accept: "application/json" } });
+    const res = await fetch(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(JSR_TIMEOUT_MS),
+    });
+    if (res.status === 404) {
+      await res.body?.cancel();
+      return { missing: true };
+    }
     if (!res.ok) {
       await res.body?.cancel();
-      return null;
+      return { error: `HTTP ${res.status}` };
     }
-    return (await res.json()) as VersionInfo;
-  } catch {
-    return null;
+    return { info: (await res.json()) as VersionInfo };
+  } catch (e) {
+    return { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
   }
 }
 
@@ -70,22 +85,41 @@ console.log(`Checking ${jsrJson.name}@${version} …`);
 // older version. 60 × 15 s = 15 min: since 2026-10-28 publish.yml first waits for CI to pass on
 // the tagged commit (~5–6 min), and 1.1.5 outlasted the old 5-minute window (exit 2, then attested).
 const attempts = wait ? 60 : 1;
-let info: VersionInfo | null = null;
+let look: Look = { error: "not asked" };
 
 for (let i = 1; i <= attempts; i++) {
-  info = await fetchVersion();
-  if (info) break;
+  look = await fetchVersion();
+  if ("info" in look) break;
   if (i < attempts) {
-    console.log(`  not on JSR yet (${i}/${attempts}) — the workflow may still be running`);
-    await new Promise((r) => setTimeout(r, 15_000));
+    console.log(
+      "missing" in look
+        ? `  not on JSR yet (${i}/${attempts}) — the workflow may still be running`
+        : `  could not ask JSR (${i}/${attempts}): ${look.error} — retrying`,
+    );
+    await new Promise((r) => setTimeout(r, JSR_RETRY_MS));
   }
 }
 
-if (!info) {
-  console.error(`\n⚠️  ${version} is not on JSR${wait ? " yet" : ""}.`);
+if (!("info" in look)) {
+  if ("error" in look) {
+    console.error(`\n⚠️  Could not ask JSR whether ${version} is published: ${look.error}.`);
+    console.error(`   This is not a verdict. Re-run later: bun run verify-release ${version}`);
+  } else {
+    console.error(`\n⚠️  ${version} is not on JSR${wait ? " yet" : ""}.`);
+  }
   console.error(`   If a release is in flight, watch it at:`);
   console.error(`   https://github.com/synapticforge1/S3D-ReportCompiler/actions`);
   process.exit(2);
+}
+
+const info = look.info;
+
+// Provenance first: an unattested version stays exit 1 whether or not it was later yanked --
+// "no provenance" is the finding this script exists for, and a yank must not hide it.
+if (info.yanked && info.rekorLogId) {
+  console.error(`\n⚠️  ${version} is YANKED on JSR (it was attested, Rekor ${info.rekorLogId}).`);
+  console.error(`   It no longer resolves for new installs; it is not a live release.`);
+  process.exit(3);
 }
 
 if (info.rekorLogId) {
@@ -94,7 +128,9 @@ if (info.rekorLogId) {
   process.exit(0);
 }
 
-console.error(`\n❌ ${version} is published but has NO provenance attestation.`);
+console.error(
+  `\n❌ ${version} is published but has NO provenance attestation${info.yanked ? " (and is now YANKED)" : ""}.`,
+);
 console.error(`   No Sigstore/Rekor entry — JSR cannot show where this build came from.\n`);
 console.error(`   This is what a workstation \`deno publish\` produces. Releases must go`);
 console.error(`   through \`bun run release\`, which tags and lets GitHub Actions publish`);

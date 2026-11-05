@@ -27,7 +27,7 @@
  *   1. Read the current version from jsr.json
  *   2. Run scripts/sync-version.ts to propagate it to package.json + src/report_core.ts
  *   3. git add + commit "bump version to vX.Y.Z"
- *   4. Pre-flight — refuse to tag the wrong thing (see below)
+ *   4. Pre-flight — refuse to tag the wrong thing (see below); a refusal undoes step 3's commit
  *   5. git tag -f vX.Y.Z
  *   6. git push && git push --force origin vX.Y.Z  ← triggers publish.yml
  *
@@ -62,8 +62,54 @@ function run(cmd: string[]): void {
   const code = p.status ?? 1;
   if (code !== 0) {
     console.error(p.error ? p.error.message : new TextDecoder().decode(p.stderr));
-    process.exit(code);
+    refuse(code);
   }
+}
+
+/**
+ * The "bump version" commit step 3 made, while it is still only local; null once the push
+ * starts, or when step 3 had nothing to commit.
+ */
+let bumpCommit: string | null = null;
+
+/**
+ * Stop the release. Before the push, a refusal also takes back step 3's commit: until
+ * 2026-11-05 a release the pre-flight refused left "bump version to vX" on main, and the next
+ * plain push published it -- the stray-bump history step 0 exists to prevent. `reset --mixed`
+ * puts the tree back exactly as `bun run bump` left it (step 0 proved the three files differ
+ * from the previous commit only in their version lines). Only when HEAD is still that commit.
+ */
+function refuse(code: number): never {
+  if (bumpCommit !== null) {
+    const head = capture(["git", "rev-parse", "HEAD"]);
+    const subject = capture(["git", "log", "-1", "--pretty=%s"]);
+    // All three must hold, and an empty capture (git failed) never counts as a match.
+    if (
+      /^[0-9a-f]{40}$/.test(bumpCommit) &&
+      head === bumpCommit &&
+      subject === `bump version to ${tag}`
+    ) {
+      const reset = spawnSync("git", ["reset", "--quiet", "--mixed", "HEAD~1"]);
+      const after = capture(["git", "rev-parse", "HEAD"]);
+      if (reset.status === 0 && after !== bumpCommit && after !== "") {
+        console.error(`   (undid the local "bump version to ${tag}" commit; the bump is unstaged)`);
+      } else {
+        console.error(`   ⚠️ could NOT undo the local "bump version to ${tag}" commit`);
+        console.error(
+          `      (${new TextDecoder().decode(reset.stderr ?? new Uint8Array()).trim() || "HEAD unchanged"}).`,
+        );
+        console.error(
+          `      It is still on this branch — do not push it: git reset --mixed HEAD~1`,
+        );
+      }
+    } else {
+      console.error(
+        `   ⚠️ HEAD is not the bump commit any more; left as is. Check before pushing:`,
+      );
+      console.error(`      git log -2 --oneline`);
+    }
+  }
+  process.exit(code);
 }
 
 /** stdout of a command, trimmed. Exit status is ignored — callers interpret "". */
@@ -112,6 +158,7 @@ run(["git", "add", "jsr.json", "package.json", "src/report_core.ts"]);
 const diffCode = spawnSync("git", ["diff", "--cached", "--quiet"]).status;
 if (diffCode !== 0) {
   run(["git", "commit", "-m", `bump version to ${tag}`]);
+  bumpCommit = capture(["git", "rev-parse", "HEAD"]);
 }
 
 // 4. PRE-FLIGHT — what exactly is about to be released?
@@ -129,7 +176,7 @@ if (diffCode !== 0) {
     console.error(`\n❌ Uncommitted changes — these would NOT be in ${tag}:\n`);
     console.error(dirty);
     console.error(`\nCommit or stash them, then re-run.`);
-    process.exit(1);
+    refuse(1);
   }
 
   // Behind the remote means someone else's commits — or your own from another
@@ -141,7 +188,7 @@ if (diffCode !== 0) {
     if (behind !== "0" && behind !== "") {
       console.error(`\n❌ HEAD is ${behind} commit(s) behind ${upstream}.`);
       console.error(`   Pull first — those commits would not be in ${tag}.`);
-      process.exit(1);
+      refuse(1);
     }
   }
 
@@ -150,28 +197,42 @@ if (diffCode !== 0) {
   // holds, and `deno publish` would fail anyway. Turning the warning below into
   // a check, because a comment does not stop anyone.
   const [scope, name] = manifest.name.replace(/^@/, "").split("/");
+  // Three answers, not two: 404 is "not published" and the only one that lets the release on;
+  // a record is "already published"; anything else -- a 5xx, a 429, a timeout, no network --
+  // is "could not tell". That used to read as "not published" (a 503 silently, a network
+  // failure with a warning), and the fetch had no timeout, so a stalled connection hung the
+  // release. ⚠️ "Could not tell" now REFUSES: continuing past a check that could not run is
+  // what made this guard useless the first time (under Deno: no --allow-net, the catch
+  // swallowed it, a tag was force-pushed onto a published version), and `deno publish` SKIPS
+  // an already-published version with exit 0 and runs on into the release steps
+  // (roadmap task 11). A release can wait for JSR to answer.
+  let answer: "missing" | "published" | string;
   try {
     const res = await fetch(
-      `https://api.jsr.io/scopes/${scope}/packages/${name}/versions/${version}`,
-      { headers: { accept: "application/json" } },
+      // Test hooks (tests/build.test.ts's fake JSR); unset in real use.
+      `${process.env.S3D_JSR_API ?? "https://api.jsr.io"}/scopes/${scope}/packages/${name}/versions/${version}`,
+      {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(Number(process.env.S3D_JSR_TIMEOUT_MS ?? 20_000)),
+      },
     );
-    if (res.ok) {
-      await res.body?.cancel();
-      console.error(`\n❌ ${manifest.name}@${version} is ALREADY published on JSR.`);
-      console.error(`   JSR versions are immutable — bump instead:\n`);
-      console.error(`     bun run bump      # ${version} -> next patch`);
-      console.error(`     bun run release\n`);
-      process.exit(1);
-    }
     await res.body?.cancel();
-  } catch {
-    // ⚠️ Under Deno, continuing past a check that could not run is what made this
-    // guard useless the first time it was exercised: the task lacked
-    // --allow-net, the fetch threw NotCapable, the catch swallowed it, and the
-    // script force-pushed a tag onto an already-published version. Bun and Node
-    // have no permission system, so that case is gone; genuine network trouble
-    // still only warns — this check exists to fail *early*.
-    console.warn(`  (could not reach JSR to check whether ${version} exists — continuing)`);
+    answer = res.status === 404 ? "missing" : res.ok ? "published" : `HTTP ${res.status}`;
+  } catch (e) {
+    answer = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  }
+  if (answer === "published") {
+    console.error(`\n❌ ${manifest.name}@${version} is ALREADY published on JSR.`);
+    console.error(`   JSR versions are immutable — bump instead:\n`);
+    console.error(`     bun run bump      # ${version} -> next patch`);
+    console.error(`     bun run release\n`);
+    refuse(1);
+  }
+  if (answer !== "missing") {
+    console.error(`\n❌ Could not ask JSR whether ${version} is already published (${answer}).`);
+    console.error(`   Tagging blind could move the tag of a published version. Re-run when`);
+    console.error(`   https://api.jsr.io answers.`);
+    refuse(1);
   }
 
   // The compatibility gate on the version about to be tagged (workspace letter H6): the committed
@@ -183,7 +244,7 @@ if (diffCode !== 0) {
   });
   if (gate.status !== 0) {
     console.error(`\n❌ The compatibility gate refused ${tag} — nothing tagged.`);
-    process.exit(1);
+    refuse(1);
   }
 
   const sha = capture(["git", "rev-parse", "--short", "HEAD"]);
@@ -194,6 +255,10 @@ if (diffCode !== 0) {
 
 // 5. Tag (force-update so a re-run after a failed release still works)
 run(["git", "tag", "-f", tag]);
+
+// From the push on, the commit is shared: a failure must not rewrite it. (A failed push of
+// main leaves the commit and the tag local; re-running the release retries them.)
+bumpCommit = null;
 
 // 6. Push commit + tag — triggers publish.yml, which publishes with provenance.
 //
