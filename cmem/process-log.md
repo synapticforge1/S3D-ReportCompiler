@@ -321,6 +321,11 @@ Owner: "look for code issues" four times, each followed by "fix" — then "do th
 - 🔒 **MathJax limitations M1–M4 recorded** (roadmap task 8; owner: "note these as what they are,
   MathJax limitations … checked whenever MathJax is updated") and pinned by one test.
 - npm's stray `0.0.0-stage`: deprecated, then unpublished, by the owner (the 2FA web step is theirs).
+- The next session: the ended session's log tail exported as transcript part 8 and deleted; the
+  ledger re-read — H20 and C26 closed, this repo's parts of H6, H15, H22, H28 verified by their
+  creators. Nothing in the ledger waits on this repo; the owner's GitHub Support request (H19) is
+  its only open item there. ⚠️ A ledger cell read truncated (`cut -c`) hid the workspace's
+  "S3D ✅" for H28 — read a row's whole cell before reporting it open.
 
 | believed | measured |
 |---|---|

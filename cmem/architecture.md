@@ -131,11 +131,13 @@ Published as `@jrmarcum/s3d-reportcompiler` from GitHub Actions, never from a wo
 records a provenance attestation for a publish that arrives through its native GitHub OIDC
 integration, so a local `deno publish` would succeed and produce an *unattested* release.
 
-**The publishing path, and what pins it** (workspace letter H20, checked 2026-10-28). One registry,
-JSR; one path: `.github/workflows/publish.yml` on a `v*` tag, `id-token: write`, `deno publish` with
-GitHub OIDC — no token anywhere. **npm is the second registry** (owner, 2026-10-28; roadmap task 15):
+**The publishing path, and what pins it** (workspace letter H20, checked 2026-10-28; the letter
+CLOSED by the workspace 2026-11-05). Two registries, one tag: `.github/workflows/publish.yml` on a
+`v*` tag, `id-token: write`, `deno publish` with GitHub OIDC for JSR, then the npm job — no token
+anywhere. **npm is the second registry** (owner, 2026-10-28; roadmap task 15):
 `@synapticforge1/s3d-reportcompiler`, built by `bun run npm:build` into `dist/` (compiled JS +
-`.d.ts`, a generated manifest with a `bin`) and proven by `bun run npm:prove` — not yet published.
+`.d.ts`, a generated manifest with a `bin`) and proven by `bun run npm:prove` — published by OIDC
+with provenance from 1.1.4 (latest 1.1.7, 2026-11-05).
 **Its trusted publisher** names `.github/workflows/publish.yml` and no environment (owner,
 2026-10-28) — so that file must not be renamed and its npm job must not gain an environment.
 ⚠️ npm can attach a trusted publisher only to a package that EXISTS, so the first version
@@ -147,14 +149,14 @@ token path: OIDC only (roadmap task 15). **Proven by 1.1.4** (npm provenance
 `publish.yml`'s `npm` job (2026-10-28) runs after the JSR job on a tag, or alone on "Run workflow"
 with a tag; it checks the built version equals the tag, refuses any manifest `npm publish` would
 auto-correct, skips a version already on npm, then `npm publish` with the run's OIDC token (no npm
-token anywhere). Not yet run. JSR links the package to the GitHub repository **by repository id**: its API reads
+token anywhere). Run on every tag since 1.1.4 (1.1.4–1.1.7 published by it). JSR links the package to the GitHub repository **by repository id**: its API reads
 `githubRepository` = `synapticforge1/S3D-ReportCompiler`, id `1328030455` — GitHub's id for that
 repository (owner `synapticforge1`, id `342141589`, Organization). ⚠️ **JSR does not follow a
 transfer or a rename on its own** (binaryang measured it, its `cmem/publishing.md`): the link here
 was re-linked on 2026-10-20 at 23:37:36 UTC, 93 s after binaryang's, so it already names the org.
-binaryang's 1.13.1 proved the same path publishes with provenance from the org. **Not yet
-measured for THIS package:** its first release from the org — `bun run release` ends with
-`verify-release`, which is the check. **Before any release after a future move:** read
+binaryang's 1.13.1 proved the same path publishes with provenance from the org. **Measured for
+THIS package:** 1.1.0 → 1.1.7 released from the org, each attested (`verify-release`; Rekor ids in
+[roadmap.md](roadmap.md) § Current state). **Before any release after a future move:** read
 `api.jsr.io/scopes/jrmarcum/packages/s3d-reportcompiler` → `githubRepository` first; a stale link
 shows only as a provenance failure, on a version that can never be republished.
 
