@@ -300,6 +300,37 @@ binaryang's C26 answered (`439db99`: three stale binaryang ids translated, each 
 a binaryang branch), the session's recreated log exported as transcript part 5 and deleted, and
 1.1.5 released — the first release through `publish.yml`'s CI gate and the first by `bun.lock`.
 
+## Phase 12 — four code reviews; 1.1.6; MathJax's limitations named (2026-11-05)
+
+Owner: "look for code issues" four times, each followed by "fix" — then "do the patch release".
+- **Review 1 (the whole tree):** an output named like a report silently dropped it from the package;
+  an output path could overwrite or delete a source report; SVG `url(#id)` references dangled after
+  id namespacing; entities reached TeX raw; failed builds leaked temp profiles. Then `<style>` with
+  attributes, quoted SVG values, the release bump commit left on refusal, an unbounded
+  `verify-release`, a redactor that missed drive paths. A build-time reference guard added.
+- **Reviews 2–3 (the fixes themselves):** entity-quoted `url()`, `data-id` read as an id, real paths
+  vs junctions/subst, earlier bakes under other names, the guard counting instead of comparing; the
+  release pre-flight now refuses when JSR cannot answer. Every untested branch then given a test — a
+  fake JSR on 127.0.0.1 behind a test hook, throwaway clones for the release undo.
+- **1.1.6 released** after two stops that published nothing: CI on Linux failed the redactor (POSIX
+  paths), then the compat gate took the stranded tag as its baseline. Both fixed; attested.
+- **Review 4 (the 1.1.6 range):** the owner's rule — "If it is possible, we will need a fix for any
+  future reports where that possible becomes probable." So latent risks are fixed, not filed. It
+  surfaced the biggest finding of the day: **MathJax does not throw on a TeX error**, it typesets a
+  red box, so the bake counted it as converted (0 boxes in any current report; now a failure).
+- 🔒 **MathJax limitations M1–M4 recorded** (roadmap task 8; owner: "note these as what they are,
+  MathJax limitations … checked whenever MathJax is updated") and pinned by one test.
+- npm's stray `0.0.0-stage`: deprecated, then unpublished, by the owner (the 2FA web step is theirs).
+
+| believed | measured |
+|---|---|
+| "0 failed" in the maths line means every expression typeset | MathJax returns an error box without throwing; failures were invisible to the count |
+| MathJax's entity table covers HTML's entities | 406 core names, no `&ge;`; 2125 only after a synchronous `all.js` import |
+| `&nbsp;` and a space typeset the same | identical in maths mode; `\text{}` keeps U+00A0 and collapses spaces |
+| a test that passes on Windows passes in CI | the redactor knew only drive-letter paths; Ubuntu's `/home/…` checkout failed it — reproduced in WSL without the runner log |
+| a refused release leaves nothing behind | the bump commit stayed on main; then the undo's `--mixed` reset unstaged the developer's own files |
+| the prose of a report is safe from attribute rewrites | unquoted-attribute support would have rewritten "id = 4" — attributes are now read inside tags only |
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is

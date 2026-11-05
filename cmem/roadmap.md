@@ -14,8 +14,9 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Maths | 8,286 expressions typeset, **0 failed** (2026-08-08) |
 | Verification | 174 words / 660 numbers checked, **0 missing**; 48 image paints for 48 expected; 48 diagrams intact; 0 surviving LaTeX; 0 blank pages (2026-08-08) |
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08) |
-| Published | **1.1.6 on both registries** (2026-11-05, owner: "do the patch release"): the three code-review rounds' fixes. JSR (1.1.0–1.1.6 attested; 1.1.6 Rekor `3696801217`) and npm (1.1.4–**1.1.6 by OIDC with provenance**, 1.1.6 `latest`, 10 files). Took three tags-worth of attempts, none published wrongly: the first `v1.1.6` failed CI on Linux (the redactor missed POSIX paths) and the CI gate published nothing; the retry was refused by the compat gate (it took the stranded tag as its baseline); fixed both, and publish run 42070536432 went green on `f26f030`. Before that: **1.1.5** (2026-10-28, owner: "bump and release"): JSR `@jrmarcum/s3d-reportcompiler` (1.1.0–1.1.5 attested) and npm `@synapticforge1/s3d-reportcompiler` (1.1.0 by hand; 1.1.4 and 1.1.5 by OIDC with provenance; plus a stray `0.0.0-stage`). 1.1.5 = the first release through `publish.yml`'s CI gate (publish run 40759837547: "CI passed on the tagged commit" ✅, then JSR, then npm) and the first installed from `bun.lock`. 🔒 One tag releases both |
-| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · 1.1.1 ✅ Rekor `3544876876` · 1.1.2 ✅ Rekor `3545629708` · 1.1.3 ✅ Rekor `3546011937` · 1.1.4 ✅ Rekor `3546339510` · **1.1.5 ✅ Rekor `3547861777`** (`verify-release`, 2026-10-28); npm 1.1.4 and 1.1.5 ✅ SLSA provenance. ⚠️ `bun run release`'s wait outlasted by the CI gate on 1.1.5 (exit 2 "not on JSR yet", then attested) — `verify-release --wait` raised from 5 to 15 min — the first release from the org, with no `deno.json`, run from Bun |
+| Published | **1.1.6 on both registries** (2026-11-05, owner: "do the patch release"): the three code-review rounds' fixes. JSR (1.1.0–1.1.6 attested; 1.1.6 Rekor `3696801217`) and npm (1.1.4–**1.1.6 by OIDC with provenance**, 1.1.6 `latest`, 10 files). Took three tags-worth of attempts, none published wrongly: the first `v1.1.6` failed CI on Linux (the redactor missed POSIX paths) and the CI gate published nothing; the retry was refused by the compat gate (it took the stranded tag as its baseline); fixed both, and publish run 42070536432 went green on `f26f030`. Before that: **1.1.5** (2026-10-28, owner: "bump and release"): JSR `@jrmarcum/s3d-reportcompiler` (1.1.0–1.1.5 attested) and npm `@synapticforge1/s3d-reportcompiler` (1.1.0 by hand; 1.1.4 and 1.1.5 by OIDC with provenance). npm now lists **1.1.0, 1.1.4, 1.1.5, 1.1.6 only**: the stray `0.0.0-stage` was deprecated, then unpublished, by the owner on 2026-11-05 (task 15). 1.1.5 = the first release through `publish.yml`'s CI gate (publish run 40759837547: "CI passed on the tagged commit" ✅, then JSR, then npm) and the first installed from `bun.lock`. 🔒 One tag releases both |
+| Unreleased on `main` | **`60d68d2` (2026-11-05), not in any release yet** — the 1.1.6-range review's fixes: TeX errors now fail the build (MathJax typesets an error box by default, M3), every named entity decodes in maths (M1), attributes read inside tags only, the per-report reference guard; release-script hardening (pathspec bump commit, exact undo, fenced JSR test hook, `compat --unpublished`, shared `scripts/jsr-api.ts`). A patch by the gate (API unchanged): **1.1.7 when the owner says**. 28/28 on Bun, Node 24, Node 22.18; the 48-report client set unchanged |
+| Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · 1.1.1 ✅ Rekor `3544876876` · 1.1.2 ✅ Rekor `3545629708` · 1.1.3 ✅ Rekor `3546011937` · 1.1.4 ✅ Rekor `3546339510` · 1.1.5 ✅ Rekor `3547861777` (2026-10-28) · **1.1.6 ✅ Rekor `3696801217`** (`verify-release`, 2026-11-05); npm 1.1.4–1.1.6 ✅ SLSA provenance. ⚠️ `bun run release`'s wait outlasted by the CI gate on 1.1.5 (exit 2 "not on JSR yet", then attested) — `verify-release --wait` raised from 5 to 15 min — the first release from the org, with no `deno.json`, run from Bun |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26); Deno's leg runs in CI only since 2026-10-28 |
@@ -846,7 +847,7 @@ instead — prebuilt N-API binaries, no `tar` chain. Plan, as its own task after
 
 ---
 
-## ✅ 15. Publish to npm as well as JSR — DONE 2026-10-28: 1.1.4 on both, by OIDC, with provenance
+## ✅ 15. Publish to npm as well as JSR — DONE 2026-10-28: 1.1.4 on both, by OIDC, with provenance; the stray `0.0.0-stage` removed 2026-11-05
 
 **Outcome (read 2026-10-28):** npm `@synapticforge1/s3d-reportcompiler` has `1.1.0` (by hand, no
 provenance), **`1.1.4` = latest, published by the trusted publisher with provenance**
@@ -862,7 +863,17 @@ From now on one tag publishes both (🔒 owner: "jsr and npm are updated at the 
 owner's npm user at 18:49:30Z — npm's staged-publishing flow left it during the first manual
 attempt; not `latest`. The owner found no way to deprecate it on the website; the CLI can, with an
 interactive 2FA login: `npm deprecate @synapticforge1/s3d-reportcompiler@0.0.0-stage "<msg>"`, or
-`npm unpublish …@0.0.0-stage` while npm's unpublish window allows (owner's call). **Owner,
+`npm unpublish …@0.0.0-stage` while npm's unpublish window allows (owner's call).
+✅ **DEPRECATED 2026-11-05** (owner: "deprecate the stray 0.0.0-stage", run by the owner — the
+CLI's 2FA web confirmation cannot run from a session): the registry reads `deprecated:
+"Placeholder left by npm staged publishing; not a release. Install 1.1.6 or later."`, `latest`
+1.1.6. Deprecation keeps the version listed (npm skips it in ranges and warns on an exact
+install); removing it is a separate `npm unpublish`, past the 72-hour window and so subject to
+npm's no-dependents / low-downloads / single-owner policy — the owner's call.
+✅ **UNPUBLISHED 2026-11-05** (owner ran `npm unpublish "@synapticforge1/s3d-reportcompiler@0.0.0-stage"`;
+npm allowed it past the 72-hour window). Read back: versions 1.1.0, 1.1.4, 1.1.5, 1.1.6; `latest`
+1.1.6; the 0.0.0-stage tarball 404, 1.1.6's 200. The registry keeps a `time` entry for it, and the
+version string can never be published again. **Owner,
 2026-10-28: the npm tokens are revoked** (and the `NPM_TOKEN` secret deleted before 1.1.4's
 re-run) — no npm token exists for this package. The global CLI on this machine: the Deno one
 uninstalled by the owner, now a Bun global of npm 1.1.4 (architecture.md § Installing it).

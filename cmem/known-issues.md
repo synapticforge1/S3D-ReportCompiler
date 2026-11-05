@@ -18,9 +18,20 @@ Under an earlier flat layout — reports, tooling and output all in one folder �
 but the real fix was structural: **input and output now live in separate directories**, so the scan
 cannot see a build artifact of its own.
 
-The tool-owned-file guard (`combined_report.html`, `browser_example.html`) remains as a second line for
-anyone who overrides the paths to point both at the same folder. Its skip count is reported when it
-fires. **Keep tooling and examples out of the reports directory.**
+The second line, for anyone who points the output into the input folder, changed on 2026-11-05: a
+previous bake is recognised by its CONTENT (its fixed title and first report wrapper), whatever its
+name, and skipped and named in the output; only `browser_example.html` is still skipped by name. It
+used to skip `<output>.html` by name wherever the output was, which silently dropped a real report
+of that name from the package, and from both sides of the verification. And an output that would
+land on a source report (compared by real path, so junctions, symlinks and subst drives count) is
+refused outright. **Keep tooling and examples out of the reports directory.**
+
+### MathJax's limitations are worked around, not removed
+
+Four MathJax 3.2.2 behaviours the bake depends on (async entity tables, U+00A0 in `\text{}`, TeX
+errors that typeset instead of throwing, CHTML emitting no SVG): the list, the workarounds and the
+test that pins them are in [roadmap.md](roadmap.md) task 8 § "MathJax limitations", M1–M4.
+🔒 **Re-check them on every MathJax update** (owner, 2026-11-05).
 
 ### `--no-sandbox` is passed to Chrome
 
