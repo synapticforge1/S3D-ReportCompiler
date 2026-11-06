@@ -93,6 +93,7 @@ export const RUNTIME =
 |---|---|
 | Bake reports into one printable document | ✅ |
 | Run the unrendered-maths guard | ✅ |
+| Run the reference guard (`findBrokenReferences`), bake again with clean counters (`resetBakeState`) | ✅ — since 2026-11-06; measured in headless Chrome, two bakes, the same counts |
 | Print the result | ✅ — `window.print()`; the browser **is** the engine |
 | Read a folder, launch a browser, repack a PDF on disk | ❌ |
 

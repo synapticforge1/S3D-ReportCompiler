@@ -999,6 +999,35 @@ function mapAttrs(tag: string, fn: (name: string, value: string) => string): str
   );
 }
 
+/**
+ * A start tag without its event-handler attributes (`on…=`), and with any `javascript:` URL in
+ * `href` / `xlink:href` / `src` / `action` / `formaction` replaced by `#`. Attributes are read in
+ * order, values whole ({@link TAG_ATTR}), so text inside another attribute is never touched.
+ */
+function stripActiveAttrs(tag: string): string {
+  const head = /^<[^\s/>]+/.exec(tag)?.[0] ?? "";
+  const rest = tag
+    .slice(head.length)
+    .replace(
+      TAG_ATTR,
+      (all, name: string, eq?: string, dq?: string, sq?: string, bare?: string) => {
+        const n = name.toLowerCase();
+        if (/^on/.test(n)) return "";
+        if (eq === undefined) return all;
+        const value = dq ?? sq ?? bare ?? "";
+        // A browser ignores tabs and newlines inside a URL, and whitespace around it.
+        if (URL_ATTRS.has(n) && /^javascript:/i.test(value.replace(/[\t\n\r]/g, "").trim())) {
+          return `${name}${eq}"#"`;
+        }
+        return all;
+      },
+    );
+  return head + rest;
+}
+
+/** Attributes whose value is a URL a browser may navigate to or load. */
+const URL_ATTRS = new Set(["href", "xlink:href", "src", "action", "formaction"]);
+
 /** A start tag's attributes by lower-cased name; the first of a duplicate wins, as HTML parses. */
 function attrsOf(tag: string): Map<string, string> {
   const out = new Map<string, string>();
@@ -1115,6 +1144,11 @@ export function bakeBody(src: string, prefix: string): string {
       return value;
     }),
   );
+
+  // The baked document is meant to run no code: <script> blocks are gone above, and so are inline
+  // event-handler attributes (on…=) and javascript: URLs here. A report is user-supplied HTML, and
+  // the render must not execute anything it carries (the CLI also prints with scripting off).
+  body = inTags(body, stripActiveAttrs);
 
   // Every reference to a renamed id has to follow it, or its target vanishes
   // without an error -- and verification counts text and image paints, not
@@ -1234,12 +1268,19 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   return css;
 }
 
-/** Wrap baked bodies and their scoped stylesheets into one printable document. */
+/**
+ * Wrap baked bodies and their scoped stylesheets into one printable document.
+ *
+ * The document forbids scripting itself (`script-src 'none'; object-src 'none'`): it needs none,
+ * and it is built from user-supplied reports, so nothing one carries may run while it renders --
+ * script blocks, inline handlers and `javascript:` URLs alike, whatever the bake missed.
+ */
 export function assembleDocument(bodies: string[], styles: string[], mathCss: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'">
 <title>Combined Design Report</title>
 <style>
 @page { size: Letter; margin: 0.5in; }

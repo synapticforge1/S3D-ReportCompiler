@@ -341,9 +341,11 @@ one: every guard must fail loudly when it can't run.
 
 ## 16. A fix is new code — review it cold, and measure it
 
-On 2026-11-06 four review rounds ran on the same day: 7 findings, then 6, then 4, then 4. **Three of
+On 2026-11-06 five review rounds ran on the same day: 7 findings, then 6, then 4, 4 and 3. **Three of
 the third round's four, and two of the fourth's, were in fixes written hours earlier** — each
-passing the tests written with it (known-issues #44–#49):
+passing the tests written with it (known-issues #44–#49). The fifth went where no round had looked
+(the browser example, the ignore rules, the configuration) and found only older defects (#52–#54):
+once the day's fixes had been read cold, the yield moved back to unread code.
 
 | The fix | Its own test held | What a cold re-read plus a measurement found |
 |---|---|---|

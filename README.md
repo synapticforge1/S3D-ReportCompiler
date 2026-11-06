@@ -194,7 +194,7 @@ you keep a clone: it builds the npm package from your working tree and installs 
 
   | runtime | the installed package | a clone of this repository |
   |---|---|---|
-  | Node 22 | 22.6 or later for 1.0.4 (measured); **22.13 or later from the next release** — its `pdfjs-dist` 6 requires it | **22.18 or later** (the first 22.x that runs `.ts` with no flag) |
+  | Node 22 | **22.13 or later since 1.1.0** — its `pdfjs-dist` 6 requires it (the npm package declares `node >=22.13.0`); 1.0.4 ran on 22.6 or later (measured) | **22.18 or later** (the first 22.x that runs `.ts` with no flag) |
   | Node 24, Node 26 | ✅ | ✅ |
   | Bun | 1.4.4 (the version measured; Bun has no LTS line) | 1.4.4 |
   | Deno | 2.9 LTS (2.9.8 measured) | 2.9 LTS |

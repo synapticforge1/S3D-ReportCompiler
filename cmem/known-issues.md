@@ -33,10 +33,19 @@ errors that typeset instead of throwing, CHTML emitting no SVG): the list, the w
 test that pins them are in [roadmap.md](roadmap.md) task 8 § "MathJax limitations", M1–M4.
 🔒 **Re-check them on every MathJax update** (owner, 2026-11-05).
 
-### `--no-sandbox` is passed to Chrome
+### The render runs no report code (since 2026-11-06, ledger #55)
 
-So it can run as root in a container. Only defensible because the input is a document this tool
-generated itself. **Drop it if the HTML ever comes from somewhere untrusted.**
+The baked document is built from **user-supplied report files**, so its premise was wrong that
+`--no-sandbox` was safe because "the input is a document this tool generated itself". Now, in
+layers: the bake strips `<script>` blocks AND inline event-handler attributes and `javascript:`
+URLs; the assembled document forbids scripting itself (a Content-Security-Policy `<meta>`,
+`script-src 'none'; object-src 'none'` — it needs none; measured in Chrome: a handler that ran
+without it is blocked with it, and the PDF still prints); and `--no-sandbox` is passed only as root
+(a container), where Chrome cannot start without it. ⚠️ Not by Chrome's
+`--blink-settings=scriptEnabled=false`: with it `--print-to-pdf` writes NO file, exit 0, empty
+stderr (measured 2026-11-06). The "0 scripts" warning counts handler attributes too. ⚠️ The verification
+proves every source word and number is PRESENT — it does not prove nothing was added, which is why
+the render itself must not be able to change the document.
 
 ### Remaining template assumptions
 
@@ -347,6 +356,7 @@ ignore rules, the tool configuration:
 | 52 | **A second batch inherited the first's state.** `mathStats`, `audit` and the delimiter / warning sets are module-level and only grow: fine for the CLI (one build per process), wrong for `tests/browser_example.html` (every click of Bake) and any library caller baking twice. Measured: a clean report alone → 0 failed, no leftovers; after a batch with one bad expression and the fallback delimiters → "1 failed" and a stranded `$` from "$5 per bolt" — refused. Fixed: `resetBakeState()` (new export), called by the browser example before each bake; in headless Chrome two bakes now print the same counts (338, not 676) | no — false refusals and misattributed warnings, never a false pass |
 | 53 | **`cmem/local/` was not git-ignored.** The workspace rules put private machine facts there; `/local/` covers only the top-level folder (`git check-ignore`: tracked). Fixed: `/cmem/local/`, and a test that every private path stays ignored | **yes** — a commit would have carried them |
 | 54 | **The reference guard ran in the CLI only** (`main.ts`): the browser path and library callers had no protection against a bake breaking a gradient, clip or marker reference, and the browser example showed none of the CLI's warnings. Fixed: `findBrokenReferences()` moved into the core (new export, still written apart from the bake's own attribute reading, design-decisions §9); the CLI and the browser example both run it; the example prints the warnings too | **yes**, off the CLI |
+| 55 | **The render could run code carried by a report.** The bake removed `<script>` blocks but kept inline event-handler attributes; Chrome printed with JavaScript on and `--no-sandbox` everywhere, and the "0 scripts" check did not count handlers. Verification proves presence, not absence of additions. Fixed in layers (§ "The render runs no report code" above). None in the real set: the baked HTML differs by exactly the one CSP `<meta>` line (removed, it hashes to the old `7f283563…` / `a19e5ad1…`); new references `cbdd3221…` (samples), `7d5664f6…` (client set); pages unchanged (100, 380) | **yes** |
 
 ⚠️ **#52 and #54 add four exports, so the next release is a MINOR (1.2.0), not 1.1.8:** `compat`
 says 0 removed, 0 changed, 4 added (`BakedReport`, `ReferenceCheck`, `findBrokenReferences`,

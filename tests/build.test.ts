@@ -938,6 +938,26 @@ test("a second batch starts clean, and the reference guard is the core's", async
   assert.deepEqual(two.broken, [{ report: 1, target: "grad" }]);
 });
 
+test("the bake carries no event handlers or javascript: URLs", async () => {
+  // A report is user-supplied HTML; the render must not execute anything from it (#55).
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const out: string = core.bakeBody(
+    '<html><body><p onclick="void 0" title="onclick=text">x</p>' +
+      '<a href=" javascript:void 0">y</a><a href="#ok">z</a><g id="ok"></g></body></html>',
+    "r9-",
+  );
+  assert.doesNotMatch(out, /<p[^>]*\sonclick=/i, "an event-handler attribute survived");
+  assert.ok(out.includes('title="onclick=text"'), "another attribute's text was touched");
+  assert.ok(out.includes('href="#"'), "a javascript: URL survived");
+  assert.ok(out.includes('href="#r9-ok"'), "an ordinary link was changed");
+  // And the assembled document forbids scripting itself, whatever the bake might miss.
+  assert.match(
+    core.assembleDocument([out], [""], ""),
+    /<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'">/,
+    "the document does not forbid scripting",
+  );
+});
+
 test("private paths stay ignored by git", () => {
   // Client data, transcripts, build output, and the workspace's private memory folder. cmem/local/
   // was missing: `/local/` covers the top-level folder only, and the workspace rules put machine

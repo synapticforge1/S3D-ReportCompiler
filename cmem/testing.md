@@ -351,6 +351,17 @@ clicked twice — both logs: 338 expressions, 0 failed, 2 loaders / gates / stra
 reference(s), 0 broken`, the refused-`[...]` warning, "Ready to print." (without the reset the
 second would have read 676 / 4).
 
+**2026-11-06, sixth pass (owner: "fix all"; ledger #55):** 38/38 on `bun test` (54 s) and
+`node --test` on Node 24.21 and 22.18; `compat` → still minor (no new export). New test "the bake
+carries no event handlers or javascript: URLs" (benign inputs: an `onclick` attribute removed, a
+`javascript:` link → `#`, another attribute's text and an ordinary link untouched; the assembled
+document carries the CSP `<meta>`); fails on HEAD's core. ⚠️ **The baked hashes changed by design**,
+by exactly one line: `cbdd3221…` (samples), `7d5664f6…` (client set); with the CSP line removed
+they hash to `7f283563…` / `a19e5ad1…`; 100 and 380 pages, PASS. Measured in Chrome along the way:
+`--blink-settings=scriptEnabled=false` makes `--print-to-pdf` write no file (exit 0, empty stderr),
+so it is not used; the sandbox (no `--no-sandbox`) prints normally on Windows; a CSP `<meta>`
+`script-src 'none'` blocks an inline handler and still prints.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in

@@ -672,12 +672,19 @@ const combinedHtml = assembleDocument(bodies, styles, mathCss);
 }
 
 const externalRefs = (combinedHtml.match(/(?:href|src)="https?:/gi) ?? []).length;
-const scripts = (combinedHtml.match(/<script/gi) ?? []).length;
+// Event-handler attributes are scripts too; the bake removes them, so any left is a bake bug.
+const scripts =
+  (combinedHtml.match(/<script/gi) ?? []).length +
+  (combinedHtml.match(/<[a-zA-Z][^<>]*\son[a-z]+\s*=/gi) ?? []).length;
 if (externalRefs > 0 || scripts > 0) {
   console.warn(
     `  warning: baked HTML still has ${scripts} script(s) and ${externalRefs} external ref(s)`,
   );
 }
+
+/** Root (uid 0) on a POSIX host: the one case Chrome needs `--no-sandbox` to start. */
+const runningAsRoot =
+  typeof process !== "undefined" && typeof process.getuid === "function" && process.getuid() === 0;
 
 // Chrome exits 0 even when printing fails, so "no file" is the only reliable
 // failure signal -- but only if there is no file to begin with. A leftover PDF
@@ -719,11 +726,14 @@ try {
   const result = await rt.run(chrome, [
     "--headless=new",
     "--disable-gpu",
-    // Needed to run as root in a container, which is the usual deployment.
-    // It disables Chrome's process sandbox, so it is only defensible because
-    // the input is a document this script generated itself. Drop it if the
-    // HTML ever comes from somewhere untrusted.
-    "--no-sandbox",
+    // No script runs in the render: the bake strips scripts and handlers, and the document itself
+    // forbids scripting (its Content-Security-Policy, assembleDocument). Not by a Chrome flag:
+    // `--blink-settings=scriptEnabled=false` makes --print-to-pdf write NO file (measured
+    // 2026-11-06, Chrome; exit 0, empty stderr).
+    // Chrome's sandbox stays on, except as root (a container), where Chrome cannot start with it.
+    // It used to be off everywhere, justified as "the input is a document this script generated
+    // itself" -- but the bake is made from whatever reports are in the folder (2026-11-06).
+    ...(runningAsRoot ? ["--no-sandbox"] : []),
     "--no-first-run",
     "--disable-extensions",
     // Chrome refuses to start against a profile already in use.

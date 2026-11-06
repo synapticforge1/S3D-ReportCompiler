@@ -336,10 +336,11 @@ Owner: "look for code issues" four times, each followed by "fix" — then "do th
 | a refused release leaves nothing behind | the bump commit stayed on main; then the undo's `--mixed` reset unstaged the developer's own files |
 | the prose of a report is safe from attribute rewrites | unquoted-attribute support would have rewritten "id = 4" — attributes are now read inside tags only |
 
-## Phase 13 — four reviews in one day; a fix is new code (2026-11-06)
+## Phase 13 — five reviews in one day; a fix is new code (2026-11-06)
 
-The owner asked "look for code issues" four times, answering "yes" / "fix all" each time, and to
-commit after each round (`d92ae0d`, `86e81d6`, `44b60de`; nothing pushed). Ledger #31–#51.
+The owner asked "look for code issues" five times, answering "yes" / "fix all" each time, and to
+commit after each round (`d92ae0d`, `86e81d6`, `44b60de`, memory `aed68a2`, then `e6bba07` with the
+API-surface re-baseline `f2ec880` in its own commit; nothing pushed). Ledger #31–#54.
 
 - **Review 1, the runtime code (7):** a locked old PDF read back as the new one; a third argument
   ignored; SVG hoisting that lost `@media` and CSS-only properties; body sheets unscoped; `html`/`body`
@@ -356,6 +357,11 @@ commit after each round (`d92ae0d`, `86e81d6`, `44b60de`; nothing pushed). Ledge
   misjudged (including HTML's caseless `lang`), a test that stopped at the REAL JSR and so could not
   fail. Plus an empty path argument read as "here", the redactor ignoring emails, an unguarded
   control generator. → [practices.md](practices.md) §16.
+- **Review 5, what no pass had opened (3):** the core's counters carried one batch into the next
+  (the browser example refused every bake after a failed one), `cmem/local/` was not git-ignored,
+  and the reference guard ran only in the CLI. Two of the fixes are exports — `resetBakeState()`,
+  `findBrokenReferences()` — so **the next release is a minor, 1.2.0**, the first since 1.1.0. The
+  browser example was run for real: bundled, served, two bakes in headless Chrome, the same counts.
 - ⚠️ **A session leak, contained:** measuring the sanitizer, a `sed` mask that did not apply printed
   three real field values to the terminal (no file). Rule kept in known-issues: count client fields
   with a script that never prints them.
@@ -364,7 +370,9 @@ commit after each round (`d92ae0d`, `86e81d6`, `44b60de`; nothing pushed). Ledge
 
 | believed | measured |
 |---|---|
-| a fix with a passing test is done | five of the last eight findings were in that day's fixes, each with a passing test |
+| a fix with a passing test is done | five of the third and fourth rounds' eight findings were in that day's fixes, each with a passing test |
+| the core is a library, so it is safe to call twice | its counters are per process: a second batch inherited the first's failures and was refused |
+| `/local/` in `.gitignore` covers the private folders | it covers the top-level one; `cmem/local/`, where the workspace keeps machine facts, was tracked |
 | prefixing a scoped sheet only narrows it | it also adds specificity: Chrome let the diagram's rule beat the report's own |
 | `[attr=value]` compares with case | HTML compares `lang`, `dir`, `type` … caselessly in selectors; Chrome matched `html[lang=EN]` on `lang="en"` |
 | "CI passed" means "safe to publish" | CI runs on every branch; a tag on an unmerged branch would have published it |
