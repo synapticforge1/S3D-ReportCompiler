@@ -43,7 +43,8 @@
 <script type="module">
 import {
   bakeBody, bakeStyle, assembleDocument, mathStyleSheet,
-  findLeftoverMath, mathStats, audit, delimSignatures, sortReportNames,
+  findLeftoverMath, findBrokenReferences, mathStats, audit, delimSignatures, sortReportNames,
+  resetBakeState, skippedDelims, svgStyleWarnings,
 } from "./report_core.browser.js";
 
 const log = (msg) => { document.getElementById("log").textContent += "\n" + msg; };
@@ -51,6 +52,11 @@ let combined = "";
 
 document.getElementById("bake").addEventListener("click", async () => {
   document.getElementById("log").textContent = "Baking...";
+  // The core's counters are cumulative per page: without this, a second Bake inherited the
+  // first one's failures (and was refused) and its delimiters.
+  resetBakeState();
+  document.getElementById("print").disabled = true;
+  combined = "";
   const names = sortReportNames(
     document.getElementById("files").value.split(",").map((s) => s.trim()).filter(Boolean),
   );
@@ -58,20 +64,35 @@ document.getElementById("bake").addEventListener("click", async () => {
   const bodies = [];
   const styles = [];
 
+  const sources = [];
   for (let i = 0; i < names.length; i++) {
     const res = await fetch(names[i]);
     if (!res.ok) { log(`FAILED to fetch ${names[i]}: ${res.status}`); return; }
     const src = await res.text();
+    sources.push(src);
     styles.push(bakeStyle(src, `.rs${i}`, `r${i}-`));
     bodies.push(bakeBody(src, `r${i}-`));
     log(`baked ${names[i]}`);
   }
 
-  // Same guard the command line build uses: an unrecognised delimiter never
-  // matches and would otherwise be typeset as prose.
+  // The warnings the command line prints.
+  for (const d of skippedDelims) log(`warning: refused degenerate delimiter "${d}"`);
+  for (const s of svgStyleWarnings) log(`warning: SVG rule "${s}" could not be hoisted; kept, confined`);
+
+  // Same guards the command line build uses. An unrecognised delimiter never
+  // matches and would otherwise be typeset as prose...
   const leftovers = findLeftoverMath(bodies.join(""));
   if (leftovers.length || mathStats.failed) {
     log(`REFUSING: unrendered maths -- ${[...leftovers, `${mathStats.failed} failed`].join("; ")}`);
+    return;
+  }
+  // ...and a renamed id whose reference did not follow it makes a graphic vanish silently.
+  const refs = findBrokenReferences(
+    sources.map((source, i) => ({ source, style: styles[i], body: bodies[i], prefix: `r${i}-` })),
+  );
+  log(`refs:    ${refs.references} id reference(s), ${refs.broken.length} broken by the bake`);
+  if (refs.broken.length) {
+    log(`REFUSING: broken references -- ${refs.broken.map((b) => `${names[b.report]}: #${b.target}`).join(", ")}`);
     return;
   }
 

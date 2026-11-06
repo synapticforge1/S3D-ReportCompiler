@@ -336,6 +336,21 @@ assertion, and only it, fails; the npm-fence case now stands a fake JSR answerin
 first and asserts "Rekor log ID: 81" and the fence's message. Chrome, measured: `html[lang=EN]`
 matches `lang="en"`; `[lang=EN s]` and `body[class=DARK]` on `class="dark"` do not.
 
+**2026-11-06, fifth pass (owner: "fix all three"; ledger #52–#54):** 37/37 on `bun test` (52 s) and
+`node --test` on Node 24.21 and 22.18; baked HTML byte-identical (`7f283563…`, `a19e5ad1…`); the
+CLI's `refs:` line unchanged now that it calls the core's guard. `compat` → **minor** (4 added).
+New tests:
+| test | asserts |
+|---|---|
+| a second batch starts clean (#52, #54) | in a FRESH process (the counters are module-level): batch 1 with the fallback delimiters and one bad expression, then a clean batch → `failed` 1 and `1 x "$"` without the reset, 0 / none / converted 1 / every audit counter 0 after `resetBakeState()`; `findBrokenReferences`: a correct bake `{references 2, unresolved 1, broken []}` (a source-dangling `#gone` excused), a sheet still naming `#g` → `[{report 0, target "g"}]`, report 0's dangling `#grad` does not excuse report 1's broken one |
+| private paths stay ignored (#53) | `git check-ignore --no-index` on `local/…`, `cmem/local/…`, `cmem/transcript/…`, `CompiledPDF/` at three depths, `.mathjax-fonts/`, `dist/`; a committed sample is NOT ignored |
+**Inverted:** HEAD's core, `main.ts` and `.gitignore` → both fail ("core.resetBakeState is not a
+function"; "cmem/local/environment.md is NOT ignored"). **The browser example, live:** the bundle
+built, `tests/` served on 127.0.0.1, the example loaded in headless Chrome in an iframe and Bake
+clicked twice — both logs: 338 expressions, 0 failed, 2 loaders / gates / stray tokens, `refs: 0 id
+reference(s), 0 broken`, the refused-`[...]` warning, "Ready to print." (without the reset the
+second would have read 676 / 4).
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in

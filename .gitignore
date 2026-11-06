@@ -5,9 +5,14 @@
 #
 # An entire ignored directory is deliberate: a per-file rule leaks the moment
 # someone drops a new report in beside the samples. Keep the real set here and
-# build it with `cd local && deno run -A ../main.ts` — the defaults resolve from
-# the working directory, so that just works.
+# build it with `cd local && bun ../main.ts` — the defaults resolve from the
+# working directory, so that just works.
 /local/
+
+# Private memory: the workspace rules put machine facts (paths, environment notes)
+# in a git-ignored `cmem/local/`. `/local/` above covers the top-level folder only,
+# so without this a session following that rule here would stage them.
+/cmem/local/
 
 # Claude Code project instructions — machine-local, same convention as wasmtk.
 # The durable project rules live in cmem/, which IS tracked.
@@ -26,7 +31,7 @@ CLAUDE.md
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 # Node and Bun need these on disk; Deno uses the same folder via
-# "nodeModulesDir": "manual" in deno.json.
+# "nodeModulesDir": "manual" in jsr.json (deno.json until 2026-10-28).
 /node_modules
 
 # The npm copy, built by `bun run npm:build` (roadmap task 15) — generated, never committed.

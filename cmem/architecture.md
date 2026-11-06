@@ -56,8 +56,9 @@ sources ──► BAKE ──► GUARD ──► RENDER ──► OPTIMIZE ─�
    scripts, remove the spinner, namespace ids (and every reference to them), scope the CSS — the
    head's sheets and the body's own, `html`/`body` selectors settled against the source's tags —,
    hoist SVG styles onto presentation attributes where an attribute can say the same and confine
-   the rest to their own `<svg>`, inline the fonts. Output is one hermetic document; the CLI then
-   checks every id reference the bake renamed still resolves ([design-decisions.md](design-decisions.md) §6).
+   the rest to their own `<svg>`, inline the fonts. Output is one hermetic document; then the
+   core's `findBrokenReferences` checks every id reference the bake renamed still resolves — the CLI
+   and the browser example both run it ([design-decisions.md](design-decisions.md) §6).
 2. **GUARD** (core) — refuse to continue if anything that looks like unrendered maths survives. An
    unrecognised delimiter never errors on its own; this is the only thing that catches it.
 3. **RENDER** (runtime) — one headless Chrome pass over the whole document.

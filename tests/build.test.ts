@@ -864,6 +864,106 @@ test("CSS scoping, SVG sheets, attributes and entities, as a browser reads them"
   assert.equal(core.decodeEntities("&amp;#60; &notanentity;"), "&#60; &notanentity;");
 });
 
+test("a second batch starts clean, and the reference guard is the core's", async () => {
+  // A FRESH process: the counters under test are module-level, and other tests here bake too.
+  const probe = join(work, "state-probe.mjs");
+  const coreUrl = pathToFileURL(join(ROOT, "src", "report_core.ts")).href;
+  const config =
+    "<script type=\"text/x-mathjax-config\">MathJax.Hub.Config({tex2jax:{inlineMath:[['[mathin]','[mathin]']],displayMath:[['[math]','[math]']]}});</script>";
+  writeFileSync(
+    probe,
+    [
+      `import * as core from ${JSON.stringify(coreUrl)};`,
+      // Batch 1: no config (the fallback delimiters, "$" among them) and one bad expression.
+      `core.bakeBody("<html><body>[mathin]\\\\frac{1}{[mathin]</body></html>", "r0-");`,
+      `const before = core.mathStats.failed;`,
+      `const batch2 = () => core.bakeBody(${JSON.stringify(`<html><head>${config}</head><body>Cost: $5 per bolt. [mathin]x^2[mathin]</body></html>`)}, "r0-");`,
+      `const inherited = { failed: core.mathStats.failed, leftovers: core.findLeftoverMath(batch2()) };`,
+      `core.resetBakeState();`,
+      `const clean = { failed: core.mathStats.failed, leftovers: core.findLeftoverMath(batch2()), converted: core.mathStats.converted,`,
+      `  sets: core.delimSignatures.size + core.skippedDelims.size + core.svgStyleWarnings.size, audit: Object.values(core.audit).reduce((a, b) => a + b, 0) };`,
+      `console.log(JSON.stringify({ before, inherited, clean }));`,
+      "",
+    ].join("\n"),
+  );
+  const p = run([probe]);
+  assert.equal(p.code, 0, p.out);
+  const { before, inherited, clean } = JSON.parse(p.out.trim().split("\n").pop() ?? "{}");
+  assert.equal(before, 1, "batch 1 should have one failure");
+  // Without the reset, the clean batch is refused for the earlier batch's state (measured).
+  assert.equal(inherited.failed, 1);
+  assert.deepEqual(inherited.leftovers, ['1 x "$"']);
+  // After it, the same batch is clean: no failure carried over, no "$" it never declared.
+  assert.equal(clean.failed, 0);
+  assert.deepEqual(clean.leftovers, []);
+  assert.equal(clean.converted, 1, "the counters restart from zero");
+  assert.equal(clean.audit, 0, "an audit counter survived the reset");
+  assert.equal(clean.sets, 1, "only batch 2's own delimiter signature remains");
+
+  // The reference guard, now exported. A correct bake: nothing broken.
+  const core = await import(coreUrl);
+  const src =
+    '<html><body><svg><defs><linearGradient id="g"></linearGradient></defs>' +
+    '<rect fill="url(#g)"/><use href="#gone"/></svg></body></html>';
+  const ok = core.findBrokenReferences([
+    {
+      source: src,
+      style: core.bakeStyle(src, ".rs0", "r0-"),
+      body: core.bakeBody(src, "r0-"),
+      prefix: "r0-",
+    },
+  ]);
+  // #gone dangles in the source already: excused under its prefix, not counted as broken.
+  assert.deepEqual(ok, { references: 2, unresolved: 1, broken: [] });
+  // A bake whose sheet still names the old id: broken, named by report and target.
+  const bad = core.findBrokenReferences([
+    {
+      source: src,
+      style: ".rs0 rect { fill: url(#g) }",
+      body: core.bakeBody(src, "r0-"),
+      prefix: "r0-",
+    },
+  ]);
+  assert.deepEqual(bad.broken, [{ report: 0, target: "g" }]);
+  // Per report: report 0's dangling #grad does not excuse report 1's broken #grad.
+  const two = core.findBrokenReferences([
+    { source: '<a href="#grad"></a>', style: "", body: '<a href="#r0-grad"></a>', prefix: "r0-" },
+    {
+      source: '<g id="grad"></g><a href="#grad"></a>',
+      style: "",
+      body: '<g id="r1-grad"></g><a href="#grad"></a>',
+      prefix: "r1-",
+    },
+  ]);
+  assert.deepEqual(two.broken, [{ report: 1, target: "grad" }]);
+});
+
+test("private paths stay ignored by git", () => {
+  // Client data, transcripts, build output, and the workspace's private memory folder. cmem/local/
+  // was missing: `/local/` covers the top-level folder only, and the workspace rules put machine
+  // facts in cmem/local/ (2026-11-06).
+  for (const path of [
+    "local/HTMLFilesToBeCompiled/member_0_report.html",
+    "cmem/local/environment.md",
+    "cmem/transcript/session-transcript.md",
+    "CompiledPDF/combined_report.pdf",
+    "tests/CompiledPDF/combined_report.html",
+    "local/CompiledPDF/combined_report.pdf",
+    ".mathjax-fonts/MathJax_Main-Regular.woff",
+    "dist/package.json",
+  ]) {
+    const r = spawnSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: ROOT });
+    assert.equal(r.status, 0, `${path} is NOT ignored by git`);
+  }
+  // ...and the committed samples are not.
+  const s = spawnSync(
+    "git",
+    ["check-ignore", "-q", "--no-index", "tests/HTMLFilesToBeCompiled/member_0_report.html"],
+    { cwd: ROOT },
+  );
+  assert.equal(s.status, 1, "the committed samples are ignored");
+});
+
 // ── the release scripts against a fake JSR ───────────────────────────────────
 //
 // Both scripts take the JSR API's base URL from S3D_JSR_API (a test hook, unset in real use),

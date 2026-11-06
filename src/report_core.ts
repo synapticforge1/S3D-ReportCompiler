@@ -849,6 +849,31 @@ const mjDoc = mathjax.document("", {
 export const mathStats = { converted: 0, failed: 0, firstFailure: "" };
 
 /**
+ * Start a new batch: zero every running counter and empty every diagnostic set --
+ * {@link mathStats}, {@link audit}, {@link delimSignatures}, {@link seenOpeners},
+ * {@link skippedDelims} and {@link svgStyleWarnings}.
+ *
+ * They are module-level and cumulative, which suits the CLI (one build per process) and nothing
+ * else: a page or a server that bakes a second batch inherited the first one's failures and
+ * delimiters -- one bad expression earlier and every later batch was refused, a `$` declared by
+ * an earlier report made a cost in a later report's prose read as stranded maths (measured
+ * 2026-11-06). Call this before each batch.
+ *
+ * MathJax's own stylesheet ({@link mathStyleSheet}) is not reset: it keeps every glyph used since
+ * the module loaded, a superset that renders the same.
+ */
+export function resetBakeState(): void {
+  mathStats.converted = 0;
+  mathStats.failed = 0;
+  mathStats.firstFailure = "";
+  for (const key of Object.keys(audit) as (keyof typeof audit)[]) audit[key] = 0;
+  delimSignatures.clear();
+  seenOpeners.clear();
+  skippedDelims.clear();
+  svgStyleWarnings.clear();
+}
+
+/**
  * Typeset one LaTeX expression to CHTML, updating {@link mathStats}.
  *
  * A failure returns an escaped fallback rather than throwing, so one bad
@@ -1606,6 +1631,101 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
     };
   });
   return { checked: true, reason: "", reports };
+}
+
+/** One report as {@link findBrokenReferences} reads it: its source, and what the bake made of it. */
+export type BakedReport = {
+  /** The raw source report. */
+  source: string;
+  /** Its baked, scoped stylesheet ({@link bakeStyle}). */
+  style: string;
+  /** Its baked body fragment ({@link bakeBody}). */
+  body: string;
+  /** The id namespace it was baked with, e.g. `"r7-"`. */
+  prefix: string;
+};
+
+/** Outcome of {@link findBrokenReferences}. An empty `broken` is the only acceptable result. */
+export type ReferenceCheck = {
+  /** id references in the baked reports: `url(#…)` and `href` / `xlink:href` `"#…"`. */
+  references: number;
+  /** Distinct targets left unresolved in the bake, per report, summed (broken or not). */
+  unresolved: number;
+  /** References the BAKE broke: the report's position in the list, and the target it names. */
+  broken: { report: number; target: string }[];
+};
+
+/**
+ * id references and their targets in one document: `url(#…)` anywhere (style sheets too), and
+ * `href` / `xlink:href` "#…" in start tags. Written apart from the bake's own attribute reading
+ * (§9 of design-decisions: a check must not share code with what it checks). Attributes are read
+ * inside start tags only, one after another, each value whole: prose ("id = 4") is not an
+ * attribute, and neither is "id = 4" inside another attribute's value.
+ */
+function referenceScan(html: string): { refs: number; unresolved: Set<string> } {
+  const text = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  const attrs = (tag: string): [string, string][] =>
+    [
+      ...tag
+        .replace(/^<[^\s/>]+/, "")
+        .matchAll(/([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g),
+    ]
+      .filter((m) => m[2] !== undefined || m[3] !== undefined || m[4] !== undefined)
+      .map((m) => [m[1].toLowerCase(), m[2] ?? m[3] ?? m[4] ?? ""]);
+  const all = (text.match(/<[a-zA-Z][^<>]*>/g) ?? []).flatMap(attrs);
+  const named = (...names: string[]) => all.filter(([n]) => names.includes(n)).map(([, v]) => v);
+  const ids = new Set(named("id"));
+  const targets = [
+    // url(#x) bare, quoted, or entity-quoted as a browser serializes a style -- in a style sheet
+    // as well as an attribute, so over the whole text.
+    ...[...text.matchAll(/url\(\s*(?:"|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)/gi)].map(
+      (m) => m[1],
+    ),
+    ...named("href", "xlink:href")
+      .filter((v) => /^#./.test(v))
+      .map((v) => v.slice(1)),
+  ];
+  return { refs: targets.length, unresolved: new Set(targets.filter((t) => !ids.has(t))) };
+}
+
+/**
+ * **The reference guard.** Every id is renamed per report, so every reference to one has to
+ * follow it; one that stops resolving fails without an error -- a gradient, clip path or
+ * arrowhead just disappears -- and the PDF verification counts text and image paints, not paint
+ * servers. So: a reference that resolved in its own source must still resolve in its bake.
+ *
+ * Compared as SETS, per report: every target a report's bake (its sheet and its body) leaves
+ * unresolved must be one its own source already left unresolved, as written or under its prefix
+ * -- a link broken in the source stays broken, and is not the bake's doing. A count let one broken
+ * reference hide behind a dangling one the bake happened to remove; one set shared by all reports
+ * let report 0's dangling `#grad` excuse report 1's broken `#grad`.
+ *
+ * Moved here from the CLI (2026-11-06) so the browser path and library callers run it too.
+ *
+ * @example
+ * ```ts
+ * import { bakeBody, bakeStyle, findBrokenReferences } from "@jrmarcum/s3d-reportcompiler";
+ * declare const sources: string[];
+ * const check = findBrokenReferences(sources.map((source, i) => ({
+ *   source, prefix: `r${i}-`,
+ *   style: bakeStyle(source, `.rs${i}`, `r${i}-`), body: bakeBody(source, `r${i}-`),
+ * })));
+ * if (check.broken.length > 0) throw new Error("the bake broke an id reference");
+ * ```
+ */
+export function findBrokenReferences(reports: BakedReport[]): ReferenceCheck {
+  let references = 0;
+  let unresolved = 0;
+  const broken: { report: number; target: string }[] = [];
+  reports.forEach((r, i) => {
+    const baked = referenceScan(`${r.style}\n${r.body}`);
+    const excused = new Set<string>();
+    for (const t of referenceScan(r.source).unresolved) excused.add(t).add(`${r.prefix}${t}`);
+    references += baked.refs;
+    unresolved += baked.unresolved.size;
+    for (const t of baked.unresolved) if (!excused.has(t)) broken.push({ report: i, target: t });
+  });
+  return { references, unresolved, broken };
 }
 
 /** Order report filenames the way a reader expects: member_2 before member_10. */

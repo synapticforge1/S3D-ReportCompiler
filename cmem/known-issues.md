@@ -339,6 +339,19 @@ one older behaviour beside #32's new argument check (#50), one old generator (#5
 | 50 | **An empty path argument meant "here".** `"$DIR" out.pdf` with DIR unset passed "", which resolved to the working directory and compiled whatever was there. The #32 class. Fixed: refused, naming its position | **yes** |
 | 51 | **`control-unknown-delimiter.ts` did not check its own edit** -- it printed "config removed: false" and went on, so a sample change could have turned it into another control (config present: the fallback path never taken). Fixed: it throws, like every other generator. It applies to today's sample, so this changed no run | no — latent |
 
+A fifth pass (owner: "fix all three"), over what no pass had opened — the browser example, the
+ignore rules, the tool configuration:
+
+| # | Bug | Silent? |
+|---|---|---|
+| 52 | **A second batch inherited the first's state.** `mathStats`, `audit` and the delimiter / warning sets are module-level and only grow: fine for the CLI (one build per process), wrong for `tests/browser_example.html` (every click of Bake) and any library caller baking twice. Measured: a clean report alone → 0 failed, no leftovers; after a batch with one bad expression and the fallback delimiters → "1 failed" and a stranded `$` from "$5 per bolt" — refused. Fixed: `resetBakeState()` (new export), called by the browser example before each bake; in headless Chrome two bakes now print the same counts (338, not 676) | no — false refusals and misattributed warnings, never a false pass |
+| 53 | **`cmem/local/` was not git-ignored.** The workspace rules put private machine facts there; `/local/` covers only the top-level folder (`git check-ignore`: tracked). Fixed: `/cmem/local/`, and a test that every private path stays ignored | **yes** — a commit would have carried them |
+| 54 | **The reference guard ran in the CLI only** (`main.ts`): the browser path and library callers had no protection against a bake breaking a gradient, clip or marker reference, and the browser example showed none of the CLI's warnings. Fixed: `findBrokenReferences()` moved into the core (new export, still written apart from the bake's own attribute reading, design-decisions §9); the CLI and the browser example both run it; the example prints the warnings too | **yes**, off the CLI |
+
+⚠️ **#52 and #54 add four exports, so the next release is a MINOR (1.2.0), not 1.1.8:** `compat`
+says 0 removed, 0 changed, 4 added (`BakedReport`, `ReferenceCheck`, `findBrokenReferences`,
+`resetBakeState`). `api-surface.txt` re-baselined to 73 lines in its own commit (Rule 5).
+
 Also confirmed that pass, not changed: #33's premise (Chrome ignores `font="…"` on SVG `<text>`;
 computed 16px).
 

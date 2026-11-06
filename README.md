@@ -410,6 +410,7 @@ throws a descriptive error rather than failing obscurely.
 | `extractSourceTokens(sources)` | Every word, number and expected image count the sources contain → `SourceTokens` |
 | `compareAgainstPdf(expected, observed, reportCount)` | Compare against what was found in the PDF → `VerificationResult` with a `failures[]` array |
 | `findLeftoverMath(baked)` | **The guard.** Surviving delimiters and TeX commands in a baked document — an empty array is the only acceptable result |
+| `findBrokenReferences(reports)` | **The reference guard.** Each report's `{ source, style, body, prefix }` → `ReferenceCheck`; `broken` lists every `url(#…)` / `href="#…"` the bake broke (one that resolved in its source no longer does). Empty is the only acceptable result: verification counts text and images, so a lost gradient, clip path or marker is otherwise invisible. Run by the CLI and the browser example |
 | `textWords(text)` / `textNumbers(text)` | The tokenizers, exposed so a caller can re-derive expectations independently |
 | `decodeEntities(s)` | The verification's HTML entity decoding (named symbols, decimal and hex references, one pass) for the source side of the comparison. The bake decodes with its own, separately written code, so the check cannot share a decoding mistake with the build |
 | `sortReportNames(names)` | Numeric-aware sort, so `member_2` precedes `member_10` |
@@ -421,6 +422,7 @@ throws a descriptive error rather than failing obscurely.
 | `audit` | What the bake step removed or rewrote: `loadersRemoved`, `visibilityNeutralised`, `heightNeutralised`, `atPageDropped`, `strayTokensDropped`, `bodyTagMissing` |
 | `mathStats` | `converted`, `failed`, `firstFailure` |
 | `svgStyleWarnings` | SVG rules that could not be hoisted |
+| `resetBakeState()` | Zero every counter above and empty every diagnostic set (`seenOpeners` and the delimiter sets too). They are cumulative per process: **call it before each batch** when one page or server bakes more than once, or a later batch inherits an earlier one's failures and delimiters |
 | `VERSION`, `MATHJAX_FONTS` | Package version; the CDN base the fonts are inlined from |
 
 ### Host adapter — `/runtime`

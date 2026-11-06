@@ -141,8 +141,11 @@ and after — so they are rules for the next template, each pinned by a test:
   document-wide in HTML, and a plain prefix raised specificity enough to beat the report's own
   rules it used to lose to (Chrome, measured: red where the source was green).
 - **Attributes are read one after another, each value whole**, by the bake and — separately written,
-  §9 — by the CLI's reference guard, which then requires every id reference that resolved in a
+  §9 — by the reference guard, `findBrokenReferences` (in the core since 2026-11-06, so the browser
+  path runs it too; the CLI only until then), which requires every id reference that resolved in a
   source to resolve in its bake: verification counts text and image paints, not gradients or clips.
+- **The counters are per process; a batch resets them.** `resetBakeState()` before each batch, for
+  any caller that bakes more than once (the browser example does); the CLI bakes once.
 
 ---
 
