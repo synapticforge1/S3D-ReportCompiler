@@ -212,6 +212,15 @@ REQUIREMENTS
       macOS     export CHROME_PATH=/Applications/…/Google Chrome
       Linux     export CHROME_PATH=/usr/bin/chromium
 
+  Chrome runs with its sandbox on (off only as root, where it cannot start
+  with one). If the build reports that Chrome found no usable sandbox -- some
+  Linux hosts give an ordinary user none -- turn it off for that build:
+
+      Linux     S3D_CHROME_NO_SANDBOX=1 s3d-reportcompiler
+
+  The build then prints "sandbox: OFF". The reports' own code stays blocked
+  either way.
+
   The first run downloads maths fonts once and caches them in .mathjax-fonts,
   so later runs work offline.
 

@@ -393,6 +393,13 @@ the font test refuses a download cut to half its size ("did not return a font (f
 scripting test reads each CSP directive and that `<meta>` / `<base>` leave the body. HEAD's core +
 `main.ts` under the new tests: all three fail.
 
+**Same day, `--help` (owner: "add that to the '--help' section … so it is covered"):** REQUIREMENTS
+now explains Chrome's sandbox and `S3D_CHROME_NO_SANDBOX=1`. New test "--help names every
+environment variable the CLI reads": the list is main.ts's own `rt.env("…")` reads (the
+`S3D_FONT_` test hooks excepted), plus `CHROME_PATH`; fails on the previous help ("does not mention
+S3D_CHROME_NO_SANDBOX"). 41/41 on `bun test`; `compat` unchanged (the gate reads USAGE and
+OPTIONS only).
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in

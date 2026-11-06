@@ -350,6 +350,24 @@ test(
 
 // ── the CLI's own failure paths ──────────────────────────────────────────────
 
+test("--help names every environment variable the CLI reads", () => {
+  // A setting a user can only learn from an error message is not documented. main.ts's own
+  // rt.env("…") reads are the list, so a new one cannot be added without saying so here.
+  const vars = [
+    ...new Set(
+      [...readFileSync(MAIN, "utf8").matchAll(/rt\.env\("([A-Z0-9_]+)"\)/g)]
+        .map((m) => m[1])
+        .filter((v) => !v.startsWith("S3D_FONT_")), // test hooks, deliberately unadvertised
+    ),
+  ];
+  assert.ok(vars.includes("S3D_CHROME_NO_SANDBOX"), `the scan found ${vars.join(", ")}`);
+  const help = run([MAIN, "--help"]);
+  assert.equal(help.code, 0, help.out);
+  for (const v of vars) assert.ok(help.out.includes(v), `--help does not mention ${v}`);
+  // CHROME_PATH is read by the runtime adapter, not main.ts; it is documented all the same.
+  assert.ok(help.out.includes("CHROME_PATH"), "--help does not mention CHROME_PATH");
+});
+
 test("an unknown flag is rejected", { timeout: TIMEOUT }, () => {
   const r = run([MAIN, "--no-optimise"]);
   assert.equal(r.code, 1, tail(r.out));
