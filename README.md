@@ -22,8 +22,11 @@ and then checks its own work.
 - **Verifies itself and exits non-zero.** Every word, every number, every graphic and every
   equation in the sources is checked against text extracted from the finished PDF on disk. The
   verification shares no code with the transforms, so a bug cannot hide by agreeing with itself.
-- **Hermetic output.** The baked document contains **0 `<script>` tags and 0 external references** —
-  MathJax's fonts are inlined as data URIs. No CDN can be slow, blocked, or down at render time.
+- **Hermetic output, enforced.** The baked document runs no code and loads nothing from another
+  host — and does not just happen to: the bake strips scripts and event handlers, and the
+  document's own Content-Security-Policy forbids every script and every outside load. MathJax's
+  fonts are inlined as data URIs. No CDN can be slow, blocked, or down at render time, and nothing
+  inside a report file can change the PDF while it renders.
 - **Delimiters are read, not assumed.** Each report's own `tex2jax` config decides what marks an
   equation, so a template that switches from `[math]..[math]` to `$$..$$` keeps working.
 - **Nothing is removed silently.** These are calculations that get sealed. Every removal and rewrite
@@ -188,7 +191,14 @@ you keep a clone: it builds the npm package from your working tree and installs 
 ### Requirements
 
 - **Chrome or Edge** must be installed — it is the rendering engine, not an optional accelerator.
-  Set `CHROME_PATH` if it is not in a standard location.
+  Set `CHROME_PATH` if it is not in a standard location. It runs with its **sandbox on**, except
+  as root (a container), where it cannot start with one. On a host where Chrome finds no usable
+  sandbox for an ordinary user, the build says so; set `S3D_CHROME_NO_SANDBOX=1` for that build
+  (the build then prints `sandbox: OFF`). The reports' own code stays blocked either way.
+- **The network, once.** The first build in a folder downloads MathJax's fonts (329 kB) into
+  `.mathjax-fonts/`; later builds there work offline. Only complete font files are kept — a
+  network login page, or a download cut short, stops the build with a plain message and nothing
+  cached.
 - **A supported runtime** — every current Node LTS line, Bun, and Deno's LTS line, each measured
   with the sample reports producing byte-identical output:
 
@@ -267,7 +277,12 @@ looking at.
 | `--help` | print usage and exit |
 
 Unknown flags are rejected rather than ignored, so a mistyped `--no-optimise` cannot silently do the
-opposite of what you asked.
+opposite of what you asked. So are a third path and an empty one: an unquoted path with a space
+arrives as two arguments, and an unset variable (`"$DIR"`) as an empty one — both used to be
+taken, silently, as something else. **Quote any path containing spaces.**
+
+The build also refuses rather than proceeds when an earlier PDF cannot be replaced (it is probably
+open in a viewer — close it), and when an output would overwrite one of the reports.
 
 > ⚠️ **Every `.html` file in the input folder is treated as a report.** Keep tooling, examples and
 > build output somewhere else. Input and output default to separate folders precisely so the scan
@@ -450,11 +465,16 @@ and numbers must appear in its own pages, so one member silently replaced by a d
 is caught (`per-report: 48/48 reports hold all their own words and numbers`). It cannot see a value
 moved *within* a report.
 
-One limit worth knowing before you rely on it:
+Two limits worth knowing before you rely on it:
 
 - **The diagram-split check is template-specific.** It keys on the SkyCiv diagram's title and axis
   caption. A different template makes it find nothing — so the count is printed, and
   `0 diagram(s) checked` means it did not run, **not** that everything is fine.
+- **It proves presence, not absence.** Every source word and number must be in the PDF; nothing
+  checks that the PDF holds nothing else. That is why the render itself cannot add anything: the
+  document runs no code and loads nothing from outside (see *Hermetic output* above). The build
+  also checks that every graphic reference the bake renamed — a gradient, a clip path, an arrowhead
+  — still resolves, since the PDF check counts text and images, not those.
 
 ---
 
@@ -468,6 +488,8 @@ and each lands here with its migration.
 
 | Version | What changed | How to migrate |
 |---|---|---|
+| 1.2.0 (next) | No API removed or changed. **Added:** `findBrokenReferences()` (the reference guard, which the CLI ran alone until now) with its types `BakedReport` / `ReferenceCheck`, and `resetBakeState()`. **Behaviour:** the core's counters are per process — a page or server baking more than once must call `resetBakeState()` before each batch; the baked document gains one Content-Security-Policy line (compare baked hashes from 1.2.0 on, not across it); `bakeBody` leaves a body's own `<style>` blocks to `bakeStyle`, which scopes them — use the two together, as the examples do; the CLI refuses an empty or a third path argument; Chrome keeps its sandbox (see Requirements) | Baking more than once in one process: call `resetBakeState()` per batch. A Linux host without a usable sandbox: `S3D_CHROME_NO_SANDBOX=1` |
+| 1.1.5 – 1.1.7 | nothing breaking — fixes only (1.1.7: a TeX error fails the build instead of typesetting a red error box; every named entity decodes inside maths) | — |
 | 1.1.4 | nothing breaking — the same library as 1.1.0; released to JSR and npm together, both with provenance | — |
 | 1.1.1 – 1.1.3 | nothing breaking — the same library as 1.1.0 (JSR only: their npm publishes did not go through) | — |
 | 1.1.0 | No API removed or changed (`compareEachReport` and its two types were added). **The installed package's Node floor rises from 22.6 to 22.13** (`pdfjs-dist` 6 requires it); the compatibility gate does not read engine requirements, and the owner released this as a minor (2026-10-28). Also the first version on npm (`@synapticforge1/s3d-reportcompiler`), published by hand, so without npm provenance. | Node 22.6–22.12: move to 22.13 or later, or stay on 1.0.4 |
@@ -489,13 +511,14 @@ and each lands here with its migration.
 | ✅ | Verification | Word, number, graphic, blank-page and report-count conservation; exits non-zero |
 | ✅ | Verification | Shares no code with the transforms; re-reads both sides from disk |
 | ✅ | Output | Object-stream repack — 49% smaller, no quality loss |
-| ✅ | Output | Hermetic baked document: 0 scripts, 0 external refs, fonts inlined |
+| ✅ | Output | Hermetic baked document: 0 scripts, 0 external refs, fonts inlined — **enforced** by its own Content-Security-Policy, with scripts and event handlers stripped (1.2.0) |
+| ✅ | Guard | Every graphic reference the bake renamed must still resolve; exported as `findBrokenReferences` for the browser path too (1.2.0) |
 | ✅ | CSS | Per-report stylesheet scoping and id namespacing, so heterogeneous inputs cannot collide |
 | ✅ | Layout | `break-inside: avoid` on figures and equations only — not sections, which cost 123 pages |
 | ✅ | Portability | One adapter for Deno, Node and Bun; byte-identical baked HTML on all three |
 | ✅ | Portability | Browser path — bake and print, with the same guard as the CLI |
 | ✅ | CLI | Defaults resolve from the working directory, so a global install is relocatable |
-| ✅ | Packaging | Published to JSR with GitHub Actions OIDC provenance |
+| ✅ | Packaging | Published to JSR and npm from one tag, both with GitHub Actions OIDC provenance; a release is cut only from `main` and confirms both registries before it reports success |
 | ✅ | Verification | **Per-report conservation.** The PDF is segmented at the report headings and each report is compared against its own source, closing the set-union gap |
 | ⏳ | Maths | **MathJax 3 → 4.** Deferred deliberately: v4 replaced the font system, so glyph metrics, line breaking and page count all move. Deprecation is not an advisory. (`npm audit` reports 0 vulnerabilities since 2026-10-28, when `@xmldom/xmldom` — pinned by MathJax's `speech-rule-engine` — was overridden to the fixed 0.9.12; v4 was not the remedy.) Requires a measured no-degradation comparison first |
 | ⏳ | CSS | **Scope the remaining blanket rewrites.** `visibility: hidden → visible` and `height: 100% → auto` are still textual. They are audited and counted, and they fail *visibly*, which is the safer class — narrowing them means evaluating the cascade |
@@ -508,11 +531,12 @@ and each lands here with its migration.
 - **`$` as a delimiter is inherently ambiguous.** A literal dollar sign in prose either pairs with
   the next one and swallows the text between, or is stranded and fails the guard. That ambiguity is
   in the source document — MathJax reads these reports exactly the same way.
-- **`--no-sandbox` is passed to Chrome** so it can run as root in a container. It is only defensible
-  because the input is a document this tool generated itself. Drop it if the HTML ever comes from
-  somewhere untrusted.
+- **Chrome's sandbox is on**, except as root or with `S3D_CHROME_NO_SANDBOX=1`. Until 1.2.0
+  `--no-sandbox` was passed everywhere, on the reasoning that the input was a document this tool
+  generated — but it is built from whatever report files are in the folder.
 - **Fonts cache to `.mathjax-fonts/`** in the working directory on first run, so later builds work
-  offline.
+  offline — one folder per MathJax version, so an upgrade starts fresh. A cache from before 1.2.0
+  is adopted once, without the network.
 - **The PDF is not byte-reproducible.** Chrome stamps its own render time into `/CreationDate` and
   `/ModDate`, so two builds of identical input differ in hash — on the same runtime. The *baked
   HTML* is byte-identical across Deno, Node and Bun; that is the artifact worth comparing.

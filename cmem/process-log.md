@@ -336,11 +336,12 @@ Owner: "look for code issues" four times, each followed by "fix" — then "do th
 | a refused release leaves nothing behind | the bump commit stayed on main; then the undo's `--mixed` reset unstaged the developer's own files |
 | the prose of a report is safe from attribute rewrites | unquoted-attribute support would have rewritten "id = 4" — attributes are now read inside tags only |
 
-## Phase 13 — five reviews in one day; a fix is new code (2026-11-06)
+## Phase 13 — eight reviews in one day; a fix is new code (2026-11-06)
 
-The owner asked "look for code issues" five times, answering "yes" / "fix all" each time, and to
-commit after each round (`d92ae0d`, `86e81d6`, `44b60de`, memory `aed68a2`, then `e6bba07` with the
-API-surface re-baseline `f2ec880` in its own commit; nothing pushed). Ledger #31–#54.
+The owner asked "look for code issues" eight times, answering "yes" / "fix all" each time, and to
+commit after each round (`d92ae0d`, `86e81d6`, `44b60de`, memory `aed68a2`, `e6bba07` with the
+API-surface re-baseline `f2ec880` in its own commit, `0155e62`, `1b1e498`, CI record `204c49d`,
+`547852b`; `main` unpushed). Ledger #31–#60.
 
 - **Review 1, the runtime code (7):** a locked old PDF read back as the new one; a third argument
   ignored; SVG hoisting that lost `@media` and CSS-only properties; body sheets unscoped; `html`/`body`
@@ -362,6 +363,19 @@ API-surface re-baseline `f2ec880` in its own commit; nothing pushed). Ledger #31
   and the reference guard ran only in the CLI. Two of the fixes are exports — `resetBakeState()`,
   `findBrokenReferences()` — so **the next release is a minor, 1.2.0**, the first since 1.1.0. The
   browser example was run for real: bundled, served, two bakes in headless Chrome, the same counts.
+- **Reviews 6–8, what a report can make the render do (1 + 3 + 2):** inline event handlers
+  survived the bake and Chrome rendered with scripting available and `--no-sandbox` everywhere
+  (#55); the font cache, per file name, would have served an old MathJax's fonts after an upgrade
+  and kept a non-font download (#56, #57); the sandbox might not start on Linux (#58); a font
+  check by signature only (#59); outside loads unblocked — 5 requests during a render, measured
+  with a counting server (#60). Now the document's own CSP forbids scripts and outside loads.
+- ⚠️ **Two of those rounds' responses were stopped by a safety classifier** while testing what a
+  report could inject. The work went on defensively only: harmless test inputs, outcomes checked
+  (attributes removed, policy present, 0 requests), no payload development.
+- **The sandbox was checked on CI, not assumed:** WSL could not stand in (no Chrome, no runtimes,
+  `sudo` needs a password, a kernel without the restriction), so `1b1e498` went to a throwaway
+  branch `ci/sandbox-check` (owner's choice), run 42306618122 passed on `ubuntu-latest`, and the
+  branch was deleted.
 - ⚠️ **A session leak, contained:** measuring the sanitizer, a `sed` mask that did not apply printed
   three real field values to the terminal (no file). Rule kept in known-issues: count client fields
   with a script that never prints them.
@@ -378,6 +392,10 @@ API-surface re-baseline `f2ec880` in its own commit; nothing pushed). Ledger #31
 | "CI passed" means "safe to publish" | CI runs on every branch; a tag on an unmerged branch would have published it |
 | a residue check that reports "0 verified absent" checked something | initials and non-Latin names gave it nothing to look for |
 | `font="12px Arial"` styles SVG text | Chrome ignores it (16px): `font` has no presentation attribute |
+| the baked document "contains 0 external references" | the check saw 1 of 7 spellings; nothing blocked a load — 5 requests in one render |
+| verification would notice content that should not be there | it proves presence only; the render itself has to be unable to add anything |
+| turning JavaScript off with a Chrome flag is the simple fix | `--blink-settings=scriptEnabled=false` makes `--print-to-pdf` write no file; a CSP in the document works |
+| a font file's signature proves it is a font | a download cut short keeps its signature; the header records the length |
 
 ## What I would tell the next person
 

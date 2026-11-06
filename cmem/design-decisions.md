@@ -169,6 +169,29 @@ so a higher count means a split), and all 48 diagrams have their title and axis 
 The baked HTML contains **0 `<script>` tags and 0 external references**. MathJax's fonts are inlined as
 data URIs (22 files, 329 kB) and cached in `.mathjax-fonts/` so later builds work offline.
 
+🔁 **Enforced, not just measured, since 2026-11-06** (known-issues #55–#60). The "0 external
+references" above came from a check that saw 1 of 7 ways to write one, and nothing stopped a load.
+Re-measured with every spelling: the real set's only external host is the SVG namespace
+(`www.w3.org`, a name, not a load). Now:
+
+- **The document forbids scripts and outside loads itself** — a Content-Security-Policy `<meta>`
+  (`default-src 'none'`; images and fonts from `data:`; MathJax's font origin, for the browser
+  path, which does not inline; `base-uri` / `form-action` closed). Measured: a counting server saw
+  5 requests during a render under a scripts-only policy, 0 under this one.
+- **The bake strips what a policy cannot stop or should not need to**: event-handler attributes,
+  `javascript:` URLs, and `<meta>` / `<base>` in a report's body (a refresh navigates).
+- **Chrome keeps its sandbox**, except as root (`--no-sandbox` is needed there) or with
+  `S3D_CHROME_NO_SANDBOX=1`; checked on CI's Ubuntu runners as a non-root user. ⚠️ JavaScript is
+  NOT turned off by Chrome flag: `--blink-settings=scriptEnabled=false` makes `--print-to-pdf`
+  write no file (exit 0, empty stderr).
+- **The font cache is per MathJax version, and keeps only complete fonts** — one folder per source
+  URL directory (an upgrade starts fresh; the old flat cache was adopted once), a WOFF/WOFF2
+  signature AND the header's recorded length equal to the file's size (a captive portal's page, or
+  a download cut short, is refused with nothing cached).
+
+The reason is §9's and verification.md's limit 3: the check proves presence, not that nothing was
+added, so the render must not be able to add anything.
+
 This is not only about portability. The original approach fetched jQuery, MathJax and font-awesome from
 CDNs **at render time**, so a slow or failed fetch could produce a half-typeset page — the main
 fragility of rendering the source files directly. Hermetic means deterministic.

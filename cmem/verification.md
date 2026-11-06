@@ -48,7 +48,9 @@ its own extraction, sharing no code with the transforms. When this was quietly v
 deriving its image count by re-removing the spinner with its own regex, which could have agreed with the
 baker's mistakes — it was treated as a defect and fixed even though it worked.
 
-## ⚠️ Two limits. Know these before relying on it.
+## ⚠️ Three limits. Know these before relying on it.
+
+(The third, found 2026-11-06, is at the end of this section.)
 
 ### 1. ✅ CLOSED 2026-10-28 — conservation was a **set union** across all reports
 
@@ -82,6 +84,16 @@ coverage**: `0 diagram(s) checked (none recognised -- diagram check did not run)
 
 The report-heading pattern is template-specific too, but fails *loudly*: no match means the count will
 not equal the number of sources.
+
+### 3. It proves PRESENCE, never absence — nothing checks that content was not added
+
+Every word and number of the sources must appear in the PDF; nothing says the PDF holds nothing
+else. Content added during the render — by a script a report carried, or by something loaded from
+another host — would sit in the sealed PDF and the build would still say PASS. So the protection is
+upstream, in the render itself, not here (known-issues #55, #60; design-decisions §8): the bake
+strips scripts, event handlers, `javascript:` URLs, `<meta>` and `<base>`; the document's
+Content-Security-Policy forbids every script and every outside load (measured: a counting server
+saw 5 requests during a render before, 0 after); Chrome keeps its sandbox except as root.
 
 ## Comparison technique, and why it is that way
 

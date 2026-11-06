@@ -57,12 +57,15 @@ sources ──► BAKE ──► GUARD ──► RENDER ──► OPTIMIZE ─�
    scripts, remove the spinner, namespace ids (and every reference to them), scope the CSS — the
    head's sheets and the body's own, `html`/`body` selectors settled against the source's tags —,
    hoist SVG styles onto presentation attributes where an attribute can say the same and confine
-   the rest to their own `<svg>`, inline the fonts. Output is one hermetic document; then the
+   the rest to their own `<svg>`, strip event handlers / `javascript:` URLs / `<meta>` / `<base>`,
+   inline the fonts. Output is one hermetic document — its own Content-Security-Policy forbids
+   scripts and outside loads (design-decisions §8); then the
    core's `findBrokenReferences` checks every id reference the bake renamed still resolves — the CLI
    and the browser example both run it ([design-decisions.md](design-decisions.md) §6).
 2. **GUARD** (core) — refuse to continue if anything that looks like unrendered maths survives. An
    unrecognised delimiter never errors on its own; this is the only thing that catches it.
-3. **RENDER** (runtime) — one headless Chrome pass over the whole document.
+3. **RENDER** (runtime) — one headless Chrome pass over the whole document, with Chrome's sandbox on
+   (off only as root, or with `S3D_CHROME_NO_SANDBOX=1`, and the build says so).
 4. **OPTIMIZE** (pdf-lib) — repack Chrome's uncompressed objects into object streams.
 5. **VERIFY** (core + pdfjs) — re-read sources and PDF from disk, prove nothing was lost, exit non-zero
    if it was.

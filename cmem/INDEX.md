@@ -55,7 +55,7 @@ here. The triggers "update the project memory" (audit for stale live claims, not
 | [overview.md](overview.md) | What the input actually is, and why it cannot be printed naively |
 | [design-decisions.md](design-decisions.md) | ⚠️ The load-bearing choices **with the numbers** — do not silently revert |
 | [architecture.md](architecture.md) | Three modules, one runtime adapter, why the core has no I/O |
-| [verification.md](verification.md) | What "nothing was lost" proves, its two limits, and the costliest lessons |
+| [verification.md](verification.md) | What "nothing was lost" proves, its three limits (it proves presence, not that nothing was added), and the costliest lessons |
 | [known-issues.md](known-issues.md) | Template assumptions, the `$` ambiguity, the full bug ledger |
 | [testing.md](testing.md) | How to test, especially the **negative controls** |
 | [licensing.md](licensing.md) | Verified dependency licences (MIT project) |

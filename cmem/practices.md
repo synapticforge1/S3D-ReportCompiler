@@ -341,11 +341,13 @@ one: every guard must fail loudly when it can't run.
 
 ## 16. A fix is new code — review it cold, and measure it
 
-On 2026-11-06 five review rounds ran on the same day: 7 findings, then 6, then 4, 4 and 3. **Three of
-the third round's four, and two of the fourth's, were in fixes written hours earlier** — each
-passing the tests written with it (known-issues #44–#49). The fifth went where no round had looked
-(the browser example, the ignore rules, the configuration) and found only older defects (#52–#54):
-once the day's fixes had been read cold, the yield moved back to unread code.
+On 2026-11-06 eight review rounds ran on the same day: 7 findings, then 6, 4, 4, 3, 1, 3 and 2.
+**Three of the third round's four, and two of the fourth's, were in fixes written hours earlier** —
+each passing the tests written with it (known-issues #44–#49). The fifth went where no round had
+looked (the browser example, the ignore rules, the configuration) and found only older defects
+(#52–#54). The pattern then held to the end: the seventh found a risk the sixth's fix created (the
+sandbox it turned on, #58), and the eighth a gap in the seventh's (a font check by signature
+only, #59).
 
 | The fix | Its own test held | What a cold re-read plus a measurement found |
 |---|---|---|
@@ -353,6 +355,8 @@ once the day's fixes had been read cold, the yield moved back to unread code.
 | refuse unscrubbed fields in the sanitizer (#39) | a filled Company is refused | on a template without the spacer the guard read no row and passed it (#45) |
 | settle `html`/`body` qualifiers (#35) | `body.dark` is decided | `body[class~=…]` dropped, `html[lang=EN]` misjudged (#46, #49) |
 | fence the npm test hook (#40) | "non-zero exit" | it stopped at the REAL JSR and never reached the fence (#48) |
+| keep Chrome's sandbox on (#55) | Windows renders with it | on Linux as an ordinary user it might not start — checked on CI's runners before release (#58) |
+| keep only real fonts (#57) | an HTML page is refused | a download cut short still carries the signature; the header's length catches it (#59) |
 
 A test written alongside a fix encodes the fix's own idea of the problem, so it shares the fix's
 blind spot (§2 applies to it too). What found these was a separate pass that ran the claim against
