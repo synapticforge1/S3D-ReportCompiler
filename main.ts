@@ -230,6 +230,18 @@ if (flags.includes("-h") || flags.includes("--help") || flags.includes("-?")) {
   rt.exit(0);
 }
 
+// Two positionals at most, and a third is an error, not ignored: an unquoted path
+// with a space arrives as two arguments, so `reports C:\My Docs\out.pdf` would
+// write a PDF named "C:\My" and drop the rest without a word.
+if (positional.length > 2) {
+  console.error(`Too many arguments (${positional.length}); expected a reports folder and an`);
+  console.error(`output PDF at most. Received:`);
+  for (const p of positional) console.error(`  ${p}`);
+  console.error(`\nA path containing spaces must be quoted as ONE argument:`);
+  console.error(`  s3d-reportcompiler "C:\\Jobs\\Gate Calcs\\Reports" "C:\\Jobs\\Gate Calcs.pdf"`);
+  rt.exit(1);
+}
+
 // Default layout: reports in one folder, output in another, so the input scan
 // can never see a build artifact and the two concerns stay separate on disk.
 const INPUT_DIR = "HTMLFilesToBeCompiled";
@@ -583,7 +595,8 @@ for (const skipped of skippedDelims) {
 }
 for (const selector of svgStyleWarnings) {
   console.warn(
-    `  warning: SVG rule "${selector}" could not be hoisted; its <style> block was kept`,
+    `  warning: SVG rule "${selector}" could not be hoisted; its <style> block was kept, ` +
+      `confined to its own diagram`,
   );
 }
 
@@ -640,20 +653,27 @@ const combinedHtml = assembleDocument(bodies, styles, mathCss);
 // 1's broken `#grad` -- the same spelling, in different reports.
 function refScan(html: string): { refs: number; unresolved: Set<string> } {
   const text = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
-  // Attributes are read inside start tags only, so prose ("id = 4") is not one.
-  const tags = text.match(/<[a-zA-Z][^<>]*>/g) ?? [];
-  // The attribute named id (not data-id=), quoted either way or not at all.
-  const value = String.raw`\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`;
-  const pick = (m: RegExpMatchArray) => m[1] ?? m[2] ?? m[3] ?? "";
-  const inTags = (re: RegExp) => tags.flatMap((t) => [...t.matchAll(re)].map(pick));
-  const ids = new Set(inTags(new RegExp(String.raw`(?<![\w:.-])id${value}`, "gi")));
+  // Attributes are read inside start tags only, so prose ("id = 4") is not one --
+  // and within a tag one after another, each value taken whole, so an "id = 4"
+  // inside another attribute's value (alt="Member id = 4") is not one either.
+  const attrs = (tag: string): [string, string][] =>
+    [
+      ...tag
+        .replace(/^<[^\s/>]+/, "")
+        .matchAll(/([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g),
+    ]
+      .filter((m) => m[2] !== undefined || m[3] !== undefined || m[4] !== undefined)
+      .map((m) => [m[1].toLowerCase(), m[2] ?? m[3] ?? m[4] ?? ""]);
+  const all = (text.match(/<[a-zA-Z][^<>]*>/g) ?? []).flatMap(attrs);
+  const named = (...names: string[]) => all.filter(([n]) => names.includes(n)).map(([, v]) => v);
+  const ids = new Set(named("id"));
   const targets = [
     // url(#x) bare, quoted, or entity-quoted as a browser serializes a style -- in a
     // style sheet as well as an attribute, so over the whole text.
     ...[...text.matchAll(/url\(\s*(?:"|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)/gi)].map(
       (m) => m[1],
     ),
-    ...inTags(new RegExp(String.raw`(?<![\w:.-])(?:xlink:)?href${value}`, "gi"))
+    ...named("href", "xlink:href")
       .filter((v) => /^#./.test(v))
       .map((v) => v.slice(1)),
   ];
@@ -694,6 +714,21 @@ if (externalRefs > 0 || scripts > 0) {
   );
 }
 
+// Chrome exits 0 even when printing fails, so "no file" is the only reliable
+// failure signal -- but only if there is no file to begin with. A leftover PDF
+// from an earlier run would otherwise be read back and reported as this run's
+// output, turning a failed build into a silently stale one. So the old PDF must
+// be GONE, not merely asked to go: removeQuietly swallows a failed delete, and a
+// PDF open in a viewer on Windows cannot be deleted or written -- but can be read.
+await rt.removeQuietly(outputPdf);
+if (await rt.fileExists(outputPdf)) {
+  console.error(`Could not remove the previous PDF:\n  ${outputPdf}\n`);
+  console.error("It is probably open in a PDF viewer. Close it and run again.");
+  console.error("(Left in place, Chrome could not write the new one, and the old one would be");
+  console.error("read back as this run's output.)");
+  rt.exit(1);
+}
+
 // Only the Chrome profile needs to be temporary now. The baked document is a
 // build artifact in its own right and belongs beside the PDF it produced.
 const workDir = await rt.makeTempDir("compiled_reports_");
@@ -715,12 +750,7 @@ try {
   await rt.writeFile(htmlPath, htmlBytes);
   console.log(`  html:     ${(htmlBytes.length / 1e6).toFixed(2)} MB, self-contained`);
 
-  // Chrome exits 0 even when printing fails, so "no file" is the only reliable
-  // failure signal -- but only if there is no file to begin with. A leftover
-  // PDF from an earlier run would otherwise be read back and reported as this
-  // run's output, turning a failed build into a silently stale one.
-  await rt.removeQuietly(outputPdf);
-
+  // The old PDF was removed, and proved gone, before the bake was written.
   const result = await rt.run(chrome, [
     "--headless=new",
     "--disable-gpu",

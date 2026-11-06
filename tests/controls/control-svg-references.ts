@@ -26,7 +26,12 @@ const defs =
   // A data attribute that happens to hold an id's name is data, not an id.
   '<g data-id="ctl-grad"></g>' +
   // Unquoted, as HTML allows: the id and the reference to it.
-  "<g id=ctl-bare><rect width=1 height=1 /></g><use href=#ctl-bare />";
+  "<g id=ctl-bare><rect width=1 height=1 /></g><use href=#ctl-bare />" +
+  // "id=" written INSIDE another attribute's value is text, not an id: the bake must leave the
+  // title alone, and the reference check must not count ctl-t as defined -- the link is
+  // dangling in the source, so its renamed form is too. Read as an id, the check called the
+  // bake's rename of the href a break and refused a correct build.
+  '<a title="see id=ctl-t" href="#ctl-t"></a>';
 
 let v = src.replace(/<svg\b[^>]*>/i, (open) => `${open}${defs}`);
 if (v === src) throw new Error("no <svg> to add the references to");

@@ -288,17 +288,101 @@ function namespaceIds(selector: string, prefix: string): string {
   return selector.replace(/#([A-Za-z_][\w-]*)/g, (_m, id) => `#${prefix}${id}`);
 }
 
+/** The id and classes a source document's `<html>` or `<body>` tag carries. */
+type RootTag = { id: string | undefined; classes: Set<string> };
+
+/** A source document's `<html>` and `<body>` tags, for selectors qualified on them. */
+type RootTags = { html: RootTag; body: RootTag };
+
+/** Read the `<html>` and `<body>` start tags of a source document. */
+function rootTags(src: string): RootTags {
+  const read = (name: string): RootTag => {
+    const tag = new RegExp(`<${name}\\b[^<>]*>`, "i").exec(src)?.[0] ?? "";
+    const a = attrsOf(tag);
+    return {
+      id: a.get("id"),
+      classes: new Set((a.get("class") ?? "").split(/\s+/).filter(Boolean)),
+    };
+  };
+  return { html: read("html"), body: read("body") };
+}
+
+/**
+ * Settle a qualifier written on `html`/`body` (the `.dark` of `body.dark`) against the source's
+ * own tag, since the wrapper standing in for it carries none of its classes or id. Its `.class`
+ * and `#id` parts are decided statically: all present → dropped (the rule applied), any absent →
+ * `null` (the rule matched nothing in the source, and must match nothing here). Anything else
+ * (`:hover`, `[lang]`) is left for the wrapper. With no source tag known, it is all left.
+ */
+function settleQualifier(qualifier: string, tag: RootTag | undefined): string | null {
+  if (!tag) return qualifier;
+  const [, fixed, rest] = /^((?:[.#][\w-]+)*)([\s\S]*)$/.exec(qualifier) ?? ["", "", qualifier];
+  for (const t of fixed.match(/[.#][\w-]+/g) ?? []) {
+    const name = t.slice(1);
+    if (t[0] === "." ? !tag.classes.has(name) : tag.id !== name) return null;
+  }
+  return rest;
+}
+
 /**
  * Scope one selector to a report's wrapper. `html`/`body`/`:root` map onto the
- * wrapper itself, since it stands in for the document once many share a page.
+ * wrapper itself, since it stands in for the document once many share a page --
+ * the whole leading chain of them (`html body p` is `<wrapper> p`), with any
+ * qualifier settled against the source's own tag ({@link settleQualifier}).
+ * Returns "" for a selector that can match nothing.
  */
-function scopeSelector(selector: string, scope: string, prefix: string): string {
-  const s = namespaceIds(selector.trim(), prefix);
+function scopeSelector(selector: string, scope: string, prefix: string, roots?: RootTags): string {
+  let s = selector.trim();
   if (!s) return "";
 
-  const rooted = s.replace(/^(?:html|body|:root)\b\s*/i, "");
-  if (rooted !== s) return rooted ? `${scope} ${rooted}` : scope;
-  return `${scope} ${s}`;
+  let qualifier = "";
+  let combinator = " ";
+  let rooted = false;
+  for (;;) {
+    const m = /^(html|body|:root)(?![\w-])([^\s>+~]*)\s*([>+~]?)\s*/i.exec(s);
+    if (!m) break;
+    rooted = true;
+    const settled = settleQualifier(m[2], roots?.[m[1].toLowerCase() === "body" ? "body" : "html"]);
+    if (settled === null) return "";
+    qualifier += settled;
+    s = s.slice(m[0].length);
+    // A sibling of <html> or <body>: there is none in a parsed document. Kept, it would
+    // reach the NEXT report's wrapper.
+    if (m[3] === "+" || m[3] === "~") return "";
+    combinator = m[3] === ">" ? " > " : " ";
+    if (!s) break;
+  }
+
+  const rest = namespaceIds(s, prefix);
+  if (!rooted) return `${scope} ${rest}`;
+  const root = `${scope}${namespaceIds(qualifier, prefix)}`;
+  return rest ? `${root}${combinator}${rest}` : root;
+}
+
+/**
+ * Split a selector list at its top-level commas only: `p:not(.a, .b)` is one
+ * selector, and splitting inside the parentheses made the browser drop the rule.
+ */
+function splitSelectorList(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = 0;
+  for (let i = 0; i < list.length; i++) {
+    const ch = list[i];
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+    else if (ch === "," && depth === 0) {
+      out.push(list.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(list.slice(start));
+  return out;
 }
 
 /**
@@ -313,6 +397,15 @@ function scopeSelector(selector: string, scope: string, prefix: string): string 
  * @param prefix id namespace, e.g. `"r7-"`
  */
 export function scopeCss(css: string, scope: string, prefix: string): string {
+  return scopeRules(css, (s) => scopeSelector(s, scope, prefix));
+}
+
+/**
+ * The walk behind {@link scopeCss}, with the per-selector rewrite supplied: each
+ * selector of each rule goes through `mapSelector` ("" drops it), at any depth
+ * of `@media`/`@supports`/`@layer`/`@container`. `@page` is dropped.
+ */
+function scopeRules(css: string, mapSelector: (selector: string) => string): string {
   const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const out: string[] = [];
   let i = 0;
@@ -375,7 +468,7 @@ export function scopeCss(css: string, scope: string, prefix: string): string {
       // We define page geometry ourselves; a report's own @page would fight it.
       if (name === "page") continue;
       if (["media", "supports", "layer", "container"].includes(name)) {
-        out.push(`${prelude} {\n${scopeCss(block, scope, prefix)}\n}`);
+        out.push(`${prelude} {\n${scopeRules(block, mapSelector)}\n}`);
       } else {
         // @font-face, @keyframes: no selectors to scope.
         out.push(`${prelude} {${block}}`);
@@ -383,14 +476,7 @@ export function scopeCss(css: string, scope: string, prefix: string): string {
       continue;
     }
 
-    const selectors = [
-      ...new Set(
-        prelude
-          .split(",")
-          .map((s) => scopeSelector(s, scope, prefix))
-          .filter(Boolean),
-      ),
-    ];
+    const selectors = [...new Set(splitSelectorList(prelude).map(mapSelector).filter(Boolean))];
     if (selectors.length > 0) out.push(`${selectors.join(", ")} {${block}}`);
   }
 
@@ -462,18 +548,12 @@ const STYLE_BLOCK = /<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
  * `"all"`.
  */
 function styleBlockKind(attrs: string): string {
-  // The attribute NAME, not its tail: `\b` also matched data-type= and
-  // data-media=, which would drop the sheet as "not CSS" or wrap it in a media
-  // query that never matches.
-  const attr = (name: string) =>
-    new RegExp(`(?<![\\w:.-])${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i")
-      .exec(attrs)
-      ?.slice(1)
-      .find((v) => v !== undefined)
-      ?.trim();
-  const type = attr("type");
+  // Attributes read in order ({@link attrsOf}): data-type= and data-media= are
+  // other attributes, and so is a `type=` written inside another one's value.
+  const a = attrsOf(`<style${attrs}>`);
+  const type = a.get("type")?.trim();
   if (type !== undefined && type !== "" && type.toLowerCase() !== "text/css") return "ignored";
-  const media = attr("media");
+  const media = a.get("media")?.trim();
   return media === undefined || media === "" || media.toLowerCase() === "all" ? "all" : media;
 }
 
@@ -487,32 +567,90 @@ function attrValue(v: string): string {
 }
 
 /**
+ * CSS properties that SVG also accepts as presentation attributes (SVG 1.1's
+ * list, plus SVG 2's `paint-order` and `vector-effect`). A property outside it
+ * -- `font`, the shorthand, say -- written as an attribute is simply ignored, so
+ * a rule using one is not hoisted. `transform` is deliberately absent: its
+ * attribute syntax differs from the CSS property's.
+ */
+const SVG_PRESENTATION = new Set(
+  (
+    "alignment-baseline baseline-shift clip clip-path clip-rule color color-interpolation " +
+    "color-interpolation-filters color-profile color-rendering cursor direction display " +
+    "dominant-baseline enable-background fill fill-opacity fill-rule filter flood-color " +
+    "flood-opacity font-family font-size font-size-adjust font-stretch font-style font-variant " +
+    "font-weight glyph-orientation-horizontal glyph-orientation-vertical image-rendering kerning " +
+    "letter-spacing lighting-color marker-end marker-mid marker-start mask opacity overflow " +
+    "paint-order pointer-events shape-rendering stop-color stop-opacity stroke stroke-dasharray " +
+    "stroke-dashoffset stroke-linecap stroke-linejoin stroke-miterlimit stroke-opacity " +
+    "stroke-width text-anchor text-decoration text-rendering unicode-bidi vector-effect " +
+    "visibility word-spacing writing-mode"
+  ).split(" "),
+);
+
+/**
  * Hand each hoistable rule of an SVG sheet to `apply` as (selector, attributes).
- * Returns false when any selector could not be hoisted (recorded as a warning).
+ * Returns false when anything could not be hoisted (recorded as a warning): an
+ * at-rule (`@media` is a condition an attribute cannot carry, `@font-face` has
+ * no element), a selector that is not a bare element name, or a property with no
+ * presentation attribute. Rules are read at the TOP LEVEL only: a rule nested in
+ * `@media screen` used to be hoisted as though it applied unconditionally.
  */
 function hoistSvgRules(sheet: string, apply: (selector: string, attrs: string) => void): boolean {
   let allHoisted = true;
-  for (const [, selectorList, declarations] of sheet
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  const src = sheet.replace(/\/\*[\s\S]*?\*\//g, "");
+  let i = 0;
+  while (i < src.length) {
+    const open = src.indexOf("{", i);
+    if (open < 0) break;
+    let depth = 0;
+    let close = src.length;
+    for (let k = open; k < src.length; k++) {
+      if (src[k] === "{") depth++;
+      else if (src[k] === "}" && --depth === 0) {
+        close = k;
+        break;
+      }
+    }
+    // A stray ";" before a rule is discarded, as CSS error recovery does.
+    const prelude = src
+      .slice(i, open)
+      .replace(/^[\s\S]*;/, "")
+      .trim();
+    const declarations = src.slice(open + 1, close);
+    i = close + 1;
+
+    if (prelude.startsWith("@") || declarations.includes("{")) {
+      svgStyleWarnings.add(prelude);
+      allHoisted = false;
+      continue;
+    }
+
     const decls = declarations
       .split(";")
       .map((d) => d.trim())
-      .filter(Boolean)
       .map((d) => {
-        const i = d.indexOf(":");
-        return [d.slice(0, i).trim(), d.slice(i + 1).trim()] as const;
+        const at = d.indexOf(":");
+        // No colon is not a declaration; the browser drops it too.
+        return at < 0
+          ? (["", ""] as const)
+          : ([d.slice(0, at).trim(), d.slice(at + 1).trim()] as const);
       })
       .filter(([prop, value]) => prop && value);
 
     if (decls.length === 0) continue;
+    const foreign = decls.map(([p]) => p).filter((p) => !SVG_PRESENTATION.has(p.toLowerCase()));
 
-    for (const selector of selectorList
-      .split(",")
+    for (const selector of splitSelectorList(prelude)
       .map((s) => s.trim())
       .filter(Boolean)) {
       if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(selector)) {
         svgStyleWarnings.add(selector);
+        allHoisted = false;
+        continue;
+      }
+      if (foreign.length > 0) {
+        svgStyleWarnings.add(`${selector} { ${foreign.join("; ")} }`);
         allHoisted = false;
         continue;
       }
@@ -534,12 +672,11 @@ function hoistSvgRules(sheet: string, apply: (selector: string, attrs: string) =
  * nested tags of the same name.
  */
 function removeElementById(html: string, id: string): string {
-  // The attribute named id, not data-id= (whose element is not the one asked for).
-  const openTag = new RegExp(
-    `<([a-zA-Z][\\w-]*)[^>]*(?<![\\w:.-])id\\s*=\\s*["']${id}["'][^>]*>`,
-    "i",
+  // The attribute named id, read in order -- not data-id=, and not "id=" inside
+  // another attribute's value (whose element is not the one asked for).
+  const m = [...html.matchAll(/<([a-zA-Z][\w-]*)[^<>]*>/g)].find(
+    (t) => attrsOf(t[0]).get("id") === id,
   );
-  const m = html.match(openTag);
   if (!m || m.index === undefined) return html;
 
   const tag = m[1];
@@ -686,21 +823,73 @@ function namespaceUrlRefs(text: string, prefix: string, only?: Set<string>): str
   );
 }
 
-// An attribute NAME, not the tail of one: `\bid=` also matched `data-id=` (the
-// boundary falls after "-"), renaming a data value and adding it to the ids that
-// steer every reference rewrite. Values quoted either way, or unquoted.
-const attrRe = (names: string) =>
-  new RegExp(`(?<![\\w:.-])(${names})\\s*=\\s*(?:(["'])([^"']*)\\2|([^\\s"'>]+))`, "gi");
-const ID_ATTR = attrRe("id");
-const HREF_ATTR = attrRe("xlink:href|href");
-const ID_LIST_ATTR = attrRe("for|headers|aria-labelledby|aria-describedby|aria-controls|aria-owns");
+// One attribute of a start tag: its name, then optionally `=` and a value quoted
+// either way or bare. Matched IN ORDER from just after the tag name, each value
+// consumed whole -- so `alt="Member id = 4"` is one attribute, alt, and the "id"
+// in its text is never read as an attribute. (A pattern that looked for "id="
+// anywhere in the tag did read it: it renamed the alt text and added "4" to the
+// ids that steer every reference rewrite. Its predecessor, `\bid=`, also matched
+// `data-id=`, whose name this reads whole.)
+const TAG_ATTR = /([^\s"'<>/=]+)(?:(\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 
-/** Rewrite each matching attribute's value, keeping its name and quoting. */
-function rewriteAttr(html: string, re: RegExp, value: (v: string) => string): string {
-  return html.replace(re, (_m, name: string, q: string | undefined, quoted, bare) =>
-    q === undefined ? `${name}=${value(bare)}` : `${name}=${q}${value(quoted)}${q}`,
+/**
+ * Rewrite a start tag's attribute values: `fn` gets each (lower-cased name,
+ * value) and returns the new value. An unchanged value leaves the attribute as
+ * written; a changed one keeps its name, spacing and quoting.
+ */
+function mapAttrs(tag: string, fn: (name: string, value: string) => string): string {
+  const head = /^<[^\s/>]+/.exec(tag)?.[0] ?? "";
+  return (
+    head +
+    tag
+      .slice(head.length)
+      .replace(
+        TAG_ATTR,
+        (all, name: string, eq?: string, dq?: string, sq?: string, bare?: string) => {
+          if (eq === undefined) return all;
+          const value = dq ?? sq ?? bare ?? "";
+          const next = fn(name.toLowerCase(), value);
+          if (next === value) return all;
+          const q = dq !== undefined ? '"' : sq !== undefined ? "'" : "";
+          return `${name}${eq}${q}${next}${q}`;
+        },
+      )
   );
 }
+
+/** A start tag's attributes by lower-cased name; the first of a duplicate wins, as HTML parses. */
+function attrsOf(tag: string): Map<string, string> {
+  const out = new Map<string, string>();
+  mapAttrs(tag, (name, value) => {
+    if (!out.has(name)) out.set(name, value);
+    return value;
+  });
+  return out;
+}
+
+/** Attributes holding one id or a space-separated list of them. */
+const ID_LIST_ATTRS = new Set([
+  "for",
+  "headers",
+  "aria-labelledby",
+  "aria-describedby",
+  "aria-controls",
+  "aria-owns",
+]);
+
+/**
+ * Where a kept SVG `<style>` block is confined: an attribute put on its own
+ * `<svg>`. In HTML a `<style>` inside an inline SVG applies to the WHOLE
+ * document, so one report's unhoisted diagram rules reached every report.
+ */
+const svgScope = (prefix: string) => `svg[data-s3d-scope="${prefix}"]`;
+
+/**
+ * The page's own `<style>` blocks, as opposed to those inside an inline `<svg>`:
+ * an `<svg>` is matched whole first, so a `<style>` inside one is never matched
+ * on its own. Groups 1 and 2 (attributes, sheet) are set for a page sheet only.
+ */
+const PAGE_STYLE_OR_SVG = /<svg\b[\s\S]*?<\/svg>|<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
 
 /**
  * Turn one report's `<body>` into a fragment ready to concatenate with others.
@@ -708,6 +897,9 @@ function rewriteAttr(html: string, re: RegExp, value: (v: string) => string): st
  * Pre-renders every expression to CHTML using the report's own delimiters,
  * strips scripts, removes the loading spinner, namespaces ids with `prefix`,
  * and makes inline SVG portable. Updates {@link mathStats} and {@link audit}.
+ *
+ * The body's own `<style>` blocks (outside any `<svg>`) are left out of the
+ * fragment: {@link bakeStyle} carries them, scoped. Use the two together.
  *
  * @param prefix id namespace, e.g. `"r7-"`
  */
@@ -726,6 +918,15 @@ export function bakeBody(src: string, prefix: string): string {
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
   if (!bodyMatch) audit.bodyTagMissing++;
   let body = bodyMatch ? bodyMatch[1] : html;
+
+  // The page's own <style> blocks in the body are not dropped: bakeStyle reads
+  // them, as it reads the head's, and scopes them to this report. Left here they
+  // applied, unscoped, to every report on the page -- and their #id selectors
+  // matched nothing once the ids were renamed. Those inside an <svg> stay; that
+  // is portableSvg's job.
+  body = body.replace(PAGE_STYLE_OR_SVG, (m, _attrs, sheet: string | undefined) =>
+    sheet === undefined ? m : "",
+  );
 
   // The spinner exists only to be hidden by the JS that we removed. It is the
   // one element deliberately dropped, and the count is reported.
@@ -754,27 +955,31 @@ export function bakeBody(src: string, prefix: string): string {
   // over the whole text that would also rewrite prose -- "Member id = 4" in a
   // report's own words.
   const ids = new Set<string>();
-  inTags(body, (tag) => {
-    for (const m of tag.matchAll(ID_ATTR)) ids.add(m[3] ?? m[4]);
-    return tag;
-  });
-  body = inTags(body, (tag) => rewriteAttr(tag, ID_ATTR, (id) => `${prefix}${id}`));
+  inTags(body, (tag) =>
+    mapAttrs(tag, (name, value) => {
+      if (name === "id") ids.add(value);
+      return value;
+    }),
+  );
 
   // Every reference to a renamed id has to follow it, or its target vanishes
   // without an error -- and verification counts text and image paints, not
   // gradients, clip paths or arrowheads. main.ts's reference check catches what
   // this misses.
   body = inTags(body, (tag) =>
-    rewriteAttr(
-      rewriteAttr(tag, HREF_ATTR, (v) => (/^#./.test(v) ? `#${prefix}${v.slice(1)}` : v)),
-      // Attributes holding one id or a space-separated list of them.
-      ID_LIST_ATTR,
-      (list) =>
-        list
+    mapAttrs(tag, (name, value) => {
+      if (name === "id") return `${prefix}${value}`;
+      if (name === "href" || name === "xlink:href") {
+        return /^#./.test(value) ? `#${prefix}${value.slice(1)}` : value;
+      }
+      if (ID_LIST_ATTRS.has(name)) {
+        return value
           .split(/(\s+)/)
           .map((t) => (ids.has(t) ? `${prefix}${t}` : t))
-          .join(""),
-    ),
+          .join("");
+      }
+      return value;
+    }),
   );
   // SVG paint servers, clips, masks, filters and markers: url(#id), in
   // presentation attributes, inline styles and the SVG's own <style> block --
@@ -782,7 +987,23 @@ export function bakeBody(src: string, prefix: string): string {
   // defines, so a url(#...) in prose is left alone.
   body = namespaceUrlRefs(body, prefix, ids);
 
-  return portableSvg(body);
+  // What portableSvg could not hoist stays a <style> block, which in HTML would
+  // apply to every report on the page: confine it to this report's own <svg>,
+  // with its id selectors renamed like the ids they select. A rule on `svg`
+  // itself means that <svg>; anything else, an element inside it.
+  return portableSvg(body).replace(/<svg\b[\s\S]*?<\/svg>/gi, (svg) => {
+    if (!/<style\b/i.test(svg)) return svg;
+    const scope = svgScope(prefix);
+    return svg.replace(/^<svg\b/i, `<svg data-s3d-scope="${prefix}"`).replace(
+      STYLE_BLOCK,
+      (_m, attrs: string, sheet: string) =>
+        `<style${attrs}>${scopeRules(sheet, (selector) => {
+          const s = namespaceIds(selector.trim(), prefix);
+          if (!s) return "";
+          return /^svg(?![\w-])/i.test(s) ? `${scope}${s.slice(3)}` : `${scope} ${s}`;
+        })}</style>`,
+    );
+  });
 }
 
 /** Apply `fn` to every start tag (`<name …>`), leaving text, comments and end tags alone. */
@@ -792,6 +1013,8 @@ function inTags(html: string, fn: (tag: string) => string): string {
 
 /**
  * Extract one report's stylesheets and scope them to that report's wrapper.
+ * Reads every `<style>` in `<head>` and those in the body outside an `<svg>`
+ * (which {@link bakeBody} leaves out of its fragment).
  *
  * Also neutralises the `visibility: hidden` reveal gate and relaxes `height:
  * 100%` on wrappers, both counted in {@link audit}.
@@ -800,17 +1023,31 @@ function inTags(html: string, fn: (tag: string) => string): string {
  * @param prefix id namespace, e.g. `"r7-"`
  */
 export function bakeStyle(src: string, scope: string, prefix: string): string {
-  // Only <head> styles. The reports carry a third <style> block inside the
-  // diagram <svg>, which portableSvg hoists onto presentation attributes --
-  // pulling it into the global sheet as well would leak an SVG-scoped rule
-  // into document scope.
-  const head = src.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? src;
+  // The page's own sheets: every one in <head>, and those in the body that sit
+  // outside an <svg> (bakeBody removes those from the body; together they are
+  // the report's whole stylesheet). NOT the <style> inside the diagram <svg>,
+  // which portableSvg hoists onto presentation attributes -- pulling it in here
+  // as well would leak an SVG-scoped rule into document scope. `<head\b`, so a
+  // <header> is not read as the head.
+  const headMatch = /<head\b[^>]*>([\s\S]*?)<\/head>/i.exec(src);
+  // The body as bakeBody sees it: no scripts, no comments.
+  const rest = (headMatch ? src.slice(headMatch.index + headMatch[0].length) : src)
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+  const blocks: [string, string][] = [
+    ...[...(headMatch?.[1] ?? "").matchAll(STYLE_BLOCK)].map(
+      (m) => [m[1], m[2]] as [string, string],
+    ),
+    ...[...rest.matchAll(PAGE_STYLE_OR_SVG)]
+      .filter((m) => m[2] !== undefined)
+      .map((m) => [m[1], m[2]] as [string, string]),
+  ];
 
   // Any attributes, as a browser reads them: `<style type="text/css">` is the
   // same sheet (a bare `<style>` match used to drop it silently), a non-CSS
   // type is ignored, and a `media` attribute stays a condition.
-  let css = [...head.matchAll(STYLE_BLOCK)]
-    .map(([, attrs, sheet]) => {
+  let css = blocks
+    .map(([attrs, sheet]) => {
       const kind = styleBlockKind(attrs);
       return kind === "ignored" ? "" : kind === "all" ? sheet : `@media ${kind} {\n${sheet}\n}`;
     })
@@ -825,7 +1062,10 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   // scopeCss namespaces ids in selectors; a declaration's url(#id) names an id
   // too. Every id in the report is renamed, so every such reference follows.
   css = namespaceUrlRefs(css, prefix);
-  css = scopeCss(css, scope, prefix);
+  // `body.dark p` is settled against this report's own <body> tag: the wrapper
+  // standing in for it carries none of its classes.
+  const roots = rootTags(src);
+  css = scopeRules(css, (s) => scopeSelector(s, scope, prefix, roots));
 
   // The gate the removed JavaScript would have opened.
   css = css.replace(/visibility:\s*hidden/gi, () => {
@@ -930,21 +1170,89 @@ export function findLeftoverMath(baked: string): string[] {
 // it checks can agree with its mistakes.
 // ---------------------------------------------------------------------------
 
+// The verification's own table, written apart from the bake's (which reads MathJax's): the
+// markup entities, and the symbols an engineering report's prose uses. Case-sensitive, as HTML
+// is (&Delta; is not &delta;). A name in no table is left as written -- its letters are then
+// expected in the PDF and missed, which fails loudly rather than passing.
+const GREEK =
+  "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu Nu Xi Omicron Pi Rho - Sigma Tau Upsilon Phi Chi Psi Omega";
 const ENTITIES: Record<string, string> = {
-  "&nbsp;": " ",
-  "&amp;": "&",
-  "&lt;": "<",
-  "&gt;": ">",
-  "&quot;": '"',
-  "&#39;": "'",
-  "&apos;": "'",
+  nbsp: " ",
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  deg: "°",
+  times: "×",
+  divide: "÷",
+  plusmn: "±",
+  minus: "−",
+  le: "≤",
+  ge: "≥",
+  ne: "≠",
+  asymp: "≈",
+  infin: "∞",
+  radic: "√",
+  sum: "∑",
+  micro: "µ",
+  middot: "·",
+  sdot: "⋅",
+  bull: "•",
+  ndash: "–",
+  mdash: "—",
+  hellip: "…",
+  prime: "′",
+  Prime: "″",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  sup1: "¹",
+  sup2: "²",
+  sup3: "³",
+  frac12: "½",
+  frac14: "¼",
+  frac34: "¾",
+  sect: "§",
+  para: "¶",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+  larr: "←",
+  rarr: "→",
+  uarr: "↑",
+  darr: "↓",
+  ...Object.fromEntries(
+    GREEK.split(" ").flatMap((name, i) =>
+      name === "-"
+        ? [["sigmaf", "ς"]]
+        : [
+            [name, String.fromCodePoint(0x391 + i)],
+            [name.toLowerCase(), String.fromCodePoint(0x3b1 + i)],
+          ],
+    ),
+  ),
 };
 
-/** Decode the HTML entities that appear in these reports. */
+/**
+ * Decode the HTML entities in report text, as a browser does: named ones from
+ * this module's own table, decimal and hex character references, in ONE pass
+ * (so `&amp;#60;` is the text `&#60;`, not `<`). A reference no character can
+ * have -- zero, a surrogate, past U+10FFFF -- is U+FFFD, as a browser reads it;
+ * it used to throw a RangeError and stop the verification.
+ */
 export function decodeEntities(s: string): string {
-  return s
-    .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/g, (m) => ENTITIES[m] ?? m)
-    .replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(Number(d)));
+  return s.replace(
+    /&(?:#[xX]([0-9a-fA-F]+)|#(\d+)|([A-Za-z][A-Za-z0-9]*));/g,
+    (m, hex: string | undefined, dec: string | undefined, name: string | undefined) => {
+      if (name !== undefined) return Object.hasOwn(ENTITIES, name) ? ENTITIES[name] : m;
+      const code = hex !== undefined ? parseInt(hex, 16) : Number(dec);
+      return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+        ? "�"
+        : String.fromCodePoint(code);
+    },
+  );
 }
 
 /**

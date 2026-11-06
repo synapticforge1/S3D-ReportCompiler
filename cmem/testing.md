@@ -204,7 +204,7 @@ reason. It automates the negative controls above and `tests/controls/README.md`:
 | custom delimiters declared | exit 0; 169 expressions; ≥ 1 page; PASS |
 | `$$..$$` in a second report | exit 0; 338 expressions; the two-delimiter-set warning; per-report 2/2; no `$$` in the bake |
 | `&lt;` / `&gt;` inside expressions (2026-11-05) | exit 0; 169 expressions, 0 failed (the same report as custom delimiters); PASS |
-| SVG `url(#id)` references (2026-11-05) | exit 0; PASS; the bake holds `url(#r0-ctl-grad)`, `url(#r0-ctl-clip)`, `url('#r0-ctl-grad')`, `marker-end` → `r0-ctl-arrow`, no old id, and `url(#ctl-undefined)` untouched. Reads the bake: verification cannot see a lost paint server |
+| SVG `url(#id)` references (2026-11-05) | exit 0; PASS; the bake holds `url(#r0-ctl-grad)`, `url(#r0-ctl-clip)`, `url('#r0-ctl-grad')`, `marker-end` → `r0-ctl-arrow`, no old id, and `url(#ctl-undefined)` untouched. Reads the bake: verification cannot see a lost paint server. 2026-11-06: `title="see id=ctl-t"` untouched, `2 unresolved, 0 broken` (#36) |
 | `<style type="text/css">`, a quoted SVG `font-family`, a `media="print"` block (2026-11-05) | exit 0; the audit line identical to custom delimiters' (1 loader, 1 gate, 3 height, 0 @page, 1 stray token); PASS; no hoist warning; the bake has `font-family="&quot;Arial&quot;, sans-serif"`, `@media print { … }`, no `<style>` left in the SVG |
 | the redactor (2026-11-05) | a fixture built at run time from the checkout's own path: checkout (`\`, `\\`, `/`), home, other-drive and slug paths all replaced, a URL kept, exit 0; a username outside any path → exit 1 "not safe to publish", and `--check` exits 1 too |
 | `verify-release`, fake JSR (2026-11-05) | attested → 0; attested + yanked → 3; **unattested + yanked → 1** (provenance first); unattested → 1; 404 → 2 "not on JSR"; 503 → 2 "Could not ask … not a verdict"; a server that never answers → 2 at the 500 ms test timeout; `--wait` over two 503s then attested → 0, "could not ask JSR (1/60): HTTP 503 — retrying", 3 requests |
@@ -268,6 +268,27 @@ URL from `S3D_JSR_API` (and `S3D_JSR_TIMEOUT_MS`, `S3D_JSR_RETRY_MS`) — test h
 use — so a fake JSR on 127.0.0.1 drives every verdict (rows above). The fake runs in the test's own
 process, so those tests spawn asynchronously; `spawnSync` would block the server's event loop.
 Still unexercised: nothing in the three review rounds.
+
+**2026-11-06, the fourth review (owner: "yes" to its seven fixes; ledger #31–#37 in
+[known-issues.md](known-issues.md)):** 31/31 on `bun test` (47 s) and `node --test` on Node 24.21
+and the 22.18 floor. **Baked HTML byte-identical** before and after on the 13 samples (sha256
+`7f283563…20d8`) and the 48-report client set (`a19e5ad1…6277`, the roadmap's figure); the client
+set's verification lines unchanged. A survey first found NONE of the seven constructs in either
+set (bare `html`/`body` selectors only, no body `<style>`, the one SVG sheet is
+`text { font-family: sans-serif; }`, no `id=` inside a value, no entity beyond the six markup
+ones), so identity was the bar. `bun run compat`: 0 removed / changed / added → patch. New tests:
+| test | asserts |
+|---|---|
+| a third positional argument (#32) | exit 1; `Too many arguments (3)`, each argument listed, the quoting hint; nothing compiled |
+| a previous PDF that cannot be removed (#31) | a REAL one-page PDF held open the way a viewer holds it (Windows: a PowerShell child, `FileShare.Read`; POSIX: the folder `chmod 555`, skipped as root); the test runtime as "Chrome", `--no-optimize --no-verify` → exit 1 "Could not remove the previous PDF", no `Created`, the old PDF byte-identical |
+| CSS scoping, SVG sheets, attributes, entities (#33–#37) | `core` imported, no render: `html body p` → `.rs9 p`; `body + p` dropped; `p:not(.a, .b)` one selector; `body.dark` settled against `<body class="x dark">` (`body.light` dropped, `:hover` kept on the wrapper); a body `<style>` in the scoped sheet and out of the fragment; an SVG `@media` rule and a `font` shorthand NOT hoisted, kept under `svg[data-s3d-scope="r9-"]` (`svg {…}` → the scope itself, `#t` → `#r9-t`); `alt="Member id = 4"` untouched; `&deg;`/`&phi;`/`&#x3C6;` decode, `&#99999999;` → U+FFFD, `&amp;#60;` once |
+The SVG-references control adds `<a title="see id=ctl-t" href="#ctl-t">` (now `2 unresolved, 0
+broken`). **Inverted:** HEAD's `main.ts` + `report_core.ts` under the new tests → all four fail for
+their own reasons; the locked-PDF case reproduced #31 end to end (exit 0, `Created …` for a PDF
+never written). HEAD's `main.ts` alone (bake fixed) → the reference guard REFUSED the correct
+build, "1 broken by the bake … #r0-ctl-t": the checker needed its own fix. Chrome 2026-11-06:
+`@scope (svg[…]) { svg {…} }` does NOT match the scoping root (scoped selectors are relative), so
+kept SVG sheets are prefixed by attribute selector instead -- no `@scope` dependency.
 
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout

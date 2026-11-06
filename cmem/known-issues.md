@@ -284,6 +284,25 @@ It also shows the earlier guard paying off a second time: Chrome exiting 0 on a 
 precisely the condition bug #11 introduced the "no file means failure" check for. Without it this
 would have reported a successful build.
 
+### Found during the fourth code review (2026-11-06)
+
+Owner: "yes" to all seven. None of #33–#37 occurs in the 13 samples or the 48-report client set
+(surveyed first), and the baked HTML of both is byte-identical after the fixes; they are latent,
+for the next template. Tests and inversions: [testing.md](testing.md) § Test suite.
+
+| # | Bug | Silent? |
+|---|---|---|
+| 31 | **A previous PDF that could not be deleted was read back as this run's output.** The stale-PDF guard (#11) deleted it with `removeQuietly`, which swallows every error — and a PDF open in a viewer on Windows cannot be deleted or written, but CAN be read. Chrome failed to write, exited 0; the old PDF was "Created" (`--no-optimize`) or the build crashed on a raw `EBUSY` after "rendered: X MB" (default). Fixed: the build refuses before baking when the file is still there | **yes**, with `--no-optimize` |
+| 32 | **A third positional argument was ignored.** `reports C:\My Docs\out.pdf` unquoted wrote a PDF named `C:\My`; the rest vanished. The #12 class (unknown flags), for positionals. Fixed: more than two is an error naming each | **yes** |
+| 33 | **SVG `<style>` hoisting lost conditions and properties.** A rule inside `@media screen` was hoisted as unconditional (rules were matched at any depth); a property with no presentation attribute (`font`, the shorthand) became an ignored attribute, and the sheet was deleted. Fixed: top-level rules only, a property allow-list (SVG 1.1 + `paint-order`, `vector-effect`; not `transform`); anything else keeps the sheet and warns | **yes** |
+| 34 | **`<style>` blocks that stayed in the body applied to EVERY report** — a body sheet outside an `<svg>` (never read by `bakeStyle`), and an SVG sheet that could not be hoisted (inline-SVG `<style>` is document-wide in HTML); their `#id` selectors matched nothing once ids were renamed. Fixed: body sheets move to the scoped sheet; kept SVG sheets are confined to their own `<svg data-s3d-scope="rN-">`, ids renamed | **yes** — cosmetic leaks, but across reports |
+| 35 | **`html`/`body` selector mapping.** `html body p` → `.rs0 body p` (dead); `body.dark p` → `.rs0 .dark p` (a descendant's class); `p:not(.a, .b)` split at its inner comma (rule dropped); `body + p` → `.rs0 + p` (the NEXT report). Fixed: the leading root chain maps to the wrapper; `.class`/`#id` qualifiers on html/body are settled against the source's own tag; selector lists split at top-level commas; sibling-of-root selectors dropped | **yes** |
+| 36 | **`id=` inside another attribute's value was read as an id** — by the bake (renamed `alt="Member id = 4"` to `id=r0-4`, and steered reference rewrites by "4") AND by main.ts's reference guard, which then refused a correct build ("broken by the bake") once the bake was fixed. Both now read a tag's attributes in order, each value whole — written separately, per [design-decisions.md](design-decisions.md) §9 | bake: **yes**; guard: no — a false refusal |
+| 37 | **The verification's entity decoder** threw a `RangeError` on `&#99999999;` (stopping verification), decoded no hex references and no named symbols (`&deg;` left "deg" expected in the PDF: a false failure, or masked by "degrees"), and decoded `&amp;#60;` twice. Fixed: one pass, its own table (markup + engineering symbols + Greek), impossible references → U+FFFD as a browser reads them | no — loud, or masked |
+
+⚠️ **The pattern again: #36's second half was in the checker.** Fixing the bake alone made the
+guard refuse a correct build, which only the inversion (HEAD `main.ts`, fixed core) showed.
+
 ### The pattern
 
 Reviews 1–2 found builder bugs; reviews 4–5 found **checker** bugs. As the pipeline hardened, risk moved

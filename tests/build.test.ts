@@ -18,6 +18,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -249,7 +250,10 @@ test("SVG url(#id) references follow their renamed ids", { timeout: TIMEOUT }, (
   assert.ok(!baked.includes('data-id="r0-'), "data-id was namespaced");
   // Unquoted id and href, renamed together.
   assert.ok(/\bid=r0-ctl-bare\b/.test(baked) && /href=#r0-ctl-bare\b/.test(baked), "unquoted pair");
-  has(r.out, /refs:\s+\d+ id reference\(s\), 1 unresolved, 0 broken by the bake/);
+  // "id=" inside a title is text: untouched by the bake, and no id to the reference check.
+  assert.ok(baked.includes('title="see id=ctl-t"'), "an attribute's text was read as an id");
+  // Two unresolved, both already dangling in the source: ctl-undefined and ctl-t.
+  has(r.out, /refs:\s+\d+ id reference\(s\), 2 unresolved, 0 broken by the bake/);
 });
 
 test("<style type=…> and media blocks are read like a bare <style>", { timeout: TIMEOUT }, () => {
@@ -352,6 +356,75 @@ test("an unknown flag is rejected", { timeout: TIMEOUT }, () => {
   has(r.out, /Unknown option\(s\): --no-optimise/, /Supported: .*--no-optimize/);
   hasNot(r.out, /Compiling/);
 });
+
+test("a third positional argument is rejected, not ignored", { timeout: TIMEOUT }, () => {
+  // An unquoted output path with a space: before, "C:\My" became the PDF and the rest vanished.
+  const r = run([MAIN, "reports", "C:\\My", "Docs\\out.pdf"]);
+  assert.equal(r.code, 1, tail(r.out));
+  has(r.out, /Too many arguments \(3\)/, /Docs\\out\.pdf/, /quoted as ONE argument/);
+  hasNot(r.out, /Compiling/, /No such folder/);
+});
+
+test(
+  "a previous PDF that cannot be removed stops the build, never read back as new",
+  { timeout: TIMEOUT },
+  async () => {
+    // Root ignores permissions, so the POSIX lock below would not hold.
+    if (process.platform !== "win32" && process.getuid?.() === 0) return;
+    const input = control("control-custom-delimiters", join(work, "locked"));
+    const out = join(input, "out");
+    mkdirSync(out, { recursive: true });
+    const pdf = join(out, "c.pdf");
+    // A REAL previous PDF: read back, it parses, so only the guard can stop it passing.
+    const { PDFDocument } = await import("pdf-lib");
+    const old = await PDFDocument.create();
+    old.addPage();
+    writeFileSync(pdf, await old.save());
+    const before = readFileSync(pdf);
+
+    let release: () => Promise<void>;
+    if (process.platform === "win32") {
+      // A PDF viewer's lock: others may read the file, but not write or delete it.
+      const holder = spawn(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-Command",
+          "$f=[IO.File]::Open($env:S3D_LOCK,'Open','Read','Read'); 'locked'; " +
+            "[Console]::In.ReadLine() | Out-Null; $f.Close()",
+        ],
+        { env: { ...process.env, S3D_LOCK: pdf }, stdio: ["pipe", "pipe", "inherit"] },
+      );
+      await new Promise<void>((resolve, reject) => {
+        holder.stdout.on("data", (d) => String(d).includes("locked") && resolve());
+        holder.on("exit", (c) => reject(new Error(`the lock holder exited (${c})`)));
+      });
+      release = () =>
+        new Promise((r) => {
+          holder.on("close", () => r());
+          holder.stdin.end("\n");
+        });
+    } else {
+      // The POSIX equivalent: a folder whose entries cannot be removed.
+      chmodSync(out, 0o555);
+      release = async () => chmodSync(out, 0o755);
+    }
+
+    try {
+      // This runtime as "Chrome", as in the stale-PDF test below: it writes no PDF. With
+      // --no-optimize --no-verify nothing else would notice the old file being read back.
+      const r = run([MAIN, input, pdf, "--no-optimize", "--no-verify"], {
+        env: { ...process.env, CHROME_PATH: process.execPath },
+      });
+      assert.equal(r.code, 1, tail(r.out));
+      has(r.out, /Could not remove the previous PDF/, /open in a PDF viewer/);
+      hasNot(r.out, /^Created /m, /Chrome produced no PDF/);
+    } finally {
+      await release();
+    }
+    assert.deepEqual(readFileSync(pdf), before, "the previous PDF changed");
+  },
+);
 
 test("a render that writes nothing does not pass off a stale PDF", { timeout: TIMEOUT }, () => {
   const input = control("control-custom-delimiters", join(work, "stale"));
@@ -570,6 +643,83 @@ test("MathJax limitations: entities, non-breaking spaces, ids", { timeout: TIMEO
   );
   assert.match(css, /color:\s*red/, "a data-type sheet was dropped");
   assert.doesNotMatch(css, /@media x/, "data-media became a media query");
+});
+
+test("CSS scoping, SVG sheets, attributes and entities, as a browser reads them", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  const scope = (css: string) => flat(core.scopeCss(css, ".rs9", "r9-"));
+
+  // 1. The whole leading chain of html / body / :root is the wrapper. `html body p` used to
+  //    become `.rs9 body p`, which nothing inside the wrapper matches.
+  assert.equal(scope("html body p { color: red }"), ".rs9 p { color: red }");
+  assert.equal(scope("html > body > p {x:y}"), ".rs9 > p {x:y}");
+  assert.equal(scope(":root body {x:y}"), ".rs9 {x:y}");
+  //    A sibling of <body> exists in no document; kept, `.rs9 + p` reached the next report.
+  assert.equal(scope("body + p {x:y}"), "");
+  // 2. A selector list splits at its top-level commas only (`.rs9 p:not(.a, .rs9 .b)` before).
+  assert.equal(scope("p:not(.a, .b), q {x:y}"), ".rs9 p:not(.a, .b), .rs9 q {x:y}");
+
+  // 3. A qualifier on body is settled against the source's own <body>, which the wrapper is
+  //    not: `body.dark p` used to become `.rs9 .dark p`, a descendant's class.
+  const qualified = flat(
+    core.bakeStyle(
+      '<html><head><style>body.dark p{color:red} body.light p{color:blue} body:hover{x:y}</style></head><body class="x dark"><p>t</p></body></html>',
+      ".rs9",
+      "r9-",
+    ),
+  );
+  assert.match(qualified, /\.rs9 p \{color:red\}/, "the matching qualifier was not settled");
+  assert.doesNotMatch(qualified, /light|blue/, "a rule its source never applied survived");
+  assert.match(qualified, /\.rs9:hover \{x:y\}/, "a pseudo-class left the wrapper");
+
+  // 4. The page's own <style> in the body moves to the report's scoped sheet; the diagram's
+  //    stays in the diagram. Before, it stayed in the body, applying to EVERY report, with its
+  //    #report selector matching nothing once the id was renamed.
+  const doc =
+    '<html><head></head><body><style>#report{color:blue}</style><div id="report">x</div>' +
+    "<svg><style>text{fill:red}</style><text>t</text></svg></body></html>";
+  const sheet = flat(core.bakeStyle(doc, ".rs9", "r9-"));
+  assert.match(sheet, /\.rs9 #r9-report \{color:blue\}/, "the body sheet was not scoped");
+  assert.doesNotMatch(sheet, /fill/, "the SVG's sheet leaked into the page's");
+  const fragment: string = core.bakeBody(doc, "r9-");
+  assert.doesNotMatch(fragment, /#report\{/, "the body sheet stayed, unscoped");
+  assert.match(fragment, /<text fill="red">/, "the SVG sheet was not hoisted");
+
+  // 5. What cannot be hoisted is kept, and confined to its own <svg>: a rule under @media is a
+  //    condition (it was hoisted as though unconditional), and `font` has no presentation
+  //    attribute (it became font="…", which the browser ignores, and the sheet was deleted).
+  const svg = (s: string) =>
+    flat(
+      core.bakeBody(
+        `<html><body><svg><style>${s}</style><text id="t">t</text></svg></body></html>`,
+        "r9-",
+      ),
+    );
+  const media = svg("@media screen { text { fill: gray } }");
+  assert.doesNotMatch(media, /fill="gray"/, "a conditional rule was hoisted");
+  assert.match(media, /<svg data-s3d-scope="r9-">/, "the kept sheet's <svg> is not marked");
+  assert.match(media, /@media screen \{ svg\[data-s3d-scope="r9-"\] text \{ fill: gray \} \}/);
+  const font = svg("text { font: 12px Arial } svg { opacity: .5 } #t { fill: red }");
+  assert.doesNotMatch(font, /<text[^>]* font=/, "a CSS-only property became an attribute");
+  assert.match(font, /svg\[data-s3d-scope="r9-"\] text \{ font: 12px Arial \}/);
+  assert.match(font, /svg\[data-s3d-scope="r9-"\] \{ opacity: \.5 \}/, "`svg` is not the root");
+  assert.match(font, /svg\[data-s3d-scope="r9-"\] #r9-t \{ fill: red \}/, "an id not renamed");
+
+  // 6. "id=" inside another attribute's value is that attribute's text.
+  const attrs: string = core.bakeBody(
+    '<html><body><img alt="Member id = 4" src="data:x"><a title=\'see id=q\' href="#4">x</a><g id=x></g></body></html>',
+    "r9-",
+  );
+  assert.ok(attrs.includes('alt="Member id = 4"'), "alt text was rewritten as an id");
+  assert.ok(attrs.includes("title='see id=q'"), "title text was rewritten as an id");
+  assert.match(attrs, /<g id=r9-x>/, "the real id was not renamed");
+
+  // 7. The verification's decoder: named symbols and hex references decode; an impossible
+  //    reference is U+FFFD, as a browser reads it (it threw a RangeError); one pass only.
+  assert.equal(core.decodeEntities("5&deg; &phi; &Delta; &#x3C6; &#966;"), "5° φ Δ φ φ");
+  assert.equal(core.decodeEntities("&#99999999; &#0; &#xD800;"), "� � �");
+  assert.equal(core.decodeEntities("&amp;#60; &notanentity;"), "&#60; &notanentity;");
 });
 
 // ── the release scripts against a fake JSR ───────────────────────────────────
