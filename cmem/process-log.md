@@ -336,6 +336,41 @@ Owner: "look for code issues" four times, each followed by "fix" — then "do th
 | a refused release leaves nothing behind | the bump commit stayed on main; then the undo's `--mixed` reset unstaged the developer's own files |
 | the prose of a report is safe from attribute rewrites | unquoted-attribute support would have rewritten "id = 4" — attributes are now read inside tags only |
 
+## Phase 13 — four reviews in one day; a fix is new code (2026-11-06)
+
+The owner asked "look for code issues" four times, answering "yes" / "fix all" each time, and to
+commit after each round (`d92ae0d`, `86e81d6`, `44b60de`; nothing pushed). Ledger #31–#51.
+
+- **Review 1, the runtime code (7):** a locked old PDF read back as the new one; a third argument
+  ignored; SVG hoisting that lost `@media` and CSS-only properties; body sheets unscoped; `html`/`body`
+  selectors mis-mapped; `id=` inside another attribute's text renamed; the verification's entity
+  decoder throwing. None in the real set — the bar was **byte-identical baked HTML**, and it held.
+- **Review 2, `scripts/` and the workflows (6):** a release could be cut from any branch; the sample
+  sanitizer passed fields it did not know (Project ID, Company, Client); the release reported ✅ with
+  npm unpublished; `verify-release` could call a good release unattested in the window before
+  `deno publish` posts provenance (reasoned, not observed); CI cancellation could fail a release;
+  unknown flags ignored.
+- **Reviews 3 and 4, the day's own fixes read cold (4 + 4):** five bugs in code written hours
+  earlier, each passing its own tests — the SVG confinement raised specificity (Chrome: red where the
+  source was green), the sanitizer guard blind without the spacer, attribute qualifiers dropped or
+  misjudged (including HTML's caseless `lang`), a test that stopped at the REAL JSR and so could not
+  fail. Plus an empty path argument read as "here", the redactor ignoring emails, an unguarded
+  control generator. → [practices.md](practices.md) §16.
+- ⚠️ **A session leak, contained:** measuring the sanitizer, a `sed` mask that did not apply printed
+  three real field values to the terminal (no file). Rule kept in known-issues: count client fields
+  with a script that never prints them.
+- Re-measured at the end: the client set unchanged since 2026-08-08 — 380 pages, 3.35 MB, 8,286
+  expressions, 174 / 660 checked, baked HTML `a19e5ad1…`.
+
+| believed | measured |
+|---|---|
+| a fix with a passing test is done | five of the last eight findings were in that day's fixes, each with a passing test |
+| prefixing a scoped sheet only narrows it | it also adds specificity: Chrome let the diagram's rule beat the report's own |
+| `[attr=value]` compares with case | HTML compares `lang`, `dir`, `type` … caselessly in selectors; Chrome matched `html[lang=EN]` on `lang="en"` |
+| "CI passed" means "safe to publish" | CI runs on every branch; a tag on an unmerged branch would have published it |
+| a residue check that reports "0 verified absent" checked something | initials and non-Latin names gave it nothing to look for |
+| `font="12px Arial"` styles SVG text | Chrome ignores it (16px): `font` has no presentation attribute |
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is
@@ -344,6 +379,8 @@ Owner: "look for code issues" four times, each followed by "fix" — then "do th
    all wrong by 2–15×.
 3. **Write the reasoning into the file, not the conversation.** Two of five review passes found nothing
    but undocumented risk. This document exists because of that.
-4. **The strongest version of this work is upstream.** SkyCiv holds this content as structured data;
+4. **Review a fix as new code.** Its own test shares its blind spot; a cold pass with an independent
+   measurement (the browser, a planted input, the old code) is what found the bugs fixes introduced.
+5. **The strongest version of this work is upstream.** SkyCiv holds this content as structured data;
    HTML → PDF is a lossy round-trip through a format that was never the source of truth. See
    [known-issues.md](known-issues.md).

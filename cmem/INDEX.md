@@ -75,4 +75,5 @@ here. The triggers "update the project memory" (audit for stale live claims, not
 2. [architecture.md](architecture.md), [verification.md](verification.md),
    [known-issues.md](known-issues.md), [testing.md](testing.md).
 3. [roadmap.md](roadmap.md) before starting work; [practices.md](practices.md) before changing
-   anything load-bearing (§11–§14 came from packaging and releasing; §15 is the Bun-script convention).
+   anything load-bearing (§11–§14 came from packaging and releasing; §15 is the Bun-script convention;
+   §16, review a fix as new code).

@@ -120,6 +120,30 @@ but the scoping walker glued it onto the following selector, making it invalid �
 rule whose selector will not parse**. One rule per report, deleted with no error. Preludes are now
 truncated at the last semicolon and the count is audited (`48 stray CSS tokens cleaned`).
 
+**What "scoped" means, in full (2026-11-06; known-issues #33–#36, #44, #46, #49).** None of these
+cases occurs in the 13 samples or the 48 client reports — the baked HTML was byte-identical before
+and after — so they are rules for the next template, each pinned by a test:
+
+- **Every sheet of the page is the report's sheet**: the head's, and a `<style>` in the body outside
+  any `<svg>` (moved there by `bakeBody`; left in the body it applied to every report).
+- **`html` / `body` / `:root` are the wrapper**, the whole leading chain of them (`html body p` is
+  `.rs7 p`). A qualifier on one is decided against the SOURCE's own tag, because the wrapper carries
+  none of its attributes: classes, ids and attribute selectors that hold are dropped, any that fails
+  drops the rule (it never applied); attribute values compare as HTML compares them in selectors
+  (`lang`, `dir`, `type` … caselessly; `class`, `id` not; `i` / `s` honoured — Chrome, measured).
+  Pseudo-classes stay on the wrapper. A sibling of `html`/`body` (`body + p`) is dropped: kept, it
+  reached the NEXT report.
+- **Selector lists split at top-level commas only** (`p:not(.a, .b)` is one selector).
+- **SVG `<style>` is hoisted onto presentation attributes only where an attribute says the same**:
+  top-level rules, bare element selectors, properties on SVG's presentation-attribute list
+  (`font`, the shorthand, is not one — Chrome ignores `font="…"`, measured). The rest keeps its
+  `<style>`, **confined to its own `<svg>` inside `:where()`** — an inline-SVG `<style>` is
+  document-wide in HTML, and a plain prefix raised specificity enough to beat the report's own
+  rules it used to lose to (Chrome, measured: red where the source was green).
+- **Attributes are read one after another, each value whole**, by the bake and — separately written,
+  §9 — by the CLI's reference guard, which then requires every id reference that resolved in a
+  source to resolve in its bake: verification counts text and image paints, not gradients or clips.
+
 ---
 
 ## 7. Protect graphics and equations from page breaks. Not sections.

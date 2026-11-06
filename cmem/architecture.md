@@ -5,7 +5,7 @@
 ```
 main.ts                        CLI entry point
 src/                           the two library modules
-scripts/                       release tooling, sample sanitizer (Deno); new shell-style scripts are Bun .ts — practices.md §15
+scripts/                       release tooling, the compatibility gate, checks, sample sanitizer — Bun .ts (Deno until 2026-10-26; practices.md §15)
 tests/HTMLFilesToBeCompiled/   13 SANITIZED sample reports (committed)
 tests/controls/                negative controls
 tests/browser_example.html     the browser path
@@ -53,8 +53,11 @@ sources ──► BAKE ──► GUARD ──► RENDER ──► OPTIMIZE ─�
 ```
 
 1. **BAKE** (core) — parse each report's own delimiter config, pre-render the maths to CHTML, strip
-   scripts, remove the spinner, namespace ids, scope the CSS, hoist SVG styles onto presentation
-   attributes, inline the fonts. Output is one hermetic document.
+   scripts, remove the spinner, namespace ids (and every reference to them), scope the CSS — the
+   head's sheets and the body's own, `html`/`body` selectors settled against the source's tags —,
+   hoist SVG styles onto presentation attributes where an attribute can say the same and confine
+   the rest to their own `<svg>`, inline the fonts. Output is one hermetic document; the CLI then
+   checks every id reference the bake renamed still resolves ([design-decisions.md](design-decisions.md) §6).
 2. **GUARD** (core) — refuse to continue if anything that looks like unrendered maths survives. An
    unrecognised delimiter never errors on its own; this is the only thing that catches it.
 3. **RENDER** (runtime) — one headless Chrome pass over the whole document.
@@ -156,7 +159,12 @@ transfer or a rename on its own** (binaryang measured it, its `cmem/publishing.m
 was re-linked on 2026-10-20 at 23:37:36 UTC, 93 s after binaryang's, so it already names the org.
 binaryang's 1.13.1 proved the same path publishes with provenance from the org. **Measured for
 THIS package:** 1.1.0 → 1.1.7 released from the org, each attested (`verify-release`; Rekor ids in
-[roadmap.md](roadmap.md) § Current state). **Before any release after a future move:** read
+[roadmap.md](roadmap.md) § Current state). **Since 2026-11-06** (known-issues #38, #40): only
+`main`, tracking `origin/main`, is released — `publish.ts` refuses anything else before committing,
+and `publish.yml` refuses a tagged commit not on `main` (`ci.yml` runs on every branch, so its
+gate alone did not); and the release ends with `verify-release --wait --npm`, which requires the
+version on npm WITH provenance too (exit 4 otherwise). ⚠️ The two workflow changes are first
+exercised by the next real release. **Before any release after a future move:** read
 `api.jsr.io/scopes/jrmarcum/packages/s3d-reportcompiler` → `githubRepository` first; a stale link
 shows only as a provenance failure, on a version that can never be republished.
 

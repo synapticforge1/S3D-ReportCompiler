@@ -411,7 +411,7 @@ throws a descriptive error rather than failing obscurely.
 | `compareAgainstPdf(expected, observed, reportCount)` | Compare against what was found in the PDF → `VerificationResult` with a `failures[]` array |
 | `findLeftoverMath(baked)` | **The guard.** Surviving delimiters and TeX commands in a baked document — an empty array is the only acceptable result |
 | `textWords(text)` / `textNumbers(text)` | The tokenizers, exposed so a caller can re-derive expectations independently |
-| `decodeEntities(s)` | HTML entity decoding used by both sides of the comparison |
+| `decodeEntities(s)` | The verification's HTML entity decoding (named symbols, decimal and hex references, one pass) for the source side of the comparison. The bake decodes with its own, separately written code, so the check cannot share a decoding mistake with the build |
 | `sortReportNames(names)` | Numeric-aware sort, so `member_2` precedes `member_10` |
 
 ### Counters and diagnostics

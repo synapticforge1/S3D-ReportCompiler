@@ -336,3 +336,27 @@ This rule was set by the project owner as a convention. It does not come from a 
 It follows from the project running on Windows, macOS and Linux: one TypeScript file works on every
 machine and gets type-checked, and a shell script does neither. Keep the §13 lessons when writing
 one: every guard must fail loudly when it can't run.
+
+---
+
+## 16. A fix is new code — review it cold, and measure it
+
+On 2026-11-06 four review rounds ran on the same day: 7 findings, then 6, then 4, then 4. **Three of
+the third round's four, and two of the fourth's, were in fixes written hours earlier** — each
+passing the tests written with it (known-issues #44–#49):
+
+| The fix | Its own test held | What a cold re-read plus a measurement found |
+|---|---|---|
+| confine a kept SVG sheet to its `<svg>` (#34) | the selector carries the scope | the prefix raised specificity: Chrome rendered red where the source was green (#44) |
+| refuse unscrubbed fields in the sanitizer (#39) | a filled Company is refused | on a template without the spacer the guard read no row and passed it (#45) |
+| settle `html`/`body` qualifiers (#35) | `body.dark` is decided | `body[class~=…]` dropped, `html[lang=EN]` misjudged (#46, #49) |
+| fence the npm test hook (#40) | "non-zero exit" | it stopped at the REAL JSR and never reached the fence (#48) |
+
+A test written alongside a fix encodes the fix's own idea of the problem, so it shares the fix's
+blind spot (§2 applies to it too). What found these was a separate pass that ran the claim against
+something that did not come from the fix — a browser's computed style, a template planted to break
+the assumption, the old code under the new test.
+
+**Rule:** after fixing, review the fix as new code in its own pass. For each one: what input would
+make it wrong, and what independent thing (the browser, the registry, the previous version) can say
+so? A test that cannot fail for the reason it names is not a test (§2).

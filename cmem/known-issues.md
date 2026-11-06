@@ -49,6 +49,7 @@ Maths handling is fully template-driven (delimiters read from each document). Th
 | `height: 100%` only on wrappers | layout distortion — **visible** |
 | Diagram labels for the split check | check silently no-ops — **reported as `0 diagram(s) checked`** |
 | Report-heading pattern | count mismatch — **fails loudly** |
+| The project-details layout (`Label:  [mathin]\text{  }[mathin]value<br>`), for the sample sanitizer | it refuses: "cannot read the project-details layout" (since 2026-11-06, #45) — **fails loudly** |
 
 All degrade *visibly* or *loudly* rather than producing a clean-looking document with corrupted
 contents, which is the safer class. The conservation check backstops the first three.
@@ -328,7 +329,8 @@ cold; none touches the current reports (baked HTML byte-identical after).
 | 46 | **#35's root-qualifier handling, two forms.** The qualifier was read up to the first `~`/`+`/`>`, so `body[class~="dark"] p` lost its rule as a "sibling of body"; and attribute qualifiers were left on the wrapper, so `html[lang=en] p` became `.rs0[lang=en] p`, matching nothing. Fixed: the qualifier is read bracket-, paren- and quote-aware; attribute selectors (`=`, `~=`, `|=`, `^=`, `$=`, `*=`, presence, the `i` flag) are settled against the source tag like classes and ids | **yes** |
 | 47 | **The transcript redactor ignored email addresses** (it checked the username and paths; the privacy rule forbids emails too). Fixed: addresses — plain, `%40`, `@` — become `<email>` and count as residue; the trailer's `noreply@anthropic.com`, `git@github.com` and RFC 2606/6761 example/test domains stay. Never echoed | **yes** — latent while the transcript is untracked |
 
-A fourth pass the same day (owner: "fix all") found four more, three again in that day's code:
+A fourth pass the same day (owner: "fix all") found four more: two in that day's fixes (#48, #49),
+one older behaviour beside #32's new argument check (#50), one old generator (#51):
 
 | # | Bug | Silent? |
 |---|---|---|
