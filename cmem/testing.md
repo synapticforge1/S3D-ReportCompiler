@@ -381,6 +381,18 @@ need an authenticated admin request (`gh` absent here), so the build's own sandb
 read. WSL was not a stand-in: no Chrome or runtimes, `sudo` needs a password, and its kernel lacks
 `apparmor_restrict_unprivileged_userns`.
 
+**2026-11-06, eighth pass (owner: "fix all"; ledger #59, #60):** 40/40 on `bun test` (59 s) and
+`node --test` on Node 24.21 and 22.18; `compat` → minor (no new export). Baked hashes `cc563a15…`
+(samples), `a3a6a2af…` (client set); without the CSP line, `7f283563…` / `a19e5ad1…`; 100 / 380
+pages, PASS, no external-ref warning. New test "the render loads nothing from another host": the
+sample with six references to a counting server on 127.0.0.1 (double-, single-, un-quoted `src`,
+`srcset`, an inline-style and a head-sheet `url()`; every `<img>` `alt=""`, or Chrome's
+broken-image icon counts as an image paint) → PASS, "6 external ref(s)", **0 requests**. Inverted
+with only the policy put back to #55's: "the render made 5 request(s) to another host". Extended:
+the font test refuses a download cut to half its size ("did not return a font (font/woff, …"); the
+scripting test reads each CSP directive and that `<meta>` / `<base>` leave the body. HEAD's core +
+`main.ts` under the new tests: all three fail.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in

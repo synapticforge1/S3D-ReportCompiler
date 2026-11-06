@@ -1149,6 +1149,9 @@ export function bakeBody(src: string, prefix: string): string {
   // event-handler attributes (on…=) and javascript: URLs here. A report is user-supplied HTML, and
   // the render must not execute anything it carries (the CLI also prints with scripting off).
   body = inTags(body, stripActiveAttrs);
+  // <meta http-equiv> (a refresh navigates away; no policy stops it) and <base> (it re-roots every
+  // relative address) have no place in a report's body; neither draws anything.
+  body = body.replace(/<(?:meta|base)\b[^<>]*>/gi, "");
 
   // Every reference to a renamed id has to follow it, or its target vanishes
   // without an error -- and verification counts text and image paints, not
@@ -1269,18 +1272,31 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
 }
 
 /**
+ * The assembled document's Content-Security-Policy. It needs no script and nothing from another
+ * host -- it is built from user-supplied reports, so whatever one carries must neither run nor
+ * load while it renders: no script of any kind (blocks, inline handlers, `javascript:` URLs), no
+ * plugin, no frame, no fetch; images and fonts from embedded data only; styles inline. The one
+ * exception is MathJax's font origin, which the browser path loads its fonts from (the CLI
+ * inlines them, so its document loads nothing at all). `base-uri` / `form-action` close what
+ * `default-src` does not cover.
+ */
+const DOCUMENT_CSP =
+  "default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; " +
+  `form-action 'none'; img-src data:; font-src data: ${new URL(MATHJAX_FONTS).origin}; ` +
+  "style-src 'unsafe-inline'";
+
+/**
  * Wrap baked bodies and their scoped stylesheets into one printable document.
  *
- * The document forbids scripting itself (`script-src 'none'; object-src 'none'`): it needs none,
- * and it is built from user-supplied reports, so nothing one carries may run while it renders --
- * script blocks, inline handlers and `javascript:` URLs alike, whatever the bake missed.
+ * The document forbids scripting and outside loads itself ({@link DOCUMENT_CSP}): it needs
+ * neither, and it is built from user-supplied reports, whatever the bake missed.
  */
 export function assembleDocument(bodies: string[], styles: string[], mathCss: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="${DOCUMENT_CSP}">
 <title>Combined Design Report</title>
 <style>
 @page { size: Letter; margin: 0.5in; }

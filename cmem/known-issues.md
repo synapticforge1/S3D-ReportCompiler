@@ -33,7 +33,13 @@ errors that typeset instead of throwing, CHTML emitting no SVG): the list, the w
 test that pins them are in [roadmap.md](roadmap.md) task 8 § "MathJax limitations", M1–M4.
 🔒 **Re-check them on every MathJax update** (owner, 2026-11-05).
 
-### The render runs no report code (since 2026-11-06, ledger #55)
+### The render runs no report code and loads nothing from outside (since 2026-11-06, ledger #55, #60)
+
+🔁 Since #60 the same `<meta>` also forbids every outside load (`default-src 'none'`; images and
+fonts from embedded data; MathJax's font origin for the browser path) and report bodies lose
+`<meta>` / `<base>`: measured with a counting server, 5 requests during the render before, 0 after.
+The text below is #55's.
+
 
 The baked document is built from **user-supplied report files**, so its premise was wrong that
 `--no-sandbox` was safe because "the input is a document this tool generated itself". Now, in
@@ -361,6 +367,9 @@ ignore rules, the tool configuration:
 | 56 | **The font cache would serve an old MathJax version's fonts after an upgrade.** `.mathjax-fonts/` was flat, keyed by file name only, while the URL carries the version (`mathjax@3.2.2`): an update (roadmap task 8) would have embedded the old fonts beside the new stylesheet, with nothing to notice it (verification reads text, not glyphs). Fixed: one folder per URL directory (`cdn.jsdelivr.net_npm_mathjax@3.2.2_…`); an earlier release's flat cache is adopted once, offline (every release so far used 3.2.2) | **yes** |
 | 57 | **A download that was not a font was cached and embedded.** Only the HTTP status was checked: a 200 login page (captive portal) or proxy page became a "font" in this and every later build, the maths falling back to whatever the host has. Fixed: kept only with a WOFF/WOFF2 signature (`wOFF`/`wOF2`); refused otherwise with nothing cached ("did not return a font … a captive portal or a proxy page?"); a cached non-font is fetched again; a plain error, not a stack trace | **yes** |
 | 58 | **#55's sandbox could keep Chrome from starting on a non-root Linux host** (Ubuntu 24.04 restricts the user namespaces Chrome's sandbox uses; `ubuntu-latest` is 24.04). Not reproducible here (Windows). Loud if it happens — no PDF — but Chrome's message was easy to miss. Fixed: `S3D_CHROME_NO_SANDBOX=1` opts out (off by default; the build says "sandbox: OFF (…)" whenever it is off), and a no-PDF failure naming the sandbox explains it. ✅ **Checked on CI 2026-11-06** (run 42306618122, branch `ci/sandbox-check`, commit `1b1e498`, `ubuntu-latest`): every Chrome render passed with the sandbox ON — the sample build, both test suites, the runtime matrix, the npm proof; the workflows do not set the opt-out, and GitHub's hosted runners run jobs as the non-root `runner` user. ⚠️ The logs were not read (they need an authenticated admin request; `gh` is not installed here): "sandbox on" rests on that runner fact, not on the absence of the build's "sandbox: OFF" line | no — loud |
+
+| 59 | **#57's font check passed a download cut short** — only the 4-byte signature was read, and a file truncated mid-download still starts `wOFF`. Fixed: the total length the WOFF/WOFF2 header records (bytes 8–11) must equal the file's size; all 22 MathJax fonts record theirs exactly (measured) | **yes** |
+| 60 | **The render could load content from other hosts.** The document is meant to be hermetic, but nothing enforced it: the check counted double-quoted `href`/`src="http…"` only (1 of 7 spellings, measured) and only warned, and the policy (#55) governed scripts alone. Measured with a counting server on 127.0.0.1: under that policy Chrome made 5 requests during the render; whatever came back would sit in a sealed PDF, and verification proves presence, not absence of additions. Fixed: the CSP forbids every outside load (`default-src 'none'`, images and fonts from data only, MathJax's font origin kept for the browser path, `base-uri` / `form-action` closed) → 0 requests; `<meta>` and `<base>` leave report bodies (a refresh is no policy's to stop); the count reads every spelling. The real set loads nothing (its only external host is the SVG namespace, `www.w3.org`): baked HTML differs by the policy line only | **yes** |
 
 ⚠️ **#52 and #54 add four exports, so the next release is a MINOR (1.2.0), not 1.1.8:** `compat`
 says 0 removed, 0 changed, 4 added (`BakedReport`, `ReferenceCheck`, `findBrokenReferences`,

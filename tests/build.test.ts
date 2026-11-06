@@ -950,12 +950,60 @@ test("the bake carries no event handlers or javascript: URLs", async () => {
   assert.ok(out.includes('title="onclick=text"'), "another attribute's text was touched");
   assert.ok(out.includes('href="#"'), "a javascript: URL survived");
   assert.ok(out.includes('href="#r9-ok"'), "an ordinary link was changed");
-  // And the assembled document forbids scripting itself, whatever the bake might miss.
-  assert.match(
-    core.assembleDocument([out], [""], ""),
-    /<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'">/,
-    "the document does not forbid scripting",
+  // And the assembled document forbids scripting AND outside loads itself, whatever the bake might
+  // miss: images and fonts from embedded data only (plus MathJax's font origin, for the browser).
+  const csp =
+    /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(
+      core.assembleDocument([out], [""], ""),
+    )?.[1] ?? "";
+  for (const directive of [
+    "default-src 'none'",
+    "script-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "img-src data:",
+    "font-src data: https://cdn.jsdelivr.net",
+    "style-src 'unsafe-inline'",
+  ]) {
+    assert.ok(csp.split(/;\s*/).includes(directive), `the policy lacks "${directive}": ${csp}`);
+  }
+  // <meta http-equiv> (a refresh navigates; no policy stops it) and <base> leave a report's body.
+  const headless: string = core.bakeBody(
+    '<html><body><meta http-equiv="refresh" content="0"><base href="https://example.invalid/"><p>kept</p></body></html>',
+    "r9-",
   );
+  assert.doesNotMatch(headless, /<meta|<base/i, "a <meta> or <base> survived in the body");
+  assert.ok(headless.includes("<p>kept</p>"), "content went with it");
+});
+
+test("the render loads nothing from another host", { timeout: TIMEOUT }, async () => {
+  // A report pointing at a counting server on 127.0.0.1 in six spellings. The document's policy
+  // must block every load (0 requests), and the build must count all six, not 1 of them.
+  let hits = 0;
+  const counting: Handler = (_req, res) => {
+    hits++;
+    res.writeHead(404);
+    res.end();
+  };
+  const r = await withFakeJsr(counting, (origin) => {
+    const src = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    // alt="": a broken <img> otherwise draws Chrome's broken-image icon, which counts as an
+    // image paint (blocked and 404 alike) and fails the build for a reason this test is not about.
+    const refs =
+      `<img alt="" src="${origin}/a.png"><img alt="" src='${origin}/b.png'>` +
+      `<img alt="" src=${origin}/c.png><img alt="" srcset="${origin}/d.png 2x">` +
+      `<p style="background:url(${origin}/e.png)">ref</p>`;
+    let v = src.replace(/<body([^>]*)>/i, (m) => `${m}${refs}`);
+    v = v.replace("</head>", `<style>.x{background:url("${origin}/f.png")}</style></head>`);
+    assert.notEqual(v, src, "could not plant the references");
+    const dir = join(work, "external");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "x_report.html"), v);
+    return runAsync([MAIN, dir, join(dir, "out", "c.pdf")], { env: process.env });
+  });
+  assert.equal(r.code, 0, r.out);
+  has(r.out, /baked HTML still has 0 script\(s\) and 6 external ref\(s\)/, /PASS/);
+  assert.equal(hits, 0, `the render made ${hits} request(s) to another host`);
 });
 
 test(
@@ -1043,6 +1091,18 @@ test(
       [],
       "the flat files were not moved into the version folder",
     );
+
+    // 2b. A download cut short still starts `wOFF`: refused by its header's recorded length.
+    const truncated: Handler = (req, res) => {
+      const p = real.get(decodeURIComponent((req.url ?? "").replace(/^.*\//, "")));
+      if (!p) return json({}, 404)(req, res);
+      const bytes = readFileSync(p);
+      res.writeHead(200, { "content-type": "font/woff" });
+      res.end(bytes.subarray(0, bytes.length >> 1));
+    };
+    const cut = await withFakeJsr(truncated, (o) => buildIn("fonts-cut", o));
+    assert.equal(cut.code, 1, cut.out);
+    has(cut.out, /did not return a font \(font\/woff, \d+ bytes\)/);
 
     // 4. A cached file that is not a font is fetched again, not embedded.
     const dir = join(adoptCwd, ".mathjax-fonts", versioned(adoptCwd).dirs[0]);

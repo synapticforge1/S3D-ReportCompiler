@@ -299,9 +299,16 @@ const outputPdf = await rt.resolvePath(
 // the only one that needs the network.
 // ---------------------------------------------------------------------------
 
-/** A WOFF or WOFF2 file, by its signature: what a font download must be before it is kept. */
+/**
+ * A complete WOFF or WOFF2 file: its signature, and the total length its header records (bytes
+ * 8–11, big-endian) equal to its size -- what a font download must be before it is kept. The
+ * signature alone passed a file cut off mid-download (it still starts `wOFF`); all 22 MathJax
+ * fonts record their exact size (measured 2026-11-06).
+ */
 const isFont = (b: Uint8Array) =>
-  b.length > 4 && ["wOFF", "wOF2"].includes(String.fromCharCode(b[0], b[1], b[2], b[3]));
+  b.length >= 12 &&
+  ["wOFF", "wOF2"].includes(String.fromCharCode(b[0], b[1], b[2], b[3])) &&
+  ((b[8] << 24) | (b[9] << 16) | (b[10] << 8) | b[11]) >>> 0 === b.length;
 
 /**
  * Where a font is fetched from: its URL, or -- under the TEST hook `S3D_FONT_ORIGIN`, honoured
@@ -382,7 +389,8 @@ async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
   if (!isFont(bytes)) {
     throw new Error(
       `${url} did not return a font (${res.headers.get("content-type") ?? "no content type"}, ` +
-        `${bytes.length} bytes) -- a captive portal or a proxy page? Nothing was cached.`,
+        `${bytes.length} bytes) -- a captive portal or a proxy page, or a download cut short? ` +
+        `Nothing was cached.`,
     );
   }
   await keep(bytes);
@@ -738,7 +746,16 @@ const combinedHtml = assembleDocument(bodies, styles, mathCss);
   }
 }
 
-const externalRefs = (combinedHtml.match(/(?:href|src)="https?:/gi) ?? []).length;
+// Every way of writing a reference to another host: an attribute quoted either way or bare,
+// `srcset`, `url(…)` in a sheet or a style, `//host/…` as much as `https://…`. It used to count
+// double-quoted `href="http…"` / `src="http…"` only (1 of 7 spellings). The document's CSP blocks
+// the loads themselves; this says how many the bake left.
+const externalRefs =
+  (
+    combinedHtml.match(
+      /(?<![\w:-])(?:src|href|srcset|poster|data|action|formaction|xlink:href)\s*=\s*["']?\s*(?:https?:)?\/\//gi,
+    ) ?? []
+  ).length + (combinedHtml.match(/url\(\s*["']?\s*(?:https?:)?\/\//gi) ?? []).length;
 // Event-handler attributes are scripts too; the bake removes them, so any left is a bake bug.
 const scripts =
   (combinedHtml.match(/<script/gi) ?? []).length +
