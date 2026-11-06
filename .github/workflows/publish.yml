@@ -26,7 +26,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      contents: read # the compare API, for "the tagged commit is on main"
     steps:
+      # Only main is released (publish.ts refuses any other branch; this is the same rule from the
+      # registry side). ci.yml runs on every branch, so "CI passed" alone would let a tag on an
+      # unmerged branch publish it. `bun run release` pushes main BEFORE the tag, so the tagged
+      # commit is main's head: "identical" (or "behind", once main has moved on).
+      - name: The tagged commit is on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${SHA}" --jq .status)
+          if [ "$STATUS" != "identical" ] && [ "$STATUS" != "behind" ]; then
+            echo "::error::${SHA} is not on main (compare status '${STATUS}') — refusing to publish."
+            exit 1
+          fi
+          echo "✅ ${SHA} is on main (${STATUS})"
+
       - name: Wait for ci.yml on this commit, and require success
         env:
           GH_TOKEN: ${{ github.token }}

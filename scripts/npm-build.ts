@@ -19,9 +19,9 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+// The npm name lives with the registry lookups, so verify-release checks the name this publishes.
+import { NPM_NAME } from "./jsr-api.ts";
 
-/** The npm name (owner, 2026-10-28). The JSR name is unchanged. */
-export const NPM_NAME = "@synapticforge1/s3d-reportcompiler";
 const REPO_URL = "https://github.com/synapticforge1/S3D-ReportCompiler";
 
 const root = fileURLToPath(new URL("..", import.meta.url));

@@ -4,6 +4,8 @@
  *   bun run verify-release            # the version in jsr.json
  *   bun run verify-release 1.0.2      # a specific version
  *   bun run verify-release --wait     # poll while JSR ingests (after a release)
+ *   bun run verify-release --npm      # npm too: published there WITH provenance (the release
+ *                                     # passes this; older versions predate npm, so not default)
  *
  * WHY THIS EXISTS
  * ---------------
@@ -23,12 +25,23 @@
  * run automatically at the end of `bun run release`, it confirms the Actions
  * publish was actually attested.
  *
- * Exit codes: 0 attested · 1 published but NOT attested (yanked or not) · 2 not published
- * yet, or JSR could not be asked · 3 attested but YANKED.
+ * Exit codes: 0 attested (and, with --npm, on npm with provenance) · 1 published but NOT
+ * attested (yanked or not) · 2 not published yet, or JSR could not be asked · 3 attested but
+ * YANKED · 4 (--npm) attested on JSR, but npm lacks the version, its provenance, or an answer ·
+ * 64 a usage error.
  */
 
 import { readFileSync } from "node:fs";
-import { JSR_RETRY_MS, JSR_TIMEOUT_MS, type Look, lookupVersion } from "./jsr-api.ts";
+import {
+  JSR_RETRY_MS,
+  JSR_TIMEOUT_MS,
+  type Look,
+  lookupNpmVersion,
+  lookupVersion,
+  NPM_NAME,
+  type NpmLook,
+  type VersionInfo,
+} from "./jsr-api.ts";
 
 const jsrJson = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url), "utf8")) as {
   name: string;
@@ -37,7 +50,18 @@ const jsrJson = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url),
 
 const argv = process.argv.slice(2);
 const args = argv.filter((a) => !a.startsWith("-"));
+// Unknown flags are refused, not ignored: a mistyped `--wiat` straight after a release used to
+// become a single look, and report "not on JSR" for a release that was simply still running.
+const unknownFlags = argv.filter((a) => a.startsWith("-") && a !== "--wait" && a !== "--npm");
+if (unknownFlags.length > 0 || args.length > 1 || (args[0] && !/^\d+\.\d+\.\d+$/.test(args[0]))) {
+  console.error(`usage: verify-release.ts [X.Y.Z] [--wait] [--npm]`);
+  if (unknownFlags.length > 0) console.error(`  unknown option(s): ${unknownFlags.join(", ")}`);
+  if (args.length > 1) console.error(`  one version at most; got ${args.join(", ")}`);
+  else if (args[0]) console.error(`  not a version: ${args[0]}`);
+  process.exit(64);
+}
 const wait = argv.includes("--wait");
+const checkNpm = argv.includes("--npm");
 const version = args[0] ?? jsrJson.version;
 
 console.log(`Checking ${jsrJson.name}@${version} …`);
@@ -82,7 +106,20 @@ if (!("info" in look)) {
   process.exit(2);
 }
 
-const info = look.info;
+// `deno publish` makes the version visible FIRST and attaches its provenance a moment later (it
+// signs and uploads the bundle once the publish task has succeeded). A look in between sees a
+// record with no rekorLogId -- and the verdict below says "cannot be fixed, bump and release
+// again". So, while waiting, a record without one gets a grace period before it is believed.
+const GRACE = wait ? 8 : 0; // 8 more looks: 2 min at the default 15 s
+for (let g = 1; g <= GRACE && "info" in look && !look.info.rekorLogId; g++) {
+  console.log(
+    `  published, no provenance record yet (${g}/${GRACE}) — deno publish attaches it after the upload`,
+  );
+  await new Promise((r) => setTimeout(r, JSR_RETRY_MS));
+  const again = await lookupVersion(jsrJson.name, version);
+  if ("info" in again) look = again; // a failed look keeps the last record
+}
+const info = (look as { info: VersionInfo }).info;
 
 // Provenance first: an unattested version stays exit 1 whether or not it was later yanked --
 // "no provenance" is the finding this script exists for, and a yank must not hide it.
@@ -95,7 +132,7 @@ if (info.yanked && info.rekorLogId) {
 if (info.rekorLogId) {
   console.log(`\n✅ ${version} is published AND attested.`);
   console.log(`   Rekor log ID: ${info.rekorLogId}`);
-  process.exit(0);
+  process.exit(checkNpm ? await npmVerdict() : 0);
 }
 
 console.error(
@@ -111,3 +148,41 @@ console.error(`     bun run bump`);
 console.error(`     bun run release\n`);
 console.error(`   ⚠️  jsr.io may still show score 100 — provenance is not scored.`);
 process.exit(1);
+
+/**
+ * `--npm`: the same tag publishes to npm after JSR (publish.yml's `npm` job). Without this the
+ * release reported ✅ on JSR alone, and an npm job that failed -- as 1.1.1's did -- went unseen.
+ * Returns 0 when npm holds the version with provenance, else 4.
+ */
+async function npmVerdict(): Promise<number> {
+  console.log(`\nChecking ${NPM_NAME}@${version} on npm …`);
+  let n: NpmLook = { error: "not asked" };
+  for (let i = 1; i <= attempts; i++) {
+    n = await lookupNpmVersion(NPM_NAME, version);
+    if ("info" in n) break;
+    if (i < attempts) {
+      console.log(
+        "missing" in n
+          ? `  not on npm yet (${i}/${attempts}) — the npm job runs after JSR's`
+          : `  could not ask npm (${i}/${attempts}): ${n.error} — retrying`,
+      );
+      await new Promise((r) => setTimeout(r, JSR_RETRY_MS));
+    }
+  }
+  if ("info" in n && n.info.provenance) {
+    console.log(`✅ ${version} is on npm WITH provenance.`);
+    return 0;
+  }
+  if ("info" in n) {
+    console.error(`\n❌ ${version} is on npm with NO provenance — not published by publish.yml's`);
+    console.error(`   trusted (OIDC) job. npm versions are immutable too: bump and release again.`);
+  } else if ("missing" in n) {
+    console.error(`\n❌ ${version} is attested on JSR but NOT on npm${wait ? " (waited)" : ""}.`);
+    console.error(`   One tag releases both: check publish.yml's npm job, then re-run it with`);
+    console.error(`   "Run workflow" and the tag v${version} (npm only).`);
+  } else {
+    console.error(`\n⚠️  Could not ask npm whether ${version} is published: ${n.error}.`);
+    console.error(`   This is not a verdict. Re-run: bun run verify-release ${version} --npm`);
+  }
+  return 4;
+}

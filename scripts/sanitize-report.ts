@@ -47,12 +47,35 @@ const REPLACEMENTS: Array<{ label: string; value: string }> = [
 ];
 
 /**
+ * The other fields of the same "Project details" block that may hold a value:
+ * not identifying, so kept verbatim. Every OTHER field in that layout must be
+ * EMPTY, or the file is refused. The template also carries Project ID, Company
+ * and Client -- empty in all 48 client reports (counted 2026-11-06), so nothing
+ * scrubbed them, and a job that filled one would have been copied into tests/
+ * with a ✅: the residue check looks only for the values it removed.
+ */
+const KEPT_FIELDS = new Set(["date", "project units"]);
+
+/** Every `Label:  [mathin]\text{  }[mathin]value<br>` row of the block: [label, value]. */
+const FIELD_ROW = /([A-Z][A-Za-z ]{0,40}):\s*\[[a-z]+\]\\text\{[^}]*\}\[[a-z]+\]([\s\S]*?)<br\b/g;
+
+/**
  * Words that legitimately occur in the calculation prose, so their presence is
  * not evidence of a leak. Kept as short as the evidence allows — every entry
  * here is a hole in the residue check, so each one is a word that was OBSERVED
  * surviving for an innocent reason, not one guessed at in advance.
  */
 const IGNORE_TOKENS = new Set(["design"]);
+
+/**
+ * A token as a whole word, in any script: `\b` is ASCII-only, so a name in
+ * accented or non-Latin letters had no boundary to match.
+ */
+const wholeWord = (t: string) =>
+  new RegExp(
+    `(?<![\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`,
+    "iu",
+  );
 
 const args = process.argv.slice(2);
 const checkOnly = args.includes("--check");
@@ -96,6 +119,24 @@ for (const file of files) {
     continue;
   }
 
+  // Every field the template carries is either scrubbed below, known to be safe, or EMPTY.
+  const scrubbed = new Set(REPLACEMENTS.map((r) => r.label.toLowerCase()));
+  const unreviewed = [...html.matchAll(FIELD_ROW)]
+    .filter(([, label, value]) => {
+      const l = label.trim().toLowerCase();
+      return !scrubbed.has(l) && !KEPT_FIELDS.has(l) && value.trim() !== "";
+    })
+    .map(([, label]) => label.trim());
+  if (unreviewed.length > 0) {
+    console.error(
+      `❌ ${name}: field(s) ${unreviewed.map((l) => `"${l}:"`).join(", ")} hold a value this script ` +
+        `does not scrub — refusing. Add each to REPLACEMENTS (or, if it identifies no one, to ` +
+        `KEPT_FIELDS) first.`,
+    );
+    failures++;
+    continue;
+  }
+
   const removed: string[] = [];
   let out = html;
 
@@ -117,23 +158,35 @@ for (const file of files) {
   }
 
   // ── Residue check ─────────────────────────────────────────────────────────
-  // Every word of every removed value must be gone from the output.
+  // Every word of every removed value must be gone from the output. Words of
+  // two characters up, in any script: at three-plus ASCII only, a designer
+  // written as initials ("JM") or a name in non-Latin letters left NOTHING to
+  // check, and the file passed with "0 token(s) verified absent".
   const tokens = [
     ...new Set(
       removed
-        .flatMap((v) => v.split(/[^A-Za-z0-9]+/))
+        .flatMap((v) => v.split(/[^\p{L}\p{N}]+/u))
         .map((t) => t.trim())
-        .filter((t) => t.length >= 3 && !IGNORE_TOKENS.has(t.toLowerCase())),
+        .filter((t) => [...t].length >= 2 && !IGNORE_TOKENS.has(t.toLowerCase())),
     ),
   ];
+  // A value that was removed but yields nothing to look for cannot be verified gone.
+  const unverifiable = removed.filter(
+    (v) => v.trim() !== "" && !v.split(/[^\p{L}\p{N}]+/u).some((t) => [...t].length >= 2),
+  );
+  if (unverifiable.length > 0) {
+    console.error(
+      `❌ ${name}: ${unverifiable.length} removed value(s) too short to verify absent — refusing.`,
+    );
+    failures++;
+    continue;
+  }
 
   // Word-boundary, not substring: a bare substring test flags "Inc" inside
   // "Including" and would push us into ignoring genuinely identifying words to
   // quiet the false positives. Widening the ignore list to fix a sloppy matcher
   // is how a redaction check ends up unable to fail.
-  const survivors = tokens.filter((t) =>
-    new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(out),
-  );
+  const survivors = tokens.filter((t) => wholeWord(t).test(out));
 
   if (survivors.length > 0) {
     console.error(

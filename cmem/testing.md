@@ -290,6 +290,25 @@ build, "1 broken by the bake … #r0-ctl-t": the checker needed its own fix. Chr
 `@scope (svg[…]) { svg {…} }` does NOT match the scoping root (scoped selectors are relative), so
 kept SVG sheets are prefixed by attribute selector instead -- no `@scope` dependency.
 
+**2026-11-06, the review of `scripts/` and the workflows (owner: "fix all"; ledger #38–#43):**
+34/34 on `bun test` (52 s) and `node --test` on Node 24.21 and the 22.18 floor; `compat` → patch;
+both workflow files parse (`Bun.YAML`). `releaseClone` now puts its throwaway clone on `main`,
+fetching from ITSELF as `origin` (so `origin/main` is its own `main`, whatever branch or detached
+PR head the checkout is on) — the release tests would otherwise stop at the new branch check.
+| test | asserts |
+|---|---|
+| release: only main (#38) | a `feature` branch tracking `origin/main` → exit 1 "Only main is released; HEAD is on "feature"", no commit, no tag; detached → "HEAD is detached"; main with no upstream → "it tracks nothing", no commit |
+| sanitizer: unscrubbed fields, short values (#39) | invented values as before, plus: `Company:` / `Project ID:` / `Client:` filled → exit 1 "field(s) … hold a value this script does not scrub"; designer `QV` also after the heading → "still present: QV"; a Greek name likewise; a one-letter value → "too short to verify absent" |
+| verify-release: arguments, grace, npm (#40, #41, #43) | `--wiat`, two versions, `v9.9.9` → 64; `--wait` with `rekorLogId: null` twice then `79` → exit 0 after "no provenance record yet (1/8)"; never → exit 1 after "(8/8)"; `--npm` against a fake npm: provenance → 0; none / 404 / 503 / another version's record → 4; npm never asked about an unattested version; a non-loopback `S3D_NPM_API` refused |
+**Inverted:** HEAD's five scripts under the new tests → the three new tests fail (the old release
+went on to ask JSR from a feature branch; the old verify-release took `--wiat` and exited 2; the
+old sanitizer passed a filled Company, exit 0), the 8 existing release / sanitizer / compat tests
+still pass. The sanitizer's other three cases, inverted one by one on a planted copy of the sample:
+initials, Greek, one letter → old exit 0, new exit 1; the unplanted baseline exit 0 on both. On the
+real sources of the 13 samples, `--check` still passes all 13 (10 words checked each, was 9; run
+through a wrapper that masks the values). Not testable here: the two workflow changes (#38's
+`publish.yml` half, #42) — they run on GitHub.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in

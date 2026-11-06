@@ -303,6 +303,23 @@ for the next template. Tests and inversions: [testing.md](testing.md) § Test su
 ⚠️ **The pattern again: #36's second half was in the checker.** Fixing the bake alone made the
 guard refuse a correct build, which only the inversion (HEAD `main.ts`, fixed core) showed.
 
+### Found during the review of `scripts/` and the workflows (2026-11-06)
+
+Owner: "fix all". Tests and inversions: [testing.md](testing.md) § Test suite.
+
+| # | Bug | Silent? |
+|---|---|---|
+| 38 | **A release could be cut from any branch.** `publish.ts` never checked the branch, and `ci.yml` runs on every branch, so `publish.yml`'s "CI passed" gate was satisfied: a feature branch with an upstream pushed itself and its tag, and unmerged code went to JSR and npm, immutably. With no upstream, the behind-check was skipped without a word. Fixed: `publish.ts` step 0b refuses unless HEAD is on `main` tracking `origin/main` (before anything is committed); `publish.yml`'s `ci-green` job refuses a tagged commit not on `main` (compare API) | **yes** |
+| 39 | **The sample sanitizer passed fields it did not know.** The project-details block has eight fields; three are scrubbed, and Project ID, Company and Client — empty in all 48 client reports — were never looked at: filled, they were copied into the committed `tests/` with a ✅, because the residue check only looks for values it removed. And that check skipped words under 3 characters and non-ASCII ones, so initials ("JM") or a Greek name left NOTHING to check ("0 token(s) verified absent ✓"). Fixed: any field of that layout other than the three and `Date` / `Project Units` must be empty; residue words of 2+ characters in any script, Unicode word boundaries; a removed value with no checkable word is refused | **yes** — client data into a public repo |
+| 40 | **`bun run release` reported success with npm unpublished.** Its last step asked JSR only; the npm job runs after, from the same tag, and failed once (1.1.1). Fixed: `verify-release --npm` (passed by the release) requires the version on npm WITH provenance (`dist.attestations.provenance`), exit 4 otherwise | **yes** |
+| 41 | **`verify-release --wait` could call a good release unattested.** `deno publish` makes the version visible, then signs and posts its provenance; a look in between saw `rekorLogId: null` and printed "cannot be fixed … bump and release again". Reasoned from how `deno publish` sequences the two, not observed here (no Deno). Fixed: 8 more looks under `--wait` before that verdict | **yes** — and its advice burns a version |
+| 42 | **A push to `main` during a release's CI run failed the release.** `ci.yml` cancelled superseded runs on every branch, so the tagged commit's run became "cancelled" and `publish.yml` refused. Fixed: no cancellation on `main` | no — loud |
+| 43 | **`verify-release` ignored unknown flags** (`--wiat` → one look → "not on JSR" right after a release). Fixed: usage error, exit 64 | **yes** |
+
+⚠️ **While measuring #39, a session printed three real field values to its terminal** (a `sed`
+mask that did not apply). Nothing reached a file. Count such fields with a script that prints
+only filled/empty — never mask client data after the fact.
+
 ### The pattern
 
 Reviews 1–2 found builder bugs; reviews 4–5 found **checker** bugs. As the pipeline hardened, risk moved

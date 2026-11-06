@@ -509,6 +509,56 @@ test(
   },
 );
 
+test("the sanitizer refuses a filled field it does not scrub, and short values", () => {
+  const sanitize = (dir: string) =>
+    run([join(ROOT, "scripts", "sanitize-report.ts"), "--check", "x_report.html"], { cwd: dir });
+  const reportOf = (dir: string) => join(dir, "local", "HTMLFilesToBeCompiled", "x_report.html");
+  const edit = (dir: string, from: string | RegExp, to: string) => {
+    const html = readFileSync(reportOf(dir), "utf8");
+    const next = html.replace(from, to);
+    assert.notEqual(next, html, `could not plant ${to}`);
+    writeFileSync(reportOf(dir), next);
+  };
+
+  // Company, Project ID and Client are empty in every real report, so nothing scrubbed them --
+  // and the residue check looks only for the values it removed. Filled, the file passed with ✓.
+  for (const label of ["Company", "Project ID", "Client"]) {
+    const dir = sanitizerInput(`sanitize-${label.replace(/\W/g, "")}`, false);
+    edit(
+      dir,
+      new RegExp(`(${label}:\\s*\\[mathin\\]\\\\text\\{[^}]*\\}\\[mathin\\])<br`),
+      "$1Brightwater Holdings<br",
+    );
+    const r = sanitize(dir);
+    assert.equal(r.code, 1, `${label}:\n${r.out}`);
+    has(r.out, new RegExp(`field\\(s\\) "${label}:" hold a value this script does not scrub`));
+  }
+
+  // A designer written as initials: two letters used to be below the residue check's floor, so
+  // the same initials elsewhere in the document survived unseen.
+  const initials = sanitizerInput("sanitize-initials", false);
+  edit(initials, "]Quentin Vardle<br", "]QV<br");
+  edit(initials, /(MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT)/i, "$1 checked QV");
+  const qv = sanitize(initials);
+  assert.equal(qv.code, 1, qv.out);
+  has(qv.out, /1 removed term\(s\) still present: QV/);
+
+  // A name in non-Latin letters: no ASCII word to look for, so nothing was checked.
+  const greek = sanitizerInput("sanitize-greek", false);
+  edit(greek, "]Quentin Vardle<br", "]Ζωρμπλαξ<br");
+  edit(greek, /(MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT)/i, "$1 Ζωρμπλαξ");
+  const gr = sanitize(greek);
+  assert.equal(gr.code, 1, gr.out);
+  has(gr.out, /still present: Ζωρμπλαξ/);
+
+  // A value with no word of two characters cannot be verified gone at all: refused.
+  const single = sanitizerInput("sanitize-single", false);
+  edit(single, "]Quentin Vardle<br", "]Q<br");
+  const one = sanitize(single);
+  assert.equal(one.code, 1, one.out);
+  has(one.out, /1 removed value\(s\) too short to verify absent/);
+});
+
 // ── the transcript redactor ──────────────────────────────────────────────────
 
 test("the redactor removes checkout, drive and slug paths, and fails on a residue", () => {
@@ -817,6 +867,81 @@ test("verify-release: every verdict, from a fake JSR", { timeout: TIMEOUT }, asy
   assert.equal(hits, 3);
 });
 
+test("verify-release: arguments, the provenance grace, and npm", { timeout: TIMEOUT }, async () => {
+  const VR = join(ROOT, "scripts", "verify-release.ts");
+  const fast = { S3D_JSR_TIMEOUT_MS: "500", S3D_JSR_RETRY_MS: "20" };
+
+  // A mistyped flag is a usage error (64), not a silent single look.
+  for (const args of [["9.9.9", "--wiat"], ["9.9.9", "1.0.0"], ["v9.9.9"]]) {
+    const u = await runAsync([VR, ...args], { env: process.env });
+    assert.equal(u.code, 64, `${args.join(" ")}:\n${u.out}`);
+    has(u.out, /usage: verify-release\.ts/);
+  }
+
+  // deno publish shows the version before it attaches provenance: under --wait, a record with no
+  // rekorLogId is looked at again before it is called unattested.
+  let hits = 0;
+  const late: Handler = (req, res) =>
+    (++hits <= 2 ? json({ rekorLogId: null }) : json({ rekorLogId: "79" }))(req, res);
+  const g = await withFakeJsr(late, (base) =>
+    runAsync([VR, "9.9.9", "--wait"], { env: { ...process.env, ...fast, S3D_JSR_API: base } }),
+  );
+  assert.equal(g.code, 0, g.out);
+  has(g.out, /no provenance record yet \(1\/8\)/, /Rekor log ID: 79/);
+  // ...and one that never gets one is still called unattested, after the grace.
+  const never = await withFakeJsr(json({ rekorLogId: null }), (base) =>
+    runAsync([VR, "9.9.9", "--wait"], { env: { ...process.env, ...fast, S3D_JSR_API: base } }),
+  );
+  assert.equal(never.code, 1, never.out);
+  has(never.out, /no provenance record yet \(8\/8\)/, /NO provenance attestation/);
+
+  // --npm: JSR attested, then npm. The release passes it; it used to ask JSR alone.
+  const npmCases: Array<[string, Handler, number, RegExp]> = [
+    [
+      "with provenance",
+      json({ version: "9.9.9", dist: { attestations: { provenance: { predicateType: "x" } } } }),
+      0,
+      /9\.9\.9 is on npm WITH provenance/,
+    ],
+    ["without", json({ version: "9.9.9", dist: {} }), 4, /on npm with NO provenance/],
+    ["404", json({}, 404), 4, /attested on JSR but NOT on npm/],
+    ["503", json({}, 503), 4, /Could not ask npm whether 9\.9\.9 is published: HTTP 503/],
+    ["another version", json({ version: "1.0.0" }), 4, /without this version's record/],
+  ];
+  for (const [label, handler, code, pattern] of npmCases) {
+    const n = await withFakeJsr(json({ rekorLogId: "80" }), (jsr) =>
+      withFakeJsr(handler, (npm) =>
+        runAsync([VR, "9.9.9", "--npm"], {
+          env: { ...process.env, ...fast, S3D_JSR_API: jsr, S3D_NPM_API: npm },
+        }),
+      ),
+    );
+    assert.equal(n.code, code, `npm ${label}:\n${n.out}`);
+    has(n.out, /S3D_NPM_API is set/, pattern);
+  }
+  // npm is never asked about a version JSR did not attest.
+  let npmAsked = false;
+  const u = await withFakeJsr(json({ rekorLogId: null }), (jsr) =>
+    withFakeJsr(
+      (req, res) => {
+        npmAsked = true;
+        json({}, 404)(req, res);
+      },
+      (npm) =>
+        runAsync([VR, "9.9.9", "--npm"], {
+          env: { ...process.env, ...fast, S3D_JSR_API: jsr, S3D_NPM_API: npm },
+        }),
+    ),
+  );
+  assert.equal(u.code, 1, u.out);
+  assert.equal(npmAsked, false, "npm was asked about an unattested version");
+  // The npm hook is fenced like JSR's.
+  const away = await runAsync([VR, "9.9.9", "--npm"], {
+    env: { ...process.env, S3D_NPM_API: "https://npm.example.invalid" },
+  });
+  assert.notEqual(away.code, 0, away.out);
+});
+
 /**
  * A throwaway clone set up so `bun run release` makes its bump commit: package.json one version
  * behind jsr.json. Pushing is impossible (the push URL is not a remote). Returns the clone.
@@ -831,6 +956,11 @@ function releaseClone(name: string): string {
   assert.equal(spawnSync("git", ["clone", "-q", ROOT, dir]).status, 0, "clone failed");
   git("config", "user.name", "test");
   git("config", "user.email", "test@example.invalid");
+  // A release runs only on main tracking origin/main (publish.ts step 0b) -- whatever branch, or
+  // detached PR head, this checkout is on. The clone fetches from ITSELF, so the release's
+  // `git fetch origin` makes origin/main this clone's main: never behind, whatever ROOT holds.
+  git("checkout", "-q", "-B", "main");
+  git("remote", "set-url", "origin", dir);
   git("remote", "set-url", "--push", "origin", "NO-PUSH-FROM-TESTS");
   // The release under test is the working tree's, not the last commit's: every script, since
   // they import one another (publish.ts → jsr-api.ts, compat.ts).
@@ -843,6 +973,8 @@ function releaseClone(name: string): string {
   assert.notEqual(behind, pkg, "could not set package.json behind");
   writeFileSync(join(dir, "package.json"), behind);
   git("commit", "-qam", "release test setup");
+  git("fetch", "-q", "origin");
+  git("branch", "-q", "-u", "origin/main");
   return dir;
 }
 
@@ -893,10 +1025,8 @@ test("release: an undo that cannot run says so", { timeout: TIMEOUT }, async () 
   };
 
   // The reset itself fails (the branch ref is locked): told, not claimed; the commit remains.
-  const branch = spawnSync("git", ["-C", ROOT, "rev-parse", "--abbrev-ref", "HEAD"], {
-    encoding: "utf8",
-  }).stdout.trim();
-  const refLocked = await lockedRelease("release-ref-locked", `refs/heads/${branch}.lock`);
+  // The clone's branch is always main (releaseClone).
+  const refLocked = await lockedRelease("release-ref-locked", "refs/heads/main.lock");
   assert.equal(refLocked.r.code, 1, refLocked.r.out);
   has(refLocked.r.out, /could NOT undo the local "bump version to v/, /do not push it/);
   hasNot(refLocked.r.out, /undid the local/);
@@ -960,6 +1090,39 @@ test(
     assert.match(staged.stdout, /README\.md/, "README.md is no longer staged");
   },
 );
+
+test("release: only main, tracking origin/main, is released", { timeout: TIMEOUT }, async () => {
+  // A feature branch with an upstream used to push itself and its tag: ci.yml runs on every
+  // branch, so publish.yml's CI gate passed, and unmerged code reached both registries.
+  const dir = releaseClone("release-branch");
+  const before = headOf(dir);
+  const git = (...a: string[]) => spawnSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  git("checkout", "-q", "-b", "feature");
+  git("branch", "-q", "-u", "origin/main");
+  const tags = () => git("tag", "--list").stdout;
+  const tagsBefore = tags();
+  // No JSR is needed: the branch is refused before anything is committed or asked.
+  const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
+  assert.equal(r.code, 1, r.out);
+  has(r.out, /Only main is released; HEAD is on "feature"/);
+  hasNot(r.out, /bump version|undid|tagging /);
+  assert.equal(headOf(dir), before, "something was committed");
+  assert.equal(tags(), tagsBefore, "a tag was made");
+
+  // Detached, as a PR checkout is.
+  git("checkout", "-q", "--detach");
+  const d = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
+  assert.equal(d.code, 1, d.out);
+  has(d.out, /HEAD is detached/);
+
+  // main without an upstream: the behind-check used to be skipped in silence.
+  git("checkout", "-q", "main");
+  git("branch", "-q", "--unset-upstream");
+  const u = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
+  assert.equal(u.code, 1, u.out);
+  has(u.out, /main must track origin\/main to be released; it tracks nothing/);
+  assert.equal(headOf(dir), before, "something was committed");
+});
 
 test("release: the JSR test hook can never let a release tag", { timeout: TIMEOUT }, async () => {
   // A fake JSR answering "not published" (404): the release still refuses, because it is fake.

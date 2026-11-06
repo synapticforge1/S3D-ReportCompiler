@@ -23,7 +23,8 @@
  *
  * Steps:
  *   0. Refuse if jsr.json / package.json / src/report_core.ts differ from HEAD in anything
- *      but their version lines (step 3 would otherwise commit those edits as a "bump")
+ *      but their version lines (step 3 would otherwise commit those edits as a "bump");
+ *      refuse unless HEAD is on main, tracking origin/main (0b)
  *   1. Read the current version from jsr.json
  *   2. Run scripts/sync-version.ts to propagate it to package.json + src/report_core.ts
  *   3. git add + commit "bump version to vX.Y.Z"
@@ -168,6 +169,28 @@ console.log(`Publishing ${tag} via GitHub Actions…`);
   }
 }
 
+// 0b. Only main is released, and only a main that tracks origin/main. A tag on any other branch
+//     publishes unmerged code to both registries, permanently: ci.yml runs on every branch, so
+//     publish.yml's "CI passed" gate is no protection, and a branch without an upstream used to
+//     skip the behind-check below in silence. Refused here, before anything is committed.
+//     (publish.yml checks the same from the other side: the tagged commit must be on main.)
+{
+  const branch = capture(["git", "symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (branch !== "main") {
+    console.error(`\n❌ Only main is released; HEAD is ${branch ? `on "${branch}"` : "detached"}.`);
+    console.error(`   Merge into main, switch to it, then re-run.`);
+    process.exit(1);
+  }
+  const upstream = capture(["git", "rev-parse", "--abbrev-ref", "main@{upstream}"]);
+  if (upstream !== "origin/main") {
+    console.error(
+      `\n❌ main must track origin/main to be released; it tracks ${upstream || "nothing"}.`,
+    );
+    console.error(`   Run: git branch -u origin/main`);
+    process.exit(1);
+  }
+}
+
 // 1. Sync the version out to package.json + src/report_core.ts
 run([...self, "scripts/sync-version.ts"]);
 
@@ -206,14 +229,12 @@ if (diffCode !== 0) {
   // Behind the remote means someone else's commits — or your own from another
   // machine — are missing from what is about to be published.
   run(["git", "fetch", "--quiet", "origin"]);
-  const upstream = capture(["git", "rev-parse", "--abbrev-ref", "@{upstream}"]);
-  if (upstream) {
-    const behind = capture(["git", "rev-list", "--count", `HEAD..${upstream}`]);
-    if (behind !== "0" && behind !== "") {
-      console.error(`\n❌ HEAD is ${behind} commit(s) behind ${upstream}.`);
-      console.error(`   Pull first — those commits would not be in ${tag}.`);
-      refuse(1);
-    }
+  // Step 0b proved the upstream is origin/main. A count that cannot be read is not "0".
+  const behind = capture(["git", "rev-list", "--count", "HEAD..origin/main"]);
+  if (behind !== "0") {
+    console.error(`\n❌ HEAD is ${behind || "an unknown number of"} commit(s) behind origin/main.`);
+    console.error(`   Pull first — those commits would not be in ${tag}.`);
+    refuse(1);
   }
 
   // Already on the registry? Then this is not a release, it is an accident.
@@ -301,7 +322,7 @@ bumpCommit = null;
 run(["git", "push"]);
 run(["git", "push", "--force", "origin", tag]);
 
-console.log(`\nTag ${tag} pushed. GitHub Actions will publish to JSR with provenance.`);
+console.log(`\nTag ${tag} pushed. GitHub Actions will publish to JSR, then npm, with provenance.`);
 console.log(`Watch progress at: https://github.com/synapticforge1/S3D-ReportCompiler/actions`);
 
 // 7. Wait for the release to land, and confirm it is ATTESTED.
@@ -324,9 +345,11 @@ if (process.argv.slice(2).includes("--no-wait")) {
   // `stdio: "inherit"`: the progress and the verdict are the point of this step. Until
   // 2026-10-26 the output was captured and never printed (Deno's `.output()`), so a release
   // showed nothing here and an unattested one was visible only as an exit code.
+  // `--npm`: one tag releases both registries, so both are confirmed. It used to ask JSR only,
+  // and a failed npm job (1.1.1's) still ended the release with ✅ and exit 0.
   const check = spawnSync(
     self[0],
-    [...self.slice(1), "scripts/verify-release.ts", version, "--wait"],
+    [...self.slice(1), "scripts/verify-release.ts", version, "--wait", "--npm"],
     { stdio: "inherit" },
   );
   const code = check.status ?? 1;

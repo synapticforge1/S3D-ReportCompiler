@@ -14,9 +14,12 @@ on:
 permissions:
   contents: read
 
+# Superseded runs are cancelled on every branch but main. On main a run may be the one publish.yml's
+# gate is waiting for: a push in the minutes after `bun run release` cancelled the tagged commit's
+# run, and the release was refused as "concluded 'cancelled'".
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   checks:
