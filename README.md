@@ -380,19 +380,35 @@ bun build ./src/report_core.ts --target=browser --outfile=report_core.browser.js
 
 ```html
 <script type="module">
-  import { assembleDocument, bakeBody, bakeStyle, findLeftoverMath }
-    from "./report_core.browser.js";
+  import {
+    assembleDocument, bakeBody, bakeStyle, findBrokenReferences, findLeftoverMath,
+    mathStats, mathStyleSheet, resetBakeState,
+  } from "./report_core.browser.js";
+
+  // `sources`: the reports' HTML, fetched however the page likes.
+  resetBakeState(); // the counters are per page: start every bake clean
 
   const styles = sources.map((src, i) => bakeStyle(src, `.rs${i}`, `r${i}-`));
-  const bodies = sources.map((src, i) => bakeBody(src, `r${i}-`));
+  const bodies = sources.map((src, i) => bakeBody(src, `r${i}-`)); // use the two together
 
+  // The two guards the CLI runs: no unrendered maths, and no graphic reference broken.
   const leftovers = findLeftoverMath(bodies.join(""));
-  if (leftovers.length) throw new Error("unrendered maths: " + leftovers.join(", "));
+  if (leftovers.length || mathStats.failed) {
+    throw new Error(`unrendered maths: ${[...leftovers, `${mathStats.failed} failed`].join(", ")}`);
+  }
+  const refs = findBrokenReferences(
+    sources.map((source, i) => ({ source, style: styles[i], body: bodies[i], prefix: `r${i}-` })),
+  );
+  if (refs.broken.length) throw new Error(`broken references: ${refs.broken.length}`);
 
   document.querySelector("iframe").srcdoc = assembleDocument(bodies, styles, mathStyleSheet());
   // the browser IS the print engine — window.print() from here
 </script>
 ```
+
+A complete, working page — fetching the reports, logging the warnings, printing — is
+[`tests/browser_example.html`](tests/browser_example.html) (`bun run bundle:browser`, then serve
+`tests/` over HTTP).
 
 `@jrmarcum/s3d-reportcompiler/runtime` is **not** importable in a browser; every function in it
 throws a descriptive error rather than failing obscurely.
