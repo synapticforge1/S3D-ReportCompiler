@@ -372,8 +372,14 @@ file; (2) a 200 `text/html` page → exit 1 "did not return a font (text/html", 
 flat cache of an earlier release with the server answering 500 → PASS, adopted, the flat files
 gone; (4) a cached file overwritten with text → fetched again (`wOFF`). Inverted: HEAD's `main.ts`
 → fails at (1), "cached flat, without its version". The checkout's own cache migrated on its first
-build, offline. #58 (the sandbox on Linux) has no test here: it needs a Linux non-root Chrome — the
-next CI run is its measurement.
+build, offline. #58 (the sandbox on Linux) has no test here: it needs a Linux non-root Chrome. **Measured on CI
+the same day:** `1b1e498` pushed to the throwaway branch `ci/sandbox-check` (owner's choice over
+pushing `main`); run 42306618122 on `ubuntu-latest`, 3 min 10 s, all four jobs green — sample build
+31 s, `bun test` 67 s, `node --test` 76 s, runtime matrix 129 s, npm proof 112 s, each rendering
+with Chrome, no `S3D_CHROME_NO_SANDBOX` in the workflows. Read from the public jobs API; the logs
+need an authenticated admin request (`gh` absent here), so the build's own sandbox line was not
+read. WSL was not a stand-in: no Chrome or runtimes, `sudo` needs a password, and its kernel lacks
+`apparmor_restrict_unprivileged_userns`.
 
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
