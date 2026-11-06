@@ -357,6 +357,21 @@ test("an unknown flag is rejected", { timeout: TIMEOUT }, () => {
   hasNot(r.out, /Compiling/);
 });
 
+test("an empty path argument is rejected, not read as the working directory", () => {
+  // `s3d-reportcompiler "$DIR" out.pdf` with DIR unset. Run from a folder WITH a report, so the old
+  // behaviour (compile what is here) would show as a build.
+  const dir = control("control-custom-delimiters", join(work, "empty-arg"));
+  for (const args of [
+    ["", join(dir, "out", "c.pdf")],
+    [dir, " "],
+  ]) {
+    const r = run([MAIN, ...args], { cwd: dir });
+    assert.equal(r.code, 1, tail(r.out));
+    has(r.out, /An empty path argument was given/);
+    hasNot(r.out, /Compiling/);
+  }
+});
+
 test("a third positional argument is rejected, not ignored", { timeout: TIMEOUT }, () => {
   // An unquoted output path with a space: before, "C:\My" became the PDF and the rest vanished.
   const r = run([MAIN, "reports", "C:\\My", "Docs\\out.pdf"]);
@@ -551,6 +566,15 @@ test("the sanitizer refuses a filled field it does not scrub, and short values",
   assert.equal(gr.code, 1, gr.out);
   has(gr.out, /still present: Ζωρμπλαξ/);
 
+  // A template without the [mathin] spacer: the scrub still works there, but the field guard read
+  // only the spacer layout, saw no row at all, and passed a filled Company with ✓.
+  const bare = sanitizerInput("sanitize-nospacer", false);
+  edit(bare, /\[mathin\]\\text\{ {2}\}\[mathin\]/g, "");
+  edit(bare, /(Company:\s*)<br/, "$1Brightwater Holdings<br");
+  const ns = sanitize(bare);
+  assert.equal(ns.code, 1, ns.out);
+  has(ns.out, /cannot read the project-details layout/);
+
   // A value with no word of two characters cannot be verified gone at all: refused.
   const single = sanitizerInput("sanitize-single", false);
   edit(single, "]Quentin Vardle<br", "]Q<br");
@@ -641,6 +665,37 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
     1,
     "--check passed a residue",
   );
+
+  // Email addresses are redacted (they used to pass as clean): plain, URL-encoded and
+  // JSON-escaped; the ones that name no one stay. The address is never echoed.
+  writeFileSync(
+    file,
+    [
+      "Author: Kestrel Brumby <kestrel.brumby@brumby-mail.org>",
+      "url mailto:kestrel%40brumby-mail.org",
+      'json "kestrel\\u0040brumby-mail.org"',
+      "Co-Authored-By: Claude <noreply@anthropic.com>",
+      "remote git@github.com:synapticforge1/S3D-ReportCompiler.git",
+      "test@example.invalid and a@b.example",
+      "pkg @jrmarcum/s3d-reportcompiler@1.1.7 and actions/checkout@v5",
+    ].join("\n"),
+  );
+  const mail = run([redact, file, "--user=zorblax"]);
+  assert.equal(mail.code, 0, mail.out);
+  has(mail.out, /emails:\s+3 redacted, 0 left/);
+  assert.ok(!mail.out.includes("brumby-mail"), "the address was echoed");
+  const mailed = readFileSync(file, "utf8");
+  assert.ok(!mailed.includes("brumby-mail"), `an address survived:\n${mailed}`);
+  for (const kept of [
+    "noreply@anthropic.com",
+    "git@github.com",
+    "test@example.invalid",
+    "a@b.example",
+    "@jrmarcum/s3d-reportcompiler@1.1.7",
+    "checkout@v5",
+  ]) {
+    assert.ok(mailed.includes(kept), `"${kept}" was redacted:\n${mailed}`);
+  }
 });
 
 // ── MathJax limitations the bake works around ────────────────────────────────
@@ -722,6 +777,27 @@ test("CSS scoping, SVG sheets, attributes and entities, as a browser reads them"
   assert.match(qualified, /\.rs9 p \{color:red\}/, "the matching qualifier was not settled");
   assert.doesNotMatch(qualified, /light|blue/, "a rule its source never applied survived");
   assert.match(qualified, /\.rs9:hover \{x:y\}/, "a pseudo-class left the wrapper");
+  //    Attribute qualifiers are settled too, and read whole: the `~` inside `[class~=…]` is not
+  //    a sibling combinator (the rule used to be dropped), and `html[lang=en]` is decided by the
+  //    source's <html> (it used to land on the wrapper, which has no lang, and match nothing).
+  const attrQualified = flat(
+    core.bakeStyle(
+      '<html lang="en-GB"><head><style>' +
+        'body[class~="dark"] p{a:1} html[lang|=en] q{b:2} html[lang=fr] s{c:3} ' +
+        "body[data-x] u{d:4} body.dark:not(.y) i{e:5} " +
+        // As Chrome compares: lang's value is caseless, unless `s`; class's never is.
+        'html[lang=EN-gb] b{f:6} html[lang="EN-GB" s] em{g:7} body[class="X DARK"] a{h:8}' +
+        '</style></head><body class="x dark"><p>t</p></body></html>',
+      ".rs9",
+      "r9-",
+    ),
+  );
+  assert.match(attrQualified, /\.rs9 p \{a:1\}/, "[class~=…] was not settled");
+  assert.match(attrQualified, /\.rs9 q \{b:2\}/, "[lang|=en] was not settled");
+  assert.doesNotMatch(attrQualified, /c:3|d:4/, "a rule its source never applied survived");
+  assert.match(attrQualified, /\.rs9:not\(\.y\) i \{e:5\}/, "a pseudo-class after a class");
+  assert.match(attrQualified, /\.rs9 b \{f:6\}/, "[lang=EN-gb] is caseless in HTML, as in Chrome");
+  assert.doesNotMatch(attrQualified, /g:7|h:8/, "the s flag, or class, compared without case");
 
   // 4. The page's own <style> in the body moves to the report's scoped sheet; the diagram's
   //    stays in the diagram. Before, it stayed in the body, applying to EVERY report, with its
@@ -749,12 +825,28 @@ test("CSS scoping, SVG sheets, attributes and entities, as a browser reads them"
   const media = svg("@media screen { text { fill: gray } }");
   assert.doesNotMatch(media, /fill="gray"/, "a conditional rule was hoisted");
   assert.match(media, /<svg data-s3d-scope="r9-">/, "the kept sheet's <svg> is not marked");
-  assert.match(media, /@media screen \{ svg\[data-s3d-scope="r9-"\] text \{ fill: gray \} \}/);
+  //    Confined inside :where(), which weighs nothing: each rule keeps the specificity it had.
+  //    Prefixed plainly (`svg[data-s3d-scope] text`), a diagram's bare `text` rule began to beat
+  //    the report's own `.rs0 svg text` it used to lose to -- measured in Chrome, 2026-11-06.
+  assert.match(
+    media,
+    /@media screen \{ :where\(svg\[data-s3d-scope="r9-"\]\) text \{ fill: gray \} \}/,
+  );
   const font = svg("text { font: 12px Arial } svg { opacity: .5 } #t { fill: red }");
   assert.doesNotMatch(font, /<text[^>]* font=/, "a CSS-only property became an attribute");
-  assert.match(font, /svg\[data-s3d-scope="r9-"\] text \{ font: 12px Arial \}/);
-  assert.match(font, /svg\[data-s3d-scope="r9-"\] \{ opacity: \.5 \}/, "`svg` is not the root");
-  assert.match(font, /svg\[data-s3d-scope="r9-"\] #r9-t \{ fill: red \}/, "an id not renamed");
+  assert.match(font, /:where\(svg\[data-s3d-scope="r9-"\]\) text \{ font: 12px Arial \}/);
+  //    A rule on `svg` itself is that <svg>, and keeps its type selector's weight.
+  assert.match(
+    font,
+    /svg:where\(\[data-s3d-scope="r9-"\]\) \{ opacity: \.5 \}/,
+    "`svg` is not the root",
+  );
+  assert.match(
+    font,
+    /:where\(svg\[data-s3d-scope="r9-"\]\) #r9-t \{ fill: red \}/,
+    "an id not renamed",
+  );
+  assert.doesNotMatch(font, /[^(]svg\[data-s3d-scope/, "a selector carries the scope's weight");
 
   // 6. "id=" inside another attribute's value is that attribute's text.
   const attrs: string = core.bakeBody(
@@ -935,11 +1027,25 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
   );
   assert.equal(u.code, 1, u.out);
   assert.equal(npmAsked, false, "npm was asked about an unattested version");
-  // The npm hook is fenced like JSR's.
-  const away = await runAsync([VR, "9.9.9", "--npm"], {
-    env: { ...process.env, S3D_NPM_API: "https://npm.example.invalid" },
-  });
+  // The npm hook is fenced like JSR's. A fake JSR answers "attested" first, so the npm lookup is
+  // actually reached: without it this case asked the REAL JSR about 9.9.9, stopped at "not on
+  // JSR" (exit 2) and passed on "non-zero" without ever touching the fence.
+  const away = await withFakeJsr(json({ rekorLogId: "81" }), (jsr) =>
+    runAsync([VR, "9.9.9", "--npm"], {
+      env: {
+        ...process.env,
+        ...fast,
+        S3D_JSR_API: jsr,
+        S3D_NPM_API: "https://npm.example.invalid",
+      },
+    }),
+  );
   assert.notEqual(away.code, 0, away.out);
+  has(
+    away.out,
+    /Rekor log ID: 81/,
+    /S3D_NPM_API=https:\/\/npm\.example\.invalid is not a loopback/,
+  );
 });
 
 /**

@@ -233,6 +233,16 @@ if (flags.includes("-h") || flags.includes("--help") || flags.includes("-?")) {
 // Two positionals at most, and a third is an error, not ignored: an unquoted path
 // with a space arrives as two arguments, so `reports C:\My Docs\out.pdf` would
 // write a PDF named "C:\My" and drop the rest without a word.
+// An EMPTY argument is refused too: `s3d-reportcompiler "$DIR" out.pdf` with DIR unset passes "",
+// which resolved to the working directory -- compiling whatever is here, silently.
+if (positional.some((p) => p.trim() === "")) {
+  console.error(
+    `An empty path argument was given (position ${positional.findIndex((p) => p.trim() === "") + 1}).`,
+  );
+  console.error(`If it came from a variable, the variable is probably unset. Name the folder,`);
+  console.error(`or leave the argument out to use the default layout.`);
+  rt.exit(1);
+}
 if (positional.length > 2) {
   console.error(`Too many arguments (${positional.length}); expected a reports folder and an`);
   console.error(`output PDF at most. Received:`);

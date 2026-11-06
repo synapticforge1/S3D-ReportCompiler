@@ -121,7 +121,21 @@ for (const file of files) {
 
   // Every field the template carries is either scrubbed below, known to be safe, or EMPTY.
   const scrubbed = new Set(REPLACEMENTS.map((r) => r.label.toLowerCase()));
-  const unreviewed = [...html.matchAll(FIELD_ROW)]
+  const rows = [...html.matchAll(FIELD_ROW)];
+  // The guard reads only the spacer layout, while the scrub tolerates a missing spacer. On a
+  // template without it the guard saw NO row and passed a filled Company with ✓ -- so the
+  // fields it scrubs must be among the rows it read, or it is not reading this template.
+  const seen = new Set(rows.map(([, label]) => label.trim().toLowerCase()));
+  const unseen = [...scrubbed].filter((l) => !seen.has(l));
+  if (unseen.length > 0) {
+    console.error(
+      `❌ ${name}: cannot read the project-details layout (no "Label: [mathin]\\text{…}[mathin]" ` +
+        `row for ${unseen.join(", ")}) — refusing: the other fields cannot be checked.`,
+    );
+    failures++;
+    continue;
+  }
+  const unreviewed = rows
     .filter(([, label, value]) => {
       const l = label.trim().toLowerCase();
       return !scrubbed.has(l) && !KEPT_FIELDS.has(l) && value.trim() !== "";

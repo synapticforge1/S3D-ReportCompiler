@@ -30,8 +30,11 @@
 // script's own location, so nothing is named here), any other drive path becomes
 // <path>, and Claude's flattened slugs of them (`X--<folder>-…`) <path-slug>.
 //
-// Exit codes: 0 clean · 1 the username or a drive path SURVIVES (written anyway
-// unless --check, so the residue is visible; a chained commit must stop).
+// Email addresses too (2026-11-06): each becomes <email>, except the few that
+// name no one (see isPublicEmail).
+//
+// Exit codes: 0 clean · 1 the username, a drive path or an email SURVIVES (written
+// anyway unless --check, so the residue is visible; a chained commit must stop).
 
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -176,6 +179,26 @@ const RULES: Array<[RegExp, string]> = [
   [new RegExp(ANY_PATH, "g"), "<path>"],
 ];
 
+/**
+ * An email address, its "@" written plainly, URL-encoded or JSON-escaped. The privacy rule
+ * forbids an email in any committed file (one maintainer contact excepted, never in a transcript),
+ * and a transcript holds them -- `git log` prints authors, a config read prints one -- yet this
+ * script looked only at the username and paths: an address passed as clean (2026-11-06).
+ */
+const EMAIL = /[A-Za-z0-9._%+-]+(?:@|%40|\\u0040)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+
+/**
+ * Addresses that name no one: the commit trailer's, GitHub's SSH user, and the reserved example
+ * and test domains (RFC 2606 / 6761) the test suite writes. Everything else is redacted.
+ */
+const isPublicEmail = (e: string) => {
+  const plain = e.replace(/%40|\\u0040/i, "@");
+  return (
+    /^(?:noreply@anthropic\.com|git@github\.com)$/i.test(plain) ||
+    /@(?:[\w-]+\.)*(?:example\.(?:com|net|org)|example|invalid|test|localhost)$/i.test(plain)
+  );
+};
+
 /** Drive or network paths left after redaction (a placeholder matches neither). */
 const drivePaths = (s: string) => [
   ...(s.match(new RegExp(`${DRIVE}${SEP}${SEGMENT}`, "g")) ?? []),
@@ -199,6 +222,14 @@ for (const [pattern, replacement] of RULES) {
   text = text.replace(pattern, replacement);
 }
 
+let emailHits = 0;
+text = text.replace(EMAIL, (e) => {
+  if (isPublicEmail(e)) return e;
+  emailHits++;
+  return "<email>";
+});
+if (emailHits > 0) applied.push(`${emailHits} → <email>`);
+
 const userRe = new RegExp(escape(USER), "gi");
 const count = (s: string) => (s.match(userRe) ?? []).length;
 const before = count(original);
@@ -218,9 +249,13 @@ const leftPaths = drivePaths(text);
 console.log(`paths:     ${leftPaths.length} drive path(s) after`);
 for (const p of leftPaths.slice(0, 5)) console.log(`  ${p}`);
 
+// Counted, never printed: the residue is the very thing that must not be shown.
+const leftEmails = (text.match(EMAIL) ?? []).filter((e) => !isPublicEmail(e));
+console.log(`emails:    ${emailHits} redacted, ${leftEmails.length} left`);
+
 // A residue is a failure, not a note: it used to print "redacted." and exit 0,
 // so a chained commit went ahead with the username still in the file.
-const clean = after === 0 && leftPaths.length === 0;
+const clean = after === 0 && leftPaths.length === 0 && leftEmails.length === 0;
 
 if (check) {
   console.log(`\n--check: nothing written.${clean ? "" : " NOT CLEAN."}`);
@@ -234,6 +269,6 @@ if (text !== original) {
   console.log("nothing to redact.");
 }
 if (!clean) {
-  console.error("❌ the username or a drive path survives -- not safe to publish.");
+  console.error("❌ the username, a drive path or an email survives -- not safe to publish.");
   process.exit(1);
 }

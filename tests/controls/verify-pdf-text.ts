@@ -1,7 +1,7 @@
 // verify-pdf-text.ts
 //
 // Dump what text a PDF actually contains, page by page. The standalone
-// precursor to the verification now built into compiled_reports.ts, kept
+// precursor to the verification now built into main.ts (readPdf), kept
 // because it is the simplest way to inspect an arbitrary PDF.
 //
 //   bun tests/controls/verify-pdf-text.ts [file.pdf]

@@ -309,6 +309,33 @@ real sources of the 13 samples, `--check` still passes all 13 (10 words checked 
 through a wrapper that masks the values). Not testable here: the two workflow changes (#38's
 `publish.yml` half, #42) — they run on GitHub.
 
+**2026-11-06, third pass — that day's own fixes reviewed cold (owner: "yes fix all"; ledger
+#44–#47):** 34/34 on `bun test` (50 s) and `node --test` on Node 24.21 and 22.18; baked HTML
+byte-identical on the samples (`7f283563…`) and the client set (`a19e5ad1…`); `compat` → patch.
+Tests extended rather than added: the CSS-scoping test pins `:where(svg[data-s3d-scope="r9-"]) text`,
+`svg:where([…])` for a rule on `svg`, and that no selector carries the scope's weight (#44), and
+settles `body[class~="dark"]`, `html[lang|=en]` (on `lang="en-GB"`), `html[lang=fr]` and
+`body[data-x]` (dropped), `body.dark:not(.y)` → `.rs9:not(.y)` (#46); the sanitizer test strips
+every spacer and fills Company → "cannot read the project-details layout" (#45); the redactor test
+plants three addresses (plain, `%40`, `@`) → `emails: 3 redacted, 0 left`, none echoed, and
+keeps `noreply@anthropic.com`, `git@github.com`, `test@example.invalid`, `a@b.example`,
+`@jrmarcum/…@1.1.7`, `checkout@v5` (#47). **Inverted:** the three changed files at HEAD → all three
+tests fail; a direct print showed HEAD giving `svg[data-s3d-scope="r9-"] text` and
+`.rs9[lang|=en] q … .rs9[lang=fr] s` with the `[class~=…]` rule gone. **Chrome, measured
+(dump-dom of computed styles):** `font="31px serif"` on `<text>` → 16px (ignored); a bare `text`
+rule under `svg[data-s3d-scope]` beats `.rs0 svg text` (red), under `:where(…)` it loses, as the
+unscoped original does (green).
+
+**2026-11-06, fourth pass (owner: "fix all"; ledger #48–#51):** 35/35 on `bun test` (52 s) and
+`node --test` on Node 24.21 and 22.18; baked HTML byte-identical (`7f283563…`, `a19e5ad1…`);
+`compat` → patch. New: "an empty path argument is rejected" (`""` first, `" "` second, run from a
+folder holding a report → exit 1, nothing compiled; on HEAD's `main.ts` it COMPILED that report).
+Extended: the CSS test settles `html[lang=EN-gb]` on `lang="en-GB"` (kept), `[lang="EN-GB" s]` and
+`body[class="X DARK"]` (dropped) -- inverted by switching off only the caseless list: that
+assertion, and only it, fails; the npm-fence case now stands a fake JSR answering "attested"
+first and asserts "Rekor log ID: 81" and the fence's message. Chrome, measured: `html[lang=EN]`
+matches `lang="en"`; `[lang=EN s]` and `body[class=DARK]` on `class="dark"` do not.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in

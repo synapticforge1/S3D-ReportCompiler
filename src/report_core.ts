@@ -288,38 +288,150 @@ function namespaceIds(selector: string, prefix: string): string {
   return selector.replace(/#([A-Za-z_][\w-]*)/g, (_m, id) => `#${prefix}${id}`);
 }
 
-/** The id and classes a source document's `<html>` or `<body>` tag carries. */
-type RootTag = { id: string | undefined; classes: Set<string> };
+/** The attributes of a source document's `<html>` or `<body>` tag, by lower-cased name. */
+type RootTag = Map<string, string>;
 
 /** A source document's `<html>` and `<body>` tags, for selectors qualified on them. */
 type RootTags = { html: RootTag; body: RootTag };
 
 /** Read the `<html>` and `<body>` start tags of a source document. */
 function rootTags(src: string): RootTags {
-  const read = (name: string): RootTag => {
-    const tag = new RegExp(`<${name}\\b[^<>]*>`, "i").exec(src)?.[0] ?? "";
-    const a = attrsOf(tag);
-    return {
-      id: a.get("id"),
-      classes: new Set((a.get("class") ?? "").split(/\s+/).filter(Boolean)),
-    };
-  };
+  const read = (name: string): RootTag =>
+    attrsOf(new RegExp(`<${name}\\b[^<>]*>`, "i").exec(src)?.[0] ?? "");
   return { html: read("html"), body: read("body") };
 }
 
 /**
+ * Index just past the bracket or parenthesis that closes the one at `at`, quotes and nesting
+ * respected; -1 if it never closes.
+ */
+function closeOf(s: string, at: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = at; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "[" || ch === "(") depth++;
+    else if ((ch === "]" || ch === ")") && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * Where the compound selector starting at `from` ends: the first whitespace or combinator
+ * OUTSIDE brackets, parentheses and quotes. A plain character scan stopped at the `~` of
+ * `[class~="dark"]`, read it as the sibling combinator, and dropped the rule.
+ */
+function compoundEnd(s: string, from: number): number {
+  let i = from;
+  while (i < s.length && !/[\s>+~]/.test(s[i])) {
+    if (s[i] === "[" || s[i] === "(") {
+      const j = closeOf(s, i);
+      if (j < 0) return s.length;
+      i = j;
+    } else i++;
+  }
+  return i;
+}
+
+/** A qualifier's simple selectors (`.a`, `#b`, `[c=d]`, `:e(f)`), or null if it cannot be read. */
+function qualifierParts(q: string): string[] | null {
+  const parts: string[] = [];
+  let i = 0;
+  while (i < q.length) {
+    let j = i + 1;
+    if (q[i] === "[") {
+      j = closeOf(q, i);
+      if (j < 0) return null;
+    } else if (q[i] === "." || q[i] === "#" || q[i] === ":") {
+      if (q[j] === ":") j++;
+      while (j < q.length && /[\w-]/.test(q[j])) j++;
+      if (q[i] === ":" && q[j] === "(") {
+        j = closeOf(q, j);
+        if (j < 0) return null;
+      }
+    } else return null;
+    parts.push(q.slice(i, j));
+    i = j;
+  }
+  return parts;
+}
+
+/**
+ * The attributes whose values an HTML document's selectors compare ASCII-case-insensitively
+ * (the HTML standard, § "Case-sensitivity of selectors"). `class` and `id` are not among them.
+ */
+const CASELESS_ATTRS = new Set(
+  (
+    "accept accept-charset align alink axis bgcolor charset checked clear codetype color " +
+    "compact declare defer dir direction disabled enctype face frame hreflang http-equiv lang " +
+    "language link media method multiple nohref noresize noshade nowrap readonly rel rev rules " +
+    "scope scrolling selected shape target text type valign valuetype vlink"
+  ).split(" "),
+);
+
+/**
+ * Does `part` hold for the source's own tag? true / false for a class, an id or an attribute
+ * selector; undefined for a pseudo-class, which depends on state rather than on the source.
+ */
+function holdsFor(part: string, tag: RootTag): boolean | undefined {
+  if (part[0] === ".") return (tag.get("class") ?? "").split(/\s+/).includes(part.slice(1));
+  if (part[0] === "#") return tag.get("id") === part.slice(1);
+  if (part[0] !== "[") return undefined;
+  const m =
+    /^\[\s*([^\s~|^$*=\]]+)\s*(?:([~|^$*]?=)\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]+))\s*([iIsS])?\s*)?\]$/.exec(
+      part,
+    );
+  if (!m) return undefined;
+  const name = m[1].toLowerCase();
+  const have = tag.get(name);
+  if (!m[2]) return have !== undefined;
+  if (have === undefined) return false;
+  // As a browser compares: `i` folds case, `s` keeps it, and otherwise HTML's own list of
+  // attributes is ASCII-case-insensitive in selectors. `html[lang=EN]` matches lang="en" in
+  // Chrome (measured 2026-11-06), and was dropped here as a rule the source never applied.
+  const flag = m[6]?.toLowerCase();
+  const fold = flag === "i" || (flag !== "s" && CASELESS_ATTRS.has(name));
+  const a = fold ? have.toLowerCase() : have;
+  const raw = m[3] ?? m[4] ?? m[5] ?? "";
+  const v = fold ? raw.toLowerCase() : raw;
+  switch (m[2]) {
+    case "=":
+      return a === v;
+    case "~=":
+      return v !== "" && a.split(/\s+/).includes(v);
+    case "|=":
+      return a === v || a.startsWith(`${v}-`);
+    case "^=":
+      return v !== "" && a.startsWith(v);
+    case "$=":
+      return v !== "" && a.endsWith(v);
+    default: // "*="
+      return v !== "" && a.includes(v);
+  }
+}
+
+/**
  * Settle a qualifier written on `html`/`body` (the `.dark` of `body.dark`) against the source's
- * own tag, since the wrapper standing in for it carries none of its classes or id. Its `.class`
- * and `#id` parts are decided statically: all present → dropped (the rule applied), any absent →
- * `null` (the rule matched nothing in the source, and must match nothing here). Anything else
- * (`:hover`, `[lang]`) is left for the wrapper. With no source tag known, it is all left.
+ * own tag, since the wrapper standing in for it carries none of its attributes. Classes, ids and
+ * attribute selectors are decided statically: all hold → dropped (the rule applied), any fails →
+ * `null` (the rule matched nothing in the source, and must match nothing here). A pseudo-class
+ * (`:hover`) is left for the wrapper. With no source tag known -- or a qualifier this cannot
+ * read -- it is all left. (`html[lang=en]` used to be left too: the wrapper has no `lang`, so the
+ * rule matched nothing.)
  */
 function settleQualifier(qualifier: string, tag: RootTag | undefined): string | null {
   if (!tag) return qualifier;
-  const [, fixed, rest] = /^((?:[.#][\w-]+)*)([\s\S]*)$/.exec(qualifier) ?? ["", "", qualifier];
-  for (const t of fixed.match(/[.#][\w-]+/g) ?? []) {
-    const name = t.slice(1);
-    if (t[0] === "." ? !tag.classes.has(name) : tag.id !== name) return null;
+  const parts = qualifierParts(qualifier);
+  if (!parts) return qualifier;
+  let rest = "";
+  for (const p of parts) {
+    const holds = holdsFor(p, tag);
+    if (holds === false) return null;
+    if (holds === undefined) rest += p;
   }
   return rest;
 }
@@ -339,17 +451,22 @@ function scopeSelector(selector: string, scope: string, prefix: string, roots?: 
   let combinator = " ";
   let rooted = false;
   for (;;) {
-    const m = /^(html|body|:root)(?![\w-])([^\s>+~]*)\s*([>+~]?)\s*/i.exec(s);
+    const m = /^(html|body|:root)(?![\w-])/i.exec(s);
     if (!m) break;
     rooted = true;
-    const settled = settleQualifier(m[2], roots?.[m[1].toLowerCase() === "body" ? "body" : "html"]);
+    const end = compoundEnd(s, m[0].length);
+    const settled = settleQualifier(
+      s.slice(m[0].length, end),
+      roots?.[m[1].toLowerCase() === "body" ? "body" : "html"],
+    );
     if (settled === null) return "";
     qualifier += settled;
-    s = s.slice(m[0].length);
+    const after = /^\s*([>+~]?)\s*/.exec(s.slice(end)) ?? ["", ""];
+    s = s.slice(end + after[0].length);
     // A sibling of <html> or <body>: there is none in a parsed document. Kept, it would
     // reach the NEXT report's wrapper.
-    if (m[3] === "+" || m[3] === "~") return "";
-    combinator = m[3] === ">" ? " > " : " ";
+    if (after[1] === "+" || after[1] === "~") return "";
+    combinator = after[1] === ">" ? " > " : " ";
     if (!s) break;
   }
 
@@ -881,8 +998,20 @@ const ID_LIST_ATTRS = new Set([
  * Where a kept SVG `<style>` block is confined: an attribute put on its own
  * `<svg>`. In HTML a `<style>` inside an inline SVG applies to the WHOLE
  * document, so one report's unhoisted diagram rules reached every report.
+ *
+ * Inside `:where()`, which adds NO specificity: a rule keeps exactly the weight
+ * it had in the source. Prefixed plainly (`svg[data-s3d-scope] text`, 0-1-2), a
+ * diagram's bare `text` rule (0-0-1) began to beat the report's own
+ * `.rs0 svg text` (0-1-2, earlier in the page) that it used to lose to --
+ * measured in Chrome, 2026-11-06.
  */
-const svgScope = (prefix: string) => `svg[data-s3d-scope="${prefix}"]`;
+function confineToSvg(selector: string, prefix: string): string {
+  const attr = `[data-s3d-scope="${prefix}"]`;
+  // A rule on `svg` itself means that <svg>, and keeps its type selector's weight.
+  return /^svg(?![\w-])/i.test(selector)
+    ? `svg:where(${attr})${selector.slice(3)}`
+    : `:where(svg${attr}) ${selector}`;
+}
 
 /**
  * The page's own `<style>` blocks, as opposed to those inside an inline `<svg>`:
@@ -989,18 +1118,15 @@ export function bakeBody(src: string, prefix: string): string {
 
   // What portableSvg could not hoist stays a <style> block, which in HTML would
   // apply to every report on the page: confine it to this report's own <svg>,
-  // with its id selectors renamed like the ids they select. A rule on `svg`
-  // itself means that <svg>; anything else, an element inside it.
+  // with its id selectors renamed like the ids they select ({@link confineToSvg}).
   return portableSvg(body).replace(/<svg\b[\s\S]*?<\/svg>/gi, (svg) => {
     if (!/<style\b/i.test(svg)) return svg;
-    const scope = svgScope(prefix);
     return svg.replace(/^<svg\b/i, `<svg data-s3d-scope="${prefix}"`).replace(
       STYLE_BLOCK,
       (_m, attrs: string, sheet: string) =>
         `<style${attrs}>${scopeRules(sheet, (selector) => {
           const s = namespaceIds(selector.trim(), prefix);
-          if (!s) return "";
-          return /^svg(?![\w-])/i.test(s) ? `${scope}${s.slice(3)}` : `${scope} ${s}`;
+          return s ? confineToSvg(s, prefix) : "";
         })}</style>`,
     );
   });

@@ -316,6 +316,34 @@ Owner: "fix all". Tests and inversions: [testing.md](testing.md) § Test suite.
 | 42 | **A push to `main` during a release's CI run failed the release.** `ci.yml` cancelled superseded runs on every branch, so the tagged commit's run became "cancelled" and `publish.yml` refused. Fixed: no cancellation on `main` | no — loud |
 | 43 | **`verify-release` ignored unknown flags** (`--wiat` → one look → "not on JSR" right after a release). Fixed: usage error, exit 64 | **yes** |
 
+### Found reviewing that day's own fixes (2026-11-06, third pass)
+
+Owner: "yes fix all". Three of the four were bugs IN the fixes above, found by re-reading them
+cold; none touches the current reports (baked HTML byte-identical after).
+
+| # | Bug | Silent? |
+|---|---|---|
+| 44 | **#34's confinement raised specificity.** Kept SVG rules were prefixed `svg[data-s3d-scope="rN-"]`, so a diagram's bare `text` rule (0-0-1) began to beat the report's own `.rs0 svg text` (0-1-2) it lost to in the source — measured in Chrome (red where the source was green). Fixed: the scope sits in `:where()` (`:where(svg[…]) text`; a rule on `svg` itself becomes `svg:where([…])`), weightless; Chrome measured green again | **yes** |
+| 45 | **#39's field guard was blind on a template without the `[mathin]` spacer** — which the scrub itself tolerates. It read no row, and passed a filled Company with ✓. Fixed: the three scrubbed fields must be among the rows it read, or it refuses ("cannot read the project-details layout") | **yes** |
+| 46 | **#35's root-qualifier handling, two forms.** The qualifier was read up to the first `~`/`+`/`>`, so `body[class~="dark"] p` lost its rule as a "sibling of body"; and attribute qualifiers were left on the wrapper, so `html[lang=en] p` became `.rs0[lang=en] p`, matching nothing. Fixed: the qualifier is read bracket-, paren- and quote-aware; attribute selectors (`=`, `~=`, `|=`, `^=`, `$=`, `*=`, presence, the `i` flag) are settled against the source tag like classes and ids | **yes** |
+| 47 | **The transcript redactor ignored email addresses** (it checked the username and paths; the privacy rule forbids emails too). Fixed: addresses — plain, `%40`, `@` — become `<email>` and count as residue; the trailer's `noreply@anthropic.com`, `git@github.com` and RFC 2606/6761 example/test domains stay. Never echoed | **yes** — latent while the transcript is untracked |
+
+A fourth pass the same day (owner: "fix all") found four more, three again in that day's code:
+
+| # | Bug | Silent? |
+|---|---|---|
+| 48 | **A test passed for the wrong reason, over the network.** `verify-release`'s "the npm hook is fenced" case set only a fake npm, so the script asked the REAL JSR about 9.9.9, stopped at "not on JSR" (exit 2) and passed on "non-zero" -- the fence never ran (offline, the same). Fixed: a fake JSR answers "attested" first; the case asserts the fence's own message | **yes** — a check that could not fail |
+| 49 | **#46's attribute settling compared every value with case.** HTML compares a listed set of attribute values caselessly in selectors (`lang`, `dir`, `type`, …; not `class` or `id`): Chrome matches `html[lang=EN]` on `lang="en"`, not with the `s` flag (measured). Settled case-sensitively, the rule was dropped as never applied. Fixed: that list (the HTML standard's), with `i` / `s` honoured | **yes** |
+| 50 | **An empty path argument meant "here".** `"$DIR" out.pdf` with DIR unset passed "", which resolved to the working directory and compiled whatever was there. The #32 class. Fixed: refused, naming its position | **yes** |
+| 51 | **`control-unknown-delimiter.ts` did not check its own edit** -- it printed "config removed: false" and went on, so a sample change could have turned it into another control (config present: the fallback path never taken). Fixed: it throws, like every other generator. It applies to today's sample, so this changed no run | no — latent |
+
+Also confirmed that pass, not changed: #33's premise (Chrome ignores `font="…"` on SVG `<text>`;
+computed 16px).
+
+⚠️ **The pattern, sharper: a fix is new code, and gets reviewed like it.** Three of four findings
+here were in fixes written hours earlier, each passing its own tests — tests written to the fix's
+own idea of the problem. A cold re-read with a measurement (Chrome, a planted template) found them.
+
 ⚠️ **While measuring #39, a session printed three real field values to its terminal** (a `sed`
 mask that did not apply). Nothing reached a file. Count such fields with a script that prints
 only filled/empty — never mask client data after the fact.
