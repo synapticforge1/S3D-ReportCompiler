@@ -958,6 +958,106 @@ test("the bake carries no event handlers or javascript: URLs", async () => {
   );
 });
 
+test(
+  "maths fonts: cached per MathJax version, adopted once, kept only if they are fonts",
+  {
+    timeout: TIMEOUT,
+  },
+  async () => {
+    // The real fonts, wherever this checkout's cache holds them (flat before 2026-11-06, a version
+    // folder after). Seeded by one sample build if the cache is empty.
+    const fontsRoot = join(ROOT, ".mathjax-fonts");
+    const fontFiles = () => {
+      if (!existsSync(fontsRoot)) return [] as string[];
+      const out: string[] = [];
+      for (const e of readdirSync(fontsRoot, { withFileTypes: true })) {
+        if (e.isFile() && e.name.endsWith(".woff")) out.push(join(fontsRoot, e.name));
+        if (e.isDirectory()) {
+          for (const f of readdirSync(join(fontsRoot, e.name))) {
+            if (f.endsWith(".woff")) out.push(join(fontsRoot, e.name, f));
+          }
+        }
+      }
+      return out;
+    };
+    if (fontFiles().length === 0) run([MAIN, SAMPLES, join(work, "fonts-seed", "c.pdf")]);
+    const real = new Map(fontFiles().map((p) => [p.replace(/^.*[\\/]/, ""), p]));
+    assert.ok(real.size > 0, "no cached fonts to serve");
+    const serveReal: Handler = (req, res) => {
+      const p = real.get(decodeURIComponent((req.url ?? "").replace(/^.*\//, "")));
+      if (!p) return json({}, 404)(req, res);
+      res.writeHead(200, { "content-type": "font/woff" });
+      res.end(readFileSync(p));
+    };
+    const input = control("control-custom-delimiters", join(work, "fonts-in"));
+    const buildIn = (name: string, origin: string) => {
+      const cwd = join(work, name);
+      mkdirSync(cwd, { recursive: true });
+      return runAsync([MAIN, input, join(cwd, "out", "c.pdf")], {
+        cwd,
+        env: { ...process.env, S3D_FONT_ORIGIN: origin },
+      }).then((r) => ({ ...r, cwd }));
+    };
+    const versioned = (cwd: string) => {
+      const root = join(cwd, ".mathjax-fonts");
+      if (!existsSync(root)) return { dirs: [] as string[], flat: [] as string[] };
+      const all = readdirSync(root, { withFileTypes: true });
+      return {
+        dirs: all.filter((e) => e.isDirectory()).map((e) => e.name),
+        flat: all.filter((e) => e.isFile()).map((e) => e.name),
+      };
+    };
+
+    // 1. A fresh folder: fetched, kept under a folder that names the MathJax version.
+    const fresh = await withFakeJsr(serveReal, (o) => buildIn("fonts-fresh", o));
+    assert.equal(fresh.code, 0, fresh.out);
+    has(fresh.out, /PASS/);
+    const v = versioned(fresh.cwd);
+    assert.deepEqual(v.flat, [], "a font was cached flat, without its version");
+    assert.ok(v.dirs.length === 1 && /mathjax@3\.2\.2/.test(v.dirs[0]), `cache folders: ${v.dirs}`);
+
+    // 2. A 200 that is not a font (a captive portal's page): refused, nothing cached.
+    const portal: Handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html><body>Please sign in to the network</body></html>");
+    };
+    const p = await withFakeJsr(portal, (o) => buildIn("fonts-portal", o));
+    assert.equal(p.code, 1, p.out);
+    has(p.out, /the maths fonts could not be loaded/, /did not return a font \(text\/html/);
+    assert.ok(
+      versioned(p.cwd).dirs.every(
+        (d) => readdirSync(join(p.cwd, ".mathjax-fonts", d)).length === 0,
+      ),
+      "a page was cached as a font",
+    );
+
+    // 3. An earlier release's FLAT cache is adopted -- the server fails, so nothing may be fetched.
+    const adoptCwd = join(work, "fonts-adopt");
+    mkdirSync(join(adoptCwd, ".mathjax-fonts"), { recursive: true });
+    for (const [n, path] of real)
+      writeFileSync(join(adoptCwd, ".mathjax-fonts", n), readFileSync(path));
+    const a = await withFakeJsr(json({}, 500), (o) => buildIn("fonts-adopt", o));
+    assert.equal(a.code, 0, a.out);
+    assert.deepEqual(
+      versioned(adoptCwd).flat,
+      [],
+      "the flat files were not moved into the version folder",
+    );
+
+    // 4. A cached file that is not a font is fetched again, not embedded.
+    const dir = join(adoptCwd, ".mathjax-fonts", versioned(adoptCwd).dirs[0]);
+    const victim = readdirSync(dir)[0];
+    writeFileSync(join(dir, victim), "not a font");
+    const r = await withFakeJsr(serveReal, (o) => buildIn("fonts-adopt", o));
+    assert.equal(r.code, 0, r.out);
+    assert.equal(
+      readFileSync(join(dir, victim)).subarray(0, 4).toString(),
+      "wOFF",
+      "not re-fetched",
+    );
+  },
+);
+
 test("private paths stay ignored by git", () => {
   // Client data, transcripts, build output, and the workspace's private memory folder. cmem/local/
   // was missing: `/local/` covers the top-level folder only, and the workspace rules put machine

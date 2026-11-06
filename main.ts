@@ -299,35 +299,94 @@ const outputPdf = await rt.resolvePath(
 // the only one that needs the network.
 // ---------------------------------------------------------------------------
 
+/** A WOFF or WOFF2 file, by its signature: what a font download must be before it is kept. */
+const isFont = (b: Uint8Array) =>
+  b.length > 4 && ["wOFF", "wOF2"].includes(String.fromCharCode(b[0], b[1], b[2], b[3]));
+
+/**
+ * Where a font is fetched from: its URL, or -- under the TEST hook `S3D_FONT_ORIGIN`, honoured
+ * for a loopback address only -- the same path on that origin. The cache key is always the real
+ * URL, so the hook changes where bytes come from, never where they are kept.
+ */
+function fontSource(url: string): string {
+  const hook = rt.env("S3D_FONT_ORIGIN");
+  if (!hook) return url;
+  const host = new URL(hook).hostname;
+  if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(host)) {
+    throw new Error(
+      `S3D_FONT_ORIGIN=${hook} is not a loopback address. It is a TEST hook; unset it.`,
+    );
+  }
+  return url.replace(/^https?:\/\/[^/]+/, hook.replace(/\/+$/, ""));
+}
+
 /**
  * One font file, from the on-disk cache or downloaded once and cached.
  *
- * Writes to a scratch name and renames into place, so a build interrupted
- * mid-write cannot leave a truncated font that every later build silently
- * reuses.
+ * Cached under a folder named for the URL's directory -- which carries the MathJax version
+ * (`…mathjax@3.2.2…`) -- so a MathJax update starts a fresh cache. Keyed by the file name alone,
+ * as it was until 2026-11-06, an update would have embedded the old version's fonts beside the new
+ * stylesheet, silently. The flat cache of earlier releases is adopted once: every release before
+ * this used MathJax 3.2.2, so a flat file is that version's.
  *
- * @param cacheDir `.mathjax-fonts` in the working directory
+ * Only a real font is kept: a 200 that is not one (a captive portal's login page, a proxy's error
+ * page) is refused with nothing cached, and a cached file that is not one is fetched again.
+ *
+ * Writes to a scratch name and renames into place, so a build interrupted mid-write cannot leave a
+ * truncated font that every later build silently reuses.
+ *
+ * @param cacheRoot `.mathjax-fonts` in the working directory
  */
-async function fontBytes(url: string, cacheDir: string): Promise<Uint8Array> {
+async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
   const name = rt.baseName(url).replace(/[^\w.-]/g, "_");
+  const dirKey = url
+    .slice(0, url.length - rt.baseName(url).length)
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "")
+    .replace(/[^\w.@-]/g, "_");
+  const cacheDir = rt.joinPath(cacheRoot, dirKey);
   const cached = rt.joinPath(cacheDir, name);
 
-  try {
-    return await rt.readFile(cached);
-  } catch {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`${res.status} fetching ${url}`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
+  const keep = async (bytes: Uint8Array) => {
     await rt.mkdirp(cacheDir);
-
-    // Write to a scratch name and rename into place. A build interrupted
-    // mid-write would otherwise leave a truncated font cached, and every later
-    // build would silently reuse the corrupt copy.
     const partial = `${cached}.partial`;
     await rt.writeFile(partial, bytes);
     await rt.rename(partial, cached);
-    return bytes;
+  };
+
+  try {
+    const bytes = await rt.readFile(cached);
+    if (isFont(bytes)) return bytes;
+    await rt.removeQuietly(cached); // not a font: fetched again below
+  } catch {
+    // not cached yet
   }
+
+  if (url.startsWith(`${MATHJAX_FONTS}/`)) {
+    const legacy = rt.joinPath(cacheRoot, name);
+    try {
+      const bytes = await rt.readFile(legacy);
+      if (isFont(bytes)) {
+        await keep(bytes);
+        await rt.removeQuietly(legacy);
+        return bytes;
+      }
+    } catch {
+      // no flat cache from an earlier release
+    }
+  }
+
+  const res = await fetch(fontSource(url));
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (!isFont(bytes)) {
+    throw new Error(
+      `${url} did not return a font (${res.headers.get("content-type") ?? "no content type"}, ` +
+        `${bytes.length} bytes) -- a captive portal or a proxy page? Nothing was cached.`,
+    );
+  }
+  await keep(bytes);
+  return bytes;
 }
 
 /**
@@ -641,10 +700,18 @@ if (leftovers.length > 0 || mathStats.failed > 0) {
 
 // Cached in the working directory, not inside the input folder: that folder
 // should contain reports and nothing else.
-const mathCss = await inlineFonts(
-  mathStyleSheet(),
-  rt.joinPath(workingDir || htmlDir, ".mathjax-fonts"),
-);
+let mathCss = "";
+try {
+  mathCss = await inlineFonts(
+    mathStyleSheet(),
+    rt.joinPath(workingDir || htmlDir, ".mathjax-fonts"),
+  );
+} catch (e) {
+  console.error(`\nERROR: the maths fonts could not be loaded.\n  ${(e as Error).message}\n`);
+  console.error("The first build downloads them once into .mathjax-fonts/ in this folder; later");
+  console.error("builds work offline. Check the network (or a login page on it), then re-run.");
+  rt.exit(1);
+}
 
 const combinedHtml = assembleDocument(bodies, styles, mathCss);
 
@@ -685,6 +752,16 @@ if (externalRefs > 0 || scripts > 0) {
 /** Root (uid 0) on a POSIX host: the one case Chrome needs `--no-sandbox` to start. */
 const runningAsRoot =
   typeof process !== "undefined" && typeof process.getuid === "function" && process.getuid() === 0;
+
+/**
+ * Whether Chrome's sandbox is turned off: as root (it cannot start with one there), or when
+ * `S3D_CHROME_NO_SANDBOX=1` asks -- for a host where Chrome finds no usable sandbox as an ordinary
+ * user (Ubuntu 24.04 restricts the user namespaces it needs). Off by default, and said when on.
+ */
+const noSandbox = runningAsRoot || rt.env("S3D_CHROME_NO_SANDBOX") === "1";
+if (noSandbox) {
+  console.log(`  sandbox:  OFF (${runningAsRoot ? "running as root" : "S3D_CHROME_NO_SANDBOX=1"})`);
+}
 
 // Chrome exits 0 even when printing fails, so "no file" is the only reliable
 // failure signal -- but only if there is no file to begin with. A leftover PDF
@@ -733,7 +810,7 @@ try {
     // Chrome's sandbox stays on, except as root (a container), where Chrome cannot start with it.
     // It used to be off everywhere, justified as "the input is a document this script generated
     // itself" -- but the bake is made from whatever reports are in the folder (2026-11-06).
-    ...(runningAsRoot ? ["--no-sandbox"] : []),
+    ...(noSandbox ? ["--no-sandbox"] : []),
     "--no-first-run",
     "--disable-extensions",
     // Chrome refuses to start against a profile already in use.
@@ -749,7 +826,13 @@ try {
   try {
     rendered = await rt.readFile(outputPdf);
   } catch {
-    throw new Error(`Chrome produced no PDF.\n${result.stderr.trim()}`);
+    // Said in plain words when the cause is the sandbox: its own message is easy to miss.
+    const sandboxHint = /no usable sandbox|sandbox/i.test(result.stderr)
+      ? "\nChrome could not start its sandbox here. If this host cannot provide one to an " +
+        "ordinary user, set S3D_CHROME_NO_SANDBOX=1 for this build (the reports' own code is " +
+        "still blocked: the bake strips it and the document forbids scripts)."
+      : "";
+    throw new Error(`Chrome produced no PDF.\n${result.stderr.trim()}${sandboxHint}`);
   }
 
   console.log(`  rendered: ${(rendered.length / 1e6).toFixed(2)} MB`);

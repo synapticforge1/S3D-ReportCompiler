@@ -12,7 +12,8 @@ tests/browser_example.html     the browser path
 local/                         the real 48-report client set — GIT-IGNORED as a whole directory
 cmem/                          portable project memory
 <cwd>/CompiledPDF/             created on demand; holds combined_report.html AND .pdf
-<cwd>/.mathjax-fonts/          font cache, in the working directory (never inside the input folder)
+<cwd>/.mathjax-fonts/          font cache, in the working directory (never inside the input folder);
+                               one folder per source URL directory, so per MathJax version (since 2026-11-06)
 ```
 
 ⚠️ **`CompiledPDF/` is never committed and has no placeholder.** It is created next to whatever is

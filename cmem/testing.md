@@ -362,6 +362,19 @@ they hash to `7f283563…` / `a19e5ad1…`; 100 and 380 pages, PASS. Measured in
 so it is not used; the sandbox (no `--no-sandbox`) prints normally on Windows; a CSP `<meta>`
 `script-src 'none'` blocks an inline handler and still prints.
 
+**2026-11-06, seventh pass (owner: "yes"; ledger #56–#58):** 39/39 on `bun test` (58 s) and
+`node --test` on Node 24.21 and 22.18; baked hashes unchanged (`cbdd3221…`, `7d5664f6…`); `compat`
+→ minor (no new export). New test "maths fonts: cached per MathJax version, adopted once, kept
+only if they are fonts", against a fake font server on 127.0.0.1 behind the test hook
+`S3D_FONT_ORIGIN` (loopback only; it changes where bytes come from, never the cache key), each
+build in a fresh working folder: (1) fetched → PASS, one cache folder naming `mathjax@3.2.2`, no flat
+file; (2) a 200 `text/html` page → exit 1 "did not return a font (text/html", nothing cached; (3) a
+flat cache of an earlier release with the server answering 500 → PASS, adopted, the flat files
+gone; (4) a cached file overwritten with text → fetched again (`wOFF`). Inverted: HEAD's `main.ts`
+→ fails at (1), "cached flat, without its version". The checkout's own cache migrated on its first
+build, offline. #58 (the sandbox on Linux) has no test here: it needs a Linux non-root Chrome — the
+next CI run is its measurement.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in
