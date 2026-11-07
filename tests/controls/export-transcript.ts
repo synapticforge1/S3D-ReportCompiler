@@ -1,8 +1,8 @@
 // export-transcript.ts
 //
-// Export a Claude Code session log to readable Markdown, so the record of how a
-// change was made travels with the repository instead of living in one user's
-// profile directory.
+// Export a Claude Code session log to readable Markdown, into cmem/transcript/ --
+// which is git-ignored (owner, 2026-08-08): the record stays on this machine, and
+// tests/controls/redact-paths.ts is the gate before it is ever shared.
 //
 //   bun tests/controls/export-transcript.ts <session.jsonl> <out.md>
 //
@@ -33,11 +33,10 @@ if (!src || !out) {
 
 const RESULT_CAP = 1200;
 
-const strip = (s: string) =>
-  s.replace(/[A-Za-z0-9+/]{300,}={0,2}/g, "[binary data omitted]");
+const strip = (s: string) => s.replace(/[A-Za-z0-9+/]{300,}={0,2}/g, "[binary data omitted]");
 
 const clip = (s: string, n: number) =>
-  s.length <= n ? s : s.slice(0, n) + `\n… [${s.length - n} more characters omitted]`;
+  s.length <= n ? s : `${s.slice(0, n)}\n… [${s.length - n} more characters omitted]`;
 
 function textOf(content: unknown): string {
   if (typeof content === "string") return content;
@@ -57,13 +56,14 @@ function textOf(content: unknown): string {
         break;
       }
       case "tool_result": {
-        const body = typeof block.content === "string"
-          ? block.content
-          : Array.isArray(block.content)
-          ? (block.content as Record<string, unknown>[])
-            .map((c) => c?.type === "text" ? String(c.text ?? "") : "[image]")
-            .join("\n")
-          : "";
+        const body =
+          typeof block.content === "string"
+            ? block.content
+            : Array.isArray(block.content)
+              ? (block.content as Record<string, unknown>[])
+                  .map((c) => (c?.type === "text" ? String(c.text ?? "") : "[image]"))
+                  .join("\n")
+              : "";
         parts.push(
           `\n<details><summary>result</summary>\n\n\`\`\`\n${clip(strip(body), RESULT_CAP)}\n\`\`\`\n</details>\n`,
         );
@@ -102,8 +102,9 @@ for (const line of lines) {
 
 const header = `# Session Transcript
 
-Verbatim record of the session that produced this project, exported from the Claude Code session log
-so it travels with the repository instead of living on one machine.
+Verbatim record of the session that produced this project, exported from the Claude Code session log.
+⚠️ Not committed: \`cmem/transcript/\` is git-ignored (it holds machine paths and client
+identifiers). Run the path redactor before sharing it anywhere.
 
 **${turns} turns.** Internal reasoning is not included. Base64 image data — page renders inspected
 during development — is replaced by placeholders. Tool results are truncated to ${RESULT_CAP}
@@ -112,7 +113,8 @@ characters, which preserves the measurements while cutting bulk.
 For the distilled version, read [../process-log.md](../process-log.md) first. This file is the primary
 source behind it.
 
-Regenerate with [export-transcript.ts](../controls/export-transcript.ts).
+Regenerate with [export-transcript.ts](../../tests/controls/export-transcript.ts); redact with
+[redact-paths.ts](../../tests/controls/redact-paths.ts).
 
 `;
 
@@ -120,5 +122,7 @@ const text = header + md.join("");
 await writeFile(out, text);
 
 console.log(`turns:  ${turns}`);
-console.log(`source: ${(new TextEncoder().encode(await readText(src)).length / 1e6).toFixed(2)} MB`);
+console.log(
+  `source: ${(new TextEncoder().encode(await readText(src)).length / 1e6).toFixed(2)} MB`,
+);
 console.log(`output: ${(new TextEncoder().encode(text).length / 1e6).toFixed(2)} MB`);

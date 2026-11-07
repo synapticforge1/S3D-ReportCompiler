@@ -404,10 +404,16 @@ test("a third positional argument is rejected, not ignored", { timeout: TIMEOUT 
 
 test(
   "a previous PDF that cannot be removed stops the build, never read back as new",
-  { timeout: TIMEOUT },
+  {
+    timeout: TIMEOUT,
+    // Root ignores permissions, so the POSIX lock below cannot hold: SKIPPED, visibly. It used to
+    // `return` -- and report a PASS that had tested nothing (2026-11-06 review).
+    skip:
+      process.platform !== "win32" && process.getuid?.() === 0
+        ? "running as root: a read-only folder cannot stop root, so the lock cannot be set up"
+        : false,
+  },
   async () => {
-    // Root ignores permissions, so the POSIX lock below would not hold.
-    if (process.platform !== "win32" && process.getuid?.() === 0) return;
     const input = control("control-custom-delimiters", join(work, "locked"));
     const out = join(input, "out");
     mkdirSync(out, { recursive: true });
@@ -468,7 +474,9 @@ test("a render that writes nothing does not pass off a stale PDF", { timeout: TI
   const stale = join(input, "out", "c.pdf");
   mkdirSync(join(input, "out"), { recursive: true });
   writeFileSync(stale, "%PDF-1.7 stale");
-  // This runtime as "Chrome": it rejects Chrome's flags and writes no PDF.
+  // This runtime as "Chrome". It does not "reject Chrome's flags" (an earlier comment said so):
+  // Bun and Node ignore them, then fail to open the file:// URL given as their entry point, and
+  // exit without writing a PDF -- which is the only thing this test needs from it.
   const r = build(input, { env: { ...process.env, CHROME_PATH: process.execPath } });
   assert.notEqual(r.code, 0, tail(r.out));
   has(r.out, /Chrome produced no PDF/);
@@ -638,22 +646,29 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
     "other J:\\Archive\\clients\\job-41\\report.html",
     // A SIBLING of the checkout and of its workspace, sharing their names as a prefix: must not
     // be half-matched (`<workspace>-backup\client-acme` once survived, drive gone).
+    // Planted on EVERY platform, in its own separator: these used to be Windows-only while the
+    // "must not survive" checks below ran everywhere, so on Linux CI they passed testing nothing
+    // (2026-11-06 review).
     ...(/^[A-Za-z]:/.test(root)
       ? [
           `sibling ${root.replace(/[\\/][^\\/]+$/, "")}-backup\\client-acme\\job.html`,
           // Inside the workspace: <workspace>\…-old\… by design (like <project>\src\…), and
           // never half-matched as <project>-old.
           `sibling2 ${root}-old\\notes.txt`,
-          `slugsib ~/.claude/projects/${slug}-old/x.jsonl`,
         ]
-      : []),
-    // The same checkout as Git Bash and WSL print it, when it is on a drive letter.
+      : [
+          `sibling ${root.replace(/\/[^/]+$/, "")}-backup/client-acme/job.html`,
+          `sibling2 ${root}-old/notes.txt`,
+        ]),
+    `slugsib ~/.claude/projects/${slug}-old/x.jsonl`,
+    // The same checkout as Git Bash and WSL print it, when it is on a drive letter; on a POSIX
+    // checkout, a WSL view of a Windows drive (no checkout of this machine's to translate).
     ...(/^[A-Za-z]:/.test(root)
       ? [
           `bash cd /${root[0].toLowerCase()}${root.slice(2).replace(/\\/g, "/")}/tests`,
           `wsl /mnt/${root[0].toLowerCase()}${root.slice(2).replace(/\\/g, "/")}/main.ts`,
         ]
-      : []),
+      : ["wsl /mnt/d/Work/client-acme/main.ts"]),
     "bash2 ls /j/Archive/clients/job-41",
     "spaces C:\\Program Files\\Vendor Tool\\bin\\tool.exe ran",
     "unc \\\\fileserver7\\jobs\\job-41\\report.html",
@@ -1326,7 +1341,8 @@ test("the bake carries no event handlers or javascript: URLs", async () => {
     "object-src 'none'",
     "base-uri 'none'",
     "img-src data:",
-    "font-src data: https://cdn.jsdelivr.net",
+    // MathJax's font folder only, not the whole jsDelivr host (group E, 2026-11-06).
+    "font-src data: https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/output/chtml/fonts/woff-v2/",
     "style-src 'unsafe-inline'",
   ]) {
     assert.ok(csp.split(/;\s*/).includes(directive), `the policy lacks "${directive}": ${csp}`);
@@ -1929,13 +1945,21 @@ test("compat: a tagged version is refused unless the release says it is unpublis
 // ── "a run of nothing is not a pass" ─────────────────────────────────────────
 
 test("every control in tests/controls/ is exercised by a test above", () => {
+  // Read from this file's own source, not from which tests happened to run: under a name filter
+  // (`-t`, `--test-name-pattern`) the controls' tests may be filtered out, and the runtime set
+  // made this fail for that alone (2026-11-06 review). A control no `control("…")` call names is
+  // one no test runs, whatever the filter.
+  const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const named = new Set([...source.matchAll(/\bcontrol\(\s*"([\w-]+)"/g)].map((m) => m[1]));
   const all = readdirSync(CONTROLS)
     .filter((f) => /^control-.*\.ts$/.test(f))
     .map((f) => f.replace(/\.ts$/, ""));
   assert.ok(all.length >= 6, `only ${all.length} control file(s) found`);
   assert.deepEqual(
-    all.filter((c) => !exercised.has(c)),
+    all.filter((c) => !named.has(c)),
     [],
     "control file(s) no test runs — add a test or retire the file",
   );
+  // And every control this run did use is one that exists (a renamed file breaks loudly).
+  for (const c of exercised) assert.ok(all.includes(c), `a test uses a missing control: ${c}`);
 });

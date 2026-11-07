@@ -3,7 +3,10 @@
 // tokens, so the conservation check has to catch this.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
-const src = await readFile(new URL("../HTMLFilesToBeCompiled/member_0_report.html", import.meta.url), "utf8");
+const src = await readFile(
+  new URL("../HTMLFilesToBeCompiled/member_0_report.html", import.meta.url),
+  "utf8",
+);
 const outDir = process.argv[2];
 await mkdir(outDir, { recursive: true });
 

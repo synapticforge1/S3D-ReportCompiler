@@ -17,8 +17,14 @@ let encoded = 0;
 const encode = (body: string) =>
   body
     // A "<" that does not open a tag (a tag starts with a letter, "/" or "!").
-    .replace(/<(?![a-zA-Z/!])/g, () => (encoded++, "&lt;"))
-    .replace(/(^|[^a-zA-Z"'/-])>/g, (_m, pre) => (encoded++, `${pre}&gt;`));
+    .replace(/<(?![a-zA-Z/!])/g, () => {
+      encoded++;
+      return "&lt;";
+    })
+    .replace(/(^|[^a-zA-Z"'/-])>/g, (_m, pre) => {
+      encoded++;
+      return `${pre}&gt;`;
+    });
 
 const v = src.replace(
   /\[(mathin|math)\]([\s\S]*?)\[\1\]/g,

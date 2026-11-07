@@ -63,7 +63,7 @@ if (!USER) {
   process.exit(1);
 }
 
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // A path separator as it may appear: forward slash, one backslash, or the
 // doubled backslash of a JSON-encoded string.
@@ -85,8 +85,8 @@ const rule = (body: string) => new RegExp(`${DRIVE}${SEP}${body}`, "gi");
 // A folder name may hold spaces ("Program Files"); an intermediate segment may
 // therefore run across single spaces, as long as a separator follows it. The
 // LAST segment stops at a space, so prose after a path is never swallowed.
-const MID = String.raw`${SEGMENT}(?: ${SEGMENT})*(?=${SEP})`;
-const ANY_PATH = String.raw`${DRIVE}(?:${SEP}${MID})*${SEP}${SEGMENT}`;
+const MID = `${SEGMENT}(?: ${SEGMENT})*(?=${SEP})`;
+const ANY_PATH = `${DRIVE}(?:${SEP}${MID})*${SEP}${SEGMENT}`;
 // A network path, \\server\share\..., single- or JSON-escaped; not after a word,
 // a ":" or another backslash, so a drive path's own separators never start one.
 const UNC = String.raw`(?<![\w:\\])(?:\\{4}|\\{2})[A-Za-z0-9_.$-]+\\{1,2}${SEGMENT}(?:${SEP}${MID})*(?:${SEP}${SEGMENT})?`;
@@ -105,14 +105,14 @@ const fromHere = (rel: string) => {
   if (segs.length === 0) return null;
   if (/^[A-Za-z]:$/.test(drive)) {
     return {
-      path: [driveRe(drive[0]), ...segs.map(escape)].join(SEP),
+      path: [driveRe(drive[0]), ...segs.map(escapeRe)].join(SEP),
       slug: [drive[0], "", ...segs].join("-"),
     };
   }
   if (drive === "") {
     // "/home/u/repo": Claude's slug is "-home-u-repo".
     return {
-      path: String.raw`(?<![\w.~-])${SEP}${segs.map(escape).join(SEP)}`,
+      path: String.raw`(?<![\w.~-])${SEP}${segs.map(escapeRe).join(SEP)}`,
       slug: ["", ...segs].join("-"),
     };
   }
@@ -126,7 +126,7 @@ const slugRule = (slug: string) =>
   new RegExp(
     `(?<![A-Za-z0-9])${slug
       .split(/[^A-Za-z0-9]/)
-      .map(escape)
+      .map(escapeRe)
       .join("[^A-Za-z0-9]")}`,
     "gi",
   );
@@ -136,7 +136,7 @@ const slugRule = (slug: string) =>
 // `<workspace>-backup\client-acme\…`, with no drive left for the residue check to find); now a
 // sibling falls through to the generic path rules below, which take it whole.
 const END = String.raw`(?![^\\/\s"'])`;
-const SLUG_END = String.raw`(?![A-Za-z0-9_.-])`;
+const SLUG_END = "(?![A-Za-z0-9_.-])";
 
 // Longest first: the project path extends the home path, so replacing the home
 // path first would strand the remainder.
@@ -157,7 +157,7 @@ const RULES: Array<[RegExp, string]> = [
   ...(WORK_FOLDER
     ? [
         [
-          rule(`Users${SEP}${SEGMENT}${SEP}${SEGMENT}${SEP}${escape(WORK_FOLDER)}`),
+          rule(`Users${SEP}${SEGMENT}${SEP}${SEGMENT}${SEP}${escapeRe(WORK_FOLDER)}`),
           "<project>",
         ] as [RegExp, string],
       ]
@@ -165,10 +165,7 @@ const RULES: Array<[RegExp, string]> = [
   [rule(`Users${SEP}${SEGMENT}${SEP}AppData`), "<home>/AppData"],
   [rule(`Users${SEP}${SEGMENT}`), "<home>"],
   // POSIX homes: /home/<user> (Linux), /Users/<user> (macOS), /root.
-  [
-    new RegExp(String.raw`(?<![\w.~-])/(?:home|Users)/[^/\s"']+|(?<![\w.~-])/root(?=/)`, "g"),
-    "<home>",
-  ],
+  [/(?<![\w.~-])\/(?:home|Users)\/[^/\s"']+|(?<![\w.~-])\/root(?=\/)/g, "<home>"],
   // Claude's slug of a POSIX home path: "-home-<user>-…".
   [/(?<![A-Za-z0-9-])-(?:home|Users)-[A-Za-z0-9_.-]+/g, "<home-slug>"],
   // Claude Code flattens a working directory into a slug for its own storage
@@ -251,7 +248,7 @@ text = text.replace(EMAIL, (e) => {
 });
 if (emailHits > 0) applied.push(`${emailHits} → <email>`);
 
-const userRe = new RegExp(escape(USER), "gi");
+const userRe = new RegExp(escapeRe(USER), "gi");
 const count = (s: string) => (s.match(userRe) ?? []).length;
 const before = count(original);
 const after = count(text);
@@ -261,7 +258,10 @@ console.log(`rules hit: ${applied.length ? applied.join(", ") : "none"}`);
 console.log(`username:  ${before} occurrence(s) before, ${after} after`);
 
 if (after > 0) {
-  const sample = [...text.matchAll(new RegExp(`.{0,70}${escape(USER)}.{0,70}`, "gi"))].slice(0, 5);
+  const sample = [...text.matchAll(new RegExp(`.{0,70}${escapeRe(USER)}.{0,70}`, "gi"))].slice(
+    0,
+    5,
+  );
   console.log("remaining context:");
   for (const s of sample) console.log(`  …${s[0].replace(/\s+/g, " ")}…`);
 }

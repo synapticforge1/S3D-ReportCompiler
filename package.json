@@ -26,8 +26,8 @@
     "bump": "bun scripts/bump.ts",
     "release": "bun scripts/publish.ts",
     "verify-release": "bun scripts/verify-release.ts",
-    "format": "bun fmt main.ts src scripts tests/build.test.ts",
-    "format:check": "bun fmt --check main.ts src scripts tests/build.test.ts && bun scripts/check-format-canary.ts",
+    "format": "bun fmt main.ts src scripts tests/build.test.ts tests/controls/*.ts",
+    "format:check": "bun fmt --check main.ts src scripts tests/build.test.ts tests/controls/*.ts && bun scripts/check-format-canary.ts",
     "lint": "bunx @biomejs/biome@2.5.15 lint --error-on-warnings && bun scripts/check-lint-canary.ts",
     "runtimes": "bun scripts/check-runtimes.ts",
     "serve": "npx --yes serve ."

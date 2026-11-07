@@ -13,7 +13,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,15 +30,32 @@ if (!checkScript.startsWith(`bun fmt --check ${paths.join(" ")} &&`)) {
   );
 }
 
-// tests/ holds the byte-checked sample reports; only a named test FILE there may be formatted.
+// tests/ holds the byte-checked sample reports; only a named test FILE there may be formatted,
+// and the control SCRIPTS by their pattern (`tests/controls/*.ts`: the folder's README is
+// Markdown, which a bare folder would have reformatted). The controls were in no scope at all
+// until 2026-11-06 -- never formatted, never linted.
 const forbidden = paths.filter(
   (p) =>
     p === "." ||
     /^(\.\/)?cmem(\/|$)/.test(p) ||
-    (/^(\.\/)?tests(\/|$)/.test(p) && !/^(\.\/)?tests\/[\w-]+\.test\.ts$/.test(p)),
+    (/^(\.\/)?tests(\/|$)/.test(p) &&
+      !/^(\.\/)?tests\/[\w-]+\.test\.ts$/.test(p) &&
+      p.replace(/^\.\//, "") !== "tests/controls/*.ts"),
 );
 if (forbidden.length) fail(`the format scope reaches ${forbidden.join(", ")}`);
-const missing = paths.filter((p) => !existsSync(join(root, p)));
+// A pattern must match something, as a path must exist: a typo would otherwise check nothing.
+const missing = paths.filter((p) =>
+  p.includes("*")
+    ? readdirSync(join(root, p.slice(0, p.lastIndexOf("/")))).filter((f) =>
+        new RegExp(
+          `^${p
+            .slice(p.lastIndexOf("/") + 1)
+            .replace(/\./g, "\\.")
+            .replace(/\*/g, ".*")}$`,
+        ).test(f),
+      ).length === 0
+    : !existsSync(join(root, p)),
+);
 if (missing.length) fail(`listed path(s) do not exist: ${missing.join(", ")}`);
 
 const WIDTH = 100;

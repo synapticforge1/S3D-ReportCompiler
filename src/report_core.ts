@@ -28,8 +28,9 @@
  *
  * ⚠️ These are certified engineering calculations. A dropped value is worse than
  * a broken layout, because a dropped value still looks right — which is why the
- * guard and the verification exist, and why every removal is counted in
- * {@link audit}.
+ * guard and the verification exist, and why every removal is counted -- in
+ * {@link audit} and {@link bakeRemovals} (the latter since 2026-11-06; until
+ * then some removals went uncounted).
  *
  * @example Bake two reports into one printable document
  * ```ts
@@ -1690,7 +1691,9 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
  */
 const DOCUMENT_CSP =
   "default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; " +
-  `form-action 'none'; img-src data:; font-src data: ${new URL(MATHJAX_FONTS).origin}; ` +
+  // MathJax's font FOLDER, not the whole jsDelivr host (which serves any npm or GitHub content):
+  // a source ending in "/" matches that path and below only (2026-11-06 review).
+  `form-action 'none'; img-src data:; font-src data: ${MATHJAX_FONTS}/; ` +
   "style-src 'unsafe-inline'";
 
 /**

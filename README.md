@@ -410,8 +410,9 @@ A complete, working page — fetching the reports, logging the warnings, printin
 [`tests/browser_example.html`](tests/browser_example.html) (`bun run bundle:browser`, then serve
 `tests/` over HTTP).
 
-`@jrmarcum/s3d-reportcompiler/runtime` is **not** importable in a browser; every function in it
-throws a descriptive error rather than failing obscurely.
+`@jrmarcum/s3d-reportcompiler/runtime` **imports** in a browser (its `node:` modules load lazily),
+but it is of no use there: every function in it throws a descriptive error rather than failing
+obscurely.
 
 ### Building a document
 
