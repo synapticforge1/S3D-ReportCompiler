@@ -56,8 +56,15 @@ const REPLACEMENTS: Array<{ label: string; value: string }> = [
  */
 const KEPT_FIELDS = new Set(["date", "project units"]);
 
-/** Every `Label:  [mathin]\text{  }[mathin]value<br>` row of the block: [label, value]. */
-const FIELD_ROW = /([A-Z][A-Za-z ]{0,40}):\s*\[[a-z]+\]\\text\{[^}]*\}\[[a-z]+\]([\s\S]*?)<br\b/g;
+/**
+ * Every `Label:  [mathin]\text{  }[mathin]value<br>` row of the block: [label, value]. A label is
+ * any text up to its colon -- digits and punctuation included (`Job No.:`, `Client #:`): it used to
+ * be `[A-Z][A-Za-z ]`, so a filled row with such a label was never seen, and passed (2026-11-06,
+ * review 2).
+ */
+const LABEL = String.raw`[^<>:\n]{1,60}`;
+const SPACER = String.raw`\[[a-z]+\]\\text\{[^}]*\}\[[a-z]+\]`;
+const FIELD_ROW = new RegExp(String.raw`(${LABEL}):\s*${SPACER}([\s\S]*?)<br\b`, "g");
 
 /**
  * Words that legitimately occur in the calculation prose, so their presence is
@@ -100,12 +107,19 @@ const OUT_DIR = "tests/HTMLFilesToBeCompiled";
  * The next row is recognised by the spacer, so a line inside the value that merely LOOKS like a
  * label ("Ref: 4471") does not end it early.
  */
-function fieldPattern(label: string): RegExp {
+// The REAL row only (2026-11-06, review 2): the label as written (case kept), at the start of a
+// row (after a tag or a line break), and WITH the template's spacer. It used to match the first
+// "designer:" anywhere, any case, spacer optional -- so a "Designer: per contract" line above the
+// block was rewritten and the real name stayed, unseen by a residue check that looks only for
+// what it removed. The caller also requires exactly one such row.
+function fieldPattern(label: string, flags = ""): RegExp {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const spacer = String.raw`\[[a-z]+\]\\text\{[^}]*\}\[[a-z]+\]`;
-  const nextRow = String.raw`<br\s*/?>(?=\s*[A-Z][A-Za-z ]{0,40}:\s*${spacer})`;
+  const nextRow = String.raw`<br\s*/?>(?=\s*${LABEL}:\s*${SPACER})`;
   const blockEnd = String.raw`<\/(?:td|th|p|div|li|tr|table)\s*>`;
-  return new RegExp(`(${escaped}:\\s*(?:${spacer})?)([\\s\\S]*?)(${nextRow}|${blockEnd})`, "i");
+  return new RegExp(
+    `((?:^|(?<=[>\\n]))[ \\t]*${escaped}:\\s*${SPACER})([\\s\\S]*?)(${nextRow}|${blockEnd})`,
+    flags,
+  );
 }
 
 let failures = 0;
@@ -157,24 +171,35 @@ for (const file of files) {
 
   const removed: string[] = [];
   let out = html;
+  let refused = false;
 
   for (const { label, value } of REPLACEMENTS) {
     const pattern = fieldPattern(label);
     const match = out.match(pattern);
+    const rows = (out.match(fieldPattern(label, "g")) ?? []).length;
 
-    if (!match) {
-      // Not "nothing to do" — the field this script exists to remove is missing,
-      // which means either the template changed or the pattern is wrong. Either
-      // way, shipping the file would be shipping unreviewed content.
-      console.error(`❌ ${name}: no "${label}:" field found — refusing to sanitize blind`);
-      failures++;
-      continue;
+    if (!match || rows !== 1) {
+      // Not "nothing to do" — the field this script exists to remove is missing (or there are
+      // two, and which is real cannot be told), so the template changed or the pattern is wrong.
+      // The WHOLE FILE is refused: a `continue` here once went on to the next field and wrote the
+      // file with this one unscrubbed, under "Nothing partial was shipped" (2026-11-06, review 2).
+      console.error(
+        rows > 1
+          ? `❌ ${name}: ${rows} "${label}:" rows — refusing: which one is the real field?`
+          : `❌ ${name}: no "${label}:" field found — refusing to sanitize blind`,
+      );
+      refused = true;
+      break;
     }
 
     // The value's TEXT, for the residue check: a multi-line value carries its <br> tags (and maybe
     // entities), and "br" checked as a word refused every such file -- <br> is everywhere.
     removed.push(match[2].replace(/<[^>]*>/g, " ").replace(/&[#\w]+;/g, " "));
     out = out.replace(pattern, `$1${value}$3`);
+  }
+  if (refused) {
+    failures++;
+    continue;
   }
 
   // ── Residue check ─────────────────────────────────────────────────────────

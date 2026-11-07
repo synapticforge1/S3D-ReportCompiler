@@ -634,6 +634,47 @@ test("the sanitizer refuses a filled field it does not scrub, and short values",
     assert.ok(!written.includes(leak), `"${leak}" survived the sanitizer`);
   }
   assert.match(written, /Project Units:/, "the next field went with the notes");
+
+  // Review 2 (2026-11-06). A field the scrub cannot find refuses the WHOLE FILE: the notes as the
+  // last row, nothing after them, used to skip that field and write the file with the notes in it.
+  const last = sanitizerInput("sanitize-last-row", false);
+  const lastHtml = readFileSync(reportOf(last), "utf8");
+  writeFileSync(reportOf(last), lastHtml.slice(0, lastHtml.indexOf("]Kestrel Brumby<br") + 18));
+  const lr = run([join(ROOT, "scripts", "sanitize-report.ts"), "x_report.html"], { cwd: last });
+  assert.equal(lr.code, 1, lr.out);
+  has(lr.out, /no "Project Notes:" field found/);
+  hasNot(lr.out, /✅/);
+  assert.ok(
+    !existsSync(join(last, "tests", "HTMLFilesToBeCompiled", "x_report.html")),
+    "a file with an unscrubbed field was written",
+  );
+
+  // Only the REAL row is scrubbed: a "Designer:" line above the block, without the template's
+  // spacer, was rewritten instead and the real designer passed with ✓.
+  const decoy = sanitizerInput("sanitize-decoy", false);
+  edit(decoy, /<body([^>]*)>/i, "<body$1><p>Designer: per contract</p>");
+  const dr = run([join(ROOT, "scripts", "sanitize-report.ts"), "x_report.html"], { cwd: decoy });
+  assert.equal(dr.code, 0, dr.out);
+  const decoyOut = readFileSync(
+    join(decoy, "tests", "HTMLFilesToBeCompiled", "x_report.html"),
+    "utf8",
+  );
+  assert.ok(!decoyOut.includes("Quentin Vardle"), "the real designer survived");
+  assert.ok(decoyOut.includes("Designer: per contract"), "the decoy line was rewritten");
+
+  // The guard reads every label shape: digits and punctuation (`Job No.:`, `Client #:`) were
+  // never seen, and a filled one passed with ✓.
+  for (const label of ["Job No.", "Client #", "Ref 2"]) {
+    const dir = sanitizerInput(`sanitize-label-${label.replace(/\W/g, "")}`, false);
+    edit(
+      dir,
+      "]Quentin Vardle<br",
+      `]Quentin Vardle<br>${label}: [mathin]\\text{  }[mathin]JN-5521<br`,
+    );
+    const r = sanitize(dir);
+    assert.equal(r.code, 1, `${label}:\n${r.out}`);
+    has(r.out, /hold a value this script does not scrub/);
+  }
 });
 
 // ── the transcript redactor ──────────────────────────────────────────────────
@@ -686,7 +727,11 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
   writeFileSync(file, lines.join("\n"));
   const r = run([redact, file, "--user=zorblax"]);
   assert.equal(r.code, 0, r.out);
-  has(r.out, /username:\s+1 occurrence\(s\) before, 0 after/, /paths:\s+0 drive path\(s\) after/);
+  has(
+    r.out,
+    /username:\s+1 occurrence\(s\) before, 0 after/,
+    /paths:\s+0 path\(s\) or path tail\(s\) after/,
+  );
   const text = readFileSync(file, "utf8");
   assert.ok(
     !/[A-Za-z]:[\\/]/.test(text.replace(/https?:\/\//g, "")),
@@ -782,6 +827,62 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
     posixText.includes("https://github.com/synapticforge1/S3D-ReportCompiler/actions"),
     posixText,
   );
+
+  // A path is redacted WHOLE, not to its prefix (review 2, 2026-11-06): the home rule replaced
+  // `C:\Users\<name>` and left the rest -- folder, employer, client, project names; a spaced
+  // username left the surname and the whole path. Every spelling, every platform's test run.
+  writeFileSync(
+    file,
+    [
+      "a C:\\Users\\zorblax\\Documents\\client-acme\\job.html",
+      "b C:\\Users\\zorblax\\OneDrive - Brumby Engineering Ltd\\Jobs\\acme\\x.html",
+      "c C:\\Users\\Kestrel Brumby\\Downloads\\Zorblax-Quarry.zip",
+      'd "C:\\\\Users\\\\zorblax\\\\Desktop\\\\Acme Steel\\\\job.html"',
+      "e C:\\Users\\zorblax\\AppData\\Local\\Temp\\acme-steel\\x.txt",
+      "f C:\\Users\\zorblax\\Downloads\\Zorblax Quarry Job.zip and prose after",
+      "g //fileserver7/jobs/job-41/report.html",
+      "h /srv/Client Jobs/acme-steel/j.html",
+      "i /home/zorblax/Client Jobs/acme-steel/report.html",
+      "j https://cdn.example.org/npm/x.js and //cdn.example.org/a/b stay",
+    ].join("\n"),
+  );
+  const whole = run([redact, file, "--user=zorblax"]);
+  assert.equal(whole.code, 0, whole.out);
+  const wholeText = readFileSync(file, "utf8");
+  for (const leak of [
+    "Documents",
+    "client-acme",
+    "Brumby",
+    "Engineering",
+    "Jobs",
+    "Zorblax",
+    "Quarry",
+    "Acme",
+    "acme",
+    "Local",
+    "fileserver7",
+    "job-41",
+  ]) {
+    assert.ok(!wholeText.includes(leak), `"${leak}" survived:\n${wholeText}`);
+  }
+  assert.ok(
+    wholeText.includes("and prose after"),
+    `prose after a path was swallowed:\n${wholeText}`,
+  );
+  assert.ok(wholeText.includes("https://cdn.example.org/npm/x.js and //cdn.example.org/a/b stay"));
+
+  // ...and the residue check sees a tail left after a placeholder (one no rule could have made),
+  // counting it without printing it.
+  for (const tail of [
+    "<home>\\Jobs\\acme\\x.html",
+    "<path>/acme-steel/x",
+    "<home> Brumby\\Downloads",
+  ]) {
+    writeFileSync(file, `left ${tail}\n`);
+    const r2 = run([redact, file, "--user=zorblax"]);
+    assert.equal(r2.code, 1, `a tail passed: ${tail}\n${r2.out}`);
+    assert.ok(!/acme|Brumby/.test(r2.out), `the residue was echoed:\n${r2.out}`);
+  }
 
   // The residue check looks WIDER than the redaction: a spelling no rule redacts fails the run,
   // without echoing it. (It used to re-apply the redaction's own pattern: 0 by construction.)
@@ -2127,6 +2228,15 @@ test("private paths stay ignored by git", () => {
     "local/CompiledPDF/combined_report.pdf",
     ".mathjax-fonts/MathJax_Main-Regular.woff",
     "dist/package.json",
+    // A zip build writes beside the zip, anywhere (review 2, group C).
+    "pack.zip",
+    "pack.html",
+    "pack.verified.pdf",
+    "pack.unverified.pdf",
+    "pack.zip.partial",
+    "reports/Job-41.zip",
+    "reports/Job-41.html",
+    "tests/pack.html",
   ]) {
     const r = spawnSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: ROOT });
     assert.equal(r.status, 0, `${path} is NOT ignored by git`);

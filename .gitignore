@@ -47,6 +47,18 @@ CLAUDE.md
 # re-included. See cmem/roadmap.md task 3b.
 CompiledPDF/
 
+# A SkyCiv zip build (2026-11-06) writes BESIDE the zip, in no output folder: the baked HTML
+# (<zip>.html -- every report's full content), the PDF while unverified or not yet in the zip, and
+# the partial zip. All client data. Anything of those kinds is ignored everywhere, and the only
+# committed HTML -- the sanitized samples and the browser example -- is let back in by name, so a
+# report or a bake dropped anywhere else can never be staged (review 2, group C).
+*.zip
+*.zip.partial
+*.pdf
+*.html
+!/tests/HTMLFilesToBeCompiled/*.html
+!/tests/browser_example.html
+
 # Generated browser bundle — rebuild with `bun run bundle:browser`
 /tests/report_core.browser.js
 

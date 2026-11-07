@@ -82,16 +82,31 @@ const driveRe = (letter = "[A-Za-z]") =>
 const DRIVE = driveRe();
 const rule = (body: string) => new RegExp(`${DRIVE}${SEP}${body}`, "gi");
 
-// A folder name may hold spaces ("Program Files"); an intermediate segment may
-// therefore run across single spaces, as long as a separator follows it. The
-// LAST segment stops at a space, so prose after a path is never swallowed.
+// A folder name may hold spaces ("Program Files", "OneDrive - Acme Ltd"); an intermediate segment
+// may therefore run across single spaces, as long as a separator follows it. The LAST segment
+// runs across spaces only when it ends in a file extension ("Quarry Job.zip"), so prose after a
+// path is not swallowed -- and a file name with a space no longer leaves its second word behind.
 const MID = `${SEGMENT}(?: ${SEGMENT})*(?=${SEP})`;
-const ANY_PATH = `${DRIVE}(?:${SEP}${MID})*${SEP}${SEGMENT}`;
+const LAST = String.raw`(?:${SEGMENT}(?: ${SEGMENT})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${SEGMENT})`;
+const ANY_PATH = `${DRIVE}(?:${SEP}${MID})*${SEP}${LAST}`;
 // A network path, \\server\share\..., single- or JSON-escaped; not after a word,
-// a ":" or another backslash, so a drive path's own separators never start one.
-const UNC = String.raw`(?<![\w:\\])(?:\\{4}|\\{2})[A-Za-z0-9_.$-]+\\{1,2}${SEGMENT}(?:${SEP}${MID})*(?:${SEP}${SEGMENT})?`;
-// An absolute POSIX path: "/" then two or more path-like segments (no regex metacharacters).
-const POSIX_PATH = String.raw`(?<![\w.:/\\-])\/(?:[\w.~@%+-]+\/)+[\w.~@%+-]+`;
+// a ":" or another backslash, so a drive path's own separators never start one. And //server/share
+// with forward slashes (a dotless host: a dotted one is a URL's, `//cdn.example.org/…`).
+// Never right after a placeholder's ">": `<project>\\src\\…` is this checkout's own public tail.
+const UNC =
+  String.raw`(?<![\w:\\>])(?:\\{4}|\\{2})[A-Za-z0-9_.$-]+\\{1,2}${SEGMENT}(?:${SEP}${MID})*(?:${SEP}${LAST})?` +
+  String.raw`|(?<![\w:/\\>])//[A-Za-z0-9_$-]+/${SEGMENT}(?:/${MID})*(?:/${LAST})?`;
+// An absolute POSIX path: "/" then two or more path-like segments (no regex metacharacters); a
+// middle segment may hold single spaces ("/srv/Client Jobs/…"), the last one as LAST does.
+const PSEG = String.raw`[\w.~@%+-]+`;
+const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\/(?:${PSEG}(?: ${PSEG})*\/)+(?:${PSEG}(?: ${PSEG})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${PSEG})`;
+/**
+ * The whole of a path below a home folder: the username (which may hold a space) and every
+ * segment after it. The home rule used to replace `X:\Users\<name>` alone, and the rest stood --
+ * `<home>\OneDrive - <employer>\Jobs\<client>\…`, a surname after a spaced username -- while the
+ * residue check, looking for drive paths only, said "0 drive path(s) after" (2026-11-06 review).
+ */
+const HOME_TAIL = String.raw`${SEGMENT}(?: ${SEGMENT})*(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
 
 /**
  * This checkout, and the folder holding it, in any separator and any drive spelling. A
@@ -162,10 +177,16 @@ const RULES: Array<[RegExp, string]> = [
         ] as [RegExp, string],
       ]
     : []),
-  [rule(`Users${SEP}${SEGMENT}${SEP}AppData`), "<home>/AppData"],
-  [rule(`Users${SEP}${SEGMENT}`), "<home>"],
-  // POSIX homes: /home/<user> (Linux), /Users/<user> (macOS), /root.
-  [/(?<![\w.~-])\/(?:home|Users)\/[^/\s"']+|(?<![\w.~-])\/root(?=\/)/g, "<home>"],
+  // A home folder and EVERYTHING below it (HOME_TAIL), in any separator.
+  [rule(`Users${SEP}${HOME_TAIL}`), "<home>"],
+  // POSIX homes: /home/<user> (Linux), /Users/<user> (macOS), /root -- and everything below.
+  [
+    new RegExp(
+      String.raw`(?<![\w.~-])\/(?:(?:home|Users)\/${HOME_TAIL.replaceAll(SEP, "/")}|root(?:\/${MID.replaceAll(SEP, "/")})*(?:\/${LAST})?)`,
+      "g",
+    ),
+    "<home>",
+  ],
   // Claude's slug of a POSIX home path: "-home-<user>-…".
   [/(?<![A-Za-z0-9-])-(?:home|Users)-[A-Za-z0-9_.-]+/g, "<home-slug>"],
   // Claude Code flattens a working directory into a slug for its own storage
@@ -212,13 +233,23 @@ const isPublicEmail = (e: string) => {
   );
 };
 
-/** Drive or network paths left after redaction (a placeholder matches neither). */
+/**
+ * Paths left after redaction, read LOOSER than the rules (a check made of the rules' own patterns
+ * finds nothing they missed): any drive letter and separator; a network path either way round;
+ * a placeholder that a path still continues from -- `<home>\Jobs\…`, `<home> Surname\…`,
+ * `<path>/…` (only this checkout's and workspace's own tails are public); any slug left.
+ */
 const drivePaths = (s: string) => [
-  ...(s.match(new RegExp(`${DRIVE}${SEP}${SEGMENT}`, "g")) ?? []),
-  ...(s.match(new RegExp(UNC, "g")) ?? []),
+  ...(s.match(new RegExp(`${DRIVE}${SEP}`, "g")) ?? []),
+  ...(s.match(/(?<![\w:>])(?:\\\\|\/\/)[A-Za-z0-9_$-]+[\\/]\S/g) ?? []),
+  // A slug placeholder stands for one folder NAME, so a file below it is not a path tail.
+  ...(s.match(
+    /<(?:home|path|unc-path)>(?:(?:\\{1,2}|\/)[^\s"'<>]| [^\s"'<>\\/]+(?:\\{1,2}|\/))/g,
+  ) ?? []),
+  ...(s.match(/(?<![A-Za-z0-9])[A-Za-z]--[A-Za-z0-9]/g) ?? []),
   // Looser than the POSIX redaction rule (any segment characters), for the same reason as
   // EMAIL_RESIDUE: a check that matches only what the rules replace cannot fail.
-  ...(s.match(/(?<![\w.:/\\-])\/(?:[^/\s"'<>()]+\/)+[^/\s"'<>()]+/g) ?? []).filter(
+  ...(s.match(/(?<![\w.:/\\>-])\/(?:[^/\s"'<>()]+\/)+[^/\s"'<>()]+/g) ?? []).filter(
     (p) => !/^\/(?:[^/]*\/)*[^/]*[\^$*?|[\]{}]/.test(p), // a regex literal, not a path
   ),
 ];
@@ -267,8 +298,8 @@ if (after > 0) {
 }
 
 const leftPaths = drivePaths(text);
-console.log(`paths:     ${leftPaths.length} drive path(s) after`);
-for (const p of leftPaths.slice(0, 5)) console.log(`  ${p}`);
+// Counted, never printed: a residue may be a client's name (it used to print the first five).
+console.log(`paths:     ${leftPaths.length} path(s) or path tail(s) after`);
 
 // Counted, never printed: the residue is the very thing that must not be shown.
 const leftEmails = (text.match(EMAIL_RESIDUE) ?? []).filter(
