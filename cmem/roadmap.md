@@ -16,14 +16,14 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08). 🔁 **Reference hashes since 2026-11-06:** the document carries one CSP `<meta>` line (#55, widened by #60, its font source narrowed to MathJax's folder by #65) — client set `ae70d5e0…`, samples `37792fe3…` (earlier the same day `a3a6a2af…`/`cc563a15…`, `7d5664f6…`/`cbdd3221…`); without that line both hash to the old values (`a19e5ad1…`, `7f283563…`) |
 | Published | **1.1.6 on both registries** (2026-11-05, owner: "do the patch release"): the three code-review rounds' fixes. JSR (1.1.0–1.1.6 attested; 1.1.6 Rekor `3696801217`) and npm (1.1.4–**1.1.6 by OIDC with provenance**, 1.1.6 `latest`, 10 files). Took three tags-worth of attempts, none published wrongly: the first `v1.1.6` failed CI on Linux (the redactor missed POSIX paths) and the CI gate published nothing; the retry was refused by the compat gate (it took the stranded tag as its baseline); fixed both, and publish run 42070536432 went green on `f26f030`. Before that: **1.1.5** (2026-10-28, owner: "bump and release"): JSR `@jrmarcum/s3d-reportcompiler` (1.1.0–1.1.5 attested) and npm `@synapticforge1/s3d-reportcompiler` (1.1.0 by hand; 1.1.4 and 1.1.5 by OIDC with provenance). npm now lists **1.1.0, 1.1.4, 1.1.5, 1.1.6, 1.1.7 only** (1.1.7 added 2026-11-05, row below): the stray `0.0.0-stage` was deprecated, then unpublished, by the owner on 2026-11-05 (task 15). 1.1.5 = the first release through `publish.yml`'s CI gate (publish run 40759837547: "CI passed on the tagged commit" ✅, then JSR, then npm) and the first installed from `bun.lock`. 🔒 One tag releases both |
 | Latest release | **1.1.7** (2026-11-05, owner: "release 1.1.7"), tag `v1.1.7` on `9fd873b`, first attempt: publish run 42079741086 — CI on the tagged commit ✅, JSR ✅ (attested, Rekor `3697712013`), npm ✅ (`latest`, SLSA provenance, 10 files). Ships the 1.1.6-range review's fixes: TeX errors fail the build (MathJax typesets an error box by default, M3), every named entity decodes in maths (M1), attributes read inside tags only, the per-report reference guard; release-script hardening (pathspec bump commit, exact undo, fenced JSR test hook, `compat --unpublished`, shared `scripts/jsr-api.ts`). Gate: patch vs v1.1.6, v1.1.6's samples PASS. The global CLI here: 1.1.7 (`cli:install-published`) |
-| Unreleased on `main` | The fourth code review's seven fixes (2026-11-06, owner: "yes"; ledger #31–#37 in [known-issues.md](known-issues.md)): a stale PDF that cannot be deleted refuses the build; a third positional argument is an error; SVG sheets hoisted only where an attribute can say the same, the rest confined to their own `<svg>`; body sheets scoped; `html body` / `body.x` / `:not(a, b)` selectors mapped right; `id=` inside an attribute's value is text (bake AND reference guard); the verification decodes hex and named entities. Baked HTML byte-identical on the samples and the client set; 31/31 tests on Bun and Node 24.21 / 22.18; `compat` → patch. **Then the review of `scripts/` and the workflows** (same day, owner: "fix all"; ledger #38–#43): releases only from `main` (script and workflow), the sanitizer refuses filled fields it does not scrub and short values, `verify-release --npm` (the release passes it), a provenance grace under `--wait`, no CI cancellation on `main`, unknown `verify-release` flags refused; 34/34 tests. **Then a cold review of those fixes** (same day, owner: "yes fix all"; #44–#47): kept SVG sheets confined in `:where()` (no added specificity), the sanitizer's guard refuses a template it cannot read, `html`/`body` attribute qualifiers settled, the redactor redacts email addresses; baked HTML still byte-identical, 34/34. **Then a fourth pass** (#48–#51): the npm-fence test made able to fail, HTML's caseless attributes honoured when settling qualifiers, an empty path argument refused, a control generator guarded; 35/35. **Then a fifth pass** (#52–#54): `resetBakeState()` and `findBrokenReferences()` exported (the browser example uses both), `cmem/local/` ignored; 37/37. **Then a sixth** (#55): the render runs no report code — handlers and `javascript:` URLs stripped, a CSP in the document, the Chrome sandbox kept except as root; baked hashes change by that one line; 38/38. **Then a seventh** (#56–#58): the font cache per MathJax version (the old flat one adopted), only real fonts kept, `S3D_CHROME_NO_SANDBOX=1` for hosts with no usable sandbox; 39/39. ✅ **The sandbox on CI's Linux runners, checked 2026-11-06** (#58): run 42306618122 on the throwaway branch `ci/sandbox-check` (`1b1e498`), all four jobs green, every Chrome render with the sandbox on. `main` itself is still unpushed. **Then an eighth pass** (#59, #60): fonts checked by their header's recorded length too; the document's CSP forbids every outside load (0 requests during the render, measured; 5 before), `<meta>`/`<base>` leave report bodies; 40/40. **Then the full-project review** (four reviewers; groups A–E, #61–#65; commits `4d44dc4`…`bfa5e32`, API re-baselines `c348731`, `319a5bb`): 44/44 on Bun and Node 26.12 / 24.21 / 22.18, the suite now in CI on Node 22.18, 24 and 26 (`0bbdabb`); `api-surface.txt` 81 lines, 12 added vs v1.1.7 → still 1.2.0. 🔼 **The next release is therefore a MINOR, 1.2.0** (`bun run bump minor`): `compat` → 12 added vs v1.1.7, `api-surface.txt` 81 lines. ⚠️ The `publish.yml` / `ci.yml` changes are first exercised by the next real release. Not released — nothing is, unless the owner says so |
+| Unreleased on `main` | The fourth code review's seven fixes (2026-11-06, owner: "yes"; ledger #31–#37 in [known-issues.md](known-issues.md)): a stale PDF that cannot be deleted refuses the build; a third positional argument is an error; SVG sheets hoisted only where an attribute can say the same, the rest confined to their own `<svg>`; body sheets scoped; `html body` / `body.x` / `:not(a, b)` selectors mapped right; `id=` inside an attribute's value is text (bake AND reference guard); the verification decodes hex and named entities. Baked HTML byte-identical on the samples and the client set; 31/31 tests on Bun and Node 24.21 / 22.18; `compat` → patch. **Then the review of `scripts/` and the workflows** (same day, owner: "fix all"; ledger #38–#43): releases only from `main` (script and workflow), the sanitizer refuses filled fields it does not scrub and short values, `verify-release --npm` (the release passes it), a provenance grace under `--wait`, no CI cancellation on `main`, unknown `verify-release` flags refused; 34/34 tests. **Then a cold review of those fixes** (same day, owner: "yes fix all"; #44–#47): kept SVG sheets confined in `:where()` (no added specificity), the sanitizer's guard refuses a template it cannot read, `html`/`body` attribute qualifiers settled, the redactor redacts email addresses; baked HTML still byte-identical, 34/34. **Then a fourth pass** (#48–#51): the npm-fence test made able to fail, HTML's caseless attributes honoured when settling qualifiers, an empty path argument refused, a control generator guarded; 35/35. **Then a fifth pass** (#52–#54): `resetBakeState()` and `findBrokenReferences()` exported (the browser example uses both), `cmem/local/` ignored; 37/37. **Then a sixth** (#55): the render runs no report code — handlers and `javascript:` URLs stripped, a CSP in the document, the Chrome sandbox kept except as root; baked hashes change by that one line; 38/38. **Then a seventh** (#56–#58): the font cache per MathJax version (the old flat one adopted), only real fonts kept, `S3D_CHROME_NO_SANDBOX=1` for hosts with no usable sandbox; 39/39. ✅ **The sandbox on CI's Linux runners, checked 2026-11-06** (#58): run 42306618122 on the throwaway branch `ci/sandbox-check` (`1b1e498`), all four jobs green, every Chrome render with the sandbox on. `main` itself is still unpushed. **Then an eighth pass** (#59, #60): fonts checked by their header's recorded length too; the document's CSP forbids every outside load (0 requests during the render, measured; 5 before), `<meta>`/`<base>` leave report bodies; 40/40. **Then the full-project review** (four reviewers; groups A–E, #61–#65; commits `4d44dc4`…`bfa5e32`, API re-baselines `c348731`, `319a5bb`): 44/44 on Bun and Node 26.12 / 24.21 / 22.18, the suite now in CI on Node 22.18, 24 and 26 (`0bbdabb`); `api-surface.txt` 81 lines, 12 added vs v1.1.7 → still 1.2.0. **Then zip input** (task 16, owner: "Build it now"; `2734a34`, surface `c6ffaf5`): `s3d-reportcompiler <reports.zip>`, the verified PDF added into the zip; 48/48 on Bun and Node 26.12 / 24.21 / 22.18. 🔼 **The next release is therefore a MINOR, 1.2.0** (`bun run bump minor`): `compat` → 17 added vs v1.1.7, `api-surface.txt` 86 lines. ⚠️ The `publish.yml` / `ci.yml` changes are first exercised by the next real release. Not released — nothing is, unless the owner says so |
 | Attestation | 1.0.0 ✅ · 1.0.1 ✅ · 1.0.2 ❌ · 1.0.3 ❌ (both published locally, #26) · 1.0.4 ✅ Rekor `2439323008` · 1.1.0 ✅ Rekor `3544353215` · 1.1.1 ✅ Rekor `3544876876` · 1.1.2 ✅ Rekor `3545629708` · 1.1.3 ✅ Rekor `3546011937` · 1.1.4 ✅ Rekor `3546339510` · 1.1.5 ✅ Rekor `3547861777` (2026-10-28) · 1.1.6 ✅ Rekor `3696801217` · **1.1.7 ✅ Rekor `3697712013`** (`verify-release`, 2026-11-05); npm 1.1.4–1.1.7 ✅ SLSA provenance. ⚠️ `bun run release`'s wait outlasted by the CI gate on 1.1.5 (exit 2 "not on JSR yet", then attested) — `verify-release --wait` raised from 5 to 15 min — the first release from the org, with no `deno.json`, run from Bun |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin`, with their `release/v*` branches — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
 | Runtimes | every Node LTS line (22 from 22.18, 24, 26), Bun 1.4.4, Deno 2.9 LTS — one baked document, `bun run runtimes` (2026-10-26); Deno's leg runs in CI only since 2026-10-28 |
 | CI | `.github/workflows/ci.yml` on every push/PR — checks, JSR checks + upload check (Deno), runtime matrix, npm proof; green on main (run 40728999111, 2026-10-28) |
 | Toolchain | Bun: `bun run check` / `format:check` / `lint` / `runtimes` / `compat` / `bump` / `release`; no Deno locally since 2026-10-28 (🔒 owner goal, [bun-migration.md](bun-migration.md)) — **proved 2026-11-05: the whole local gate passes with Deno absent from the PATH** (task 12): compat reads tsc `.d.ts`; `cli:*` install via npm; JSR's checks (`deno check`, `doc --lint`, `check --doc`, `publish --dry-run`, the upload check) and the Deno legs of `runtimes` / `npm:prove` run in `.github/workflows/ci.yml`; Deno publishes from `publish.yml`; the manifest is `jsr.json` (no `deno.json`, task 12 step 7) |
-| API surface | `api-surface.txt`, **81 lines** since 2026-11-06 (69 at v1.1.7): 12 additions, none removed or changed — `findBrokenReferences`, `resetBakeState`, `bakeRemovals`, `cssWarnings` and two types on `.`; `listNames`, `fileIdentity`, `runWithTimeout` and a type on `./runtime`; the CLI flags `--keep-html` and `-?` now documented → floor **minor** vs v1.1.7, so the next release is 1.2.0. v1.1.0 was released at floor minor (`compareEachReport` and two types added; the Node 22.13 floor counted as minor, owner) |
+| API surface | `api-surface.txt`, **86 lines** since 2026-11-06 (69 at v1.1.7): 17 additions, none removed or changed — `findBrokenReferences`, `resetBakeState`, `bakeRemovals`, `cssWarnings`, `readZipReports`, `zipWithFile`, `checkZipUpdate` and three types on `.`; the usage line `s3d-reportcompiler <reports.zip>`; `listNames`, `fileIdentity`, `runWithTimeout` and a type on `./runtime`; the CLI flags `--keep-html` and `-?` now documented → floor **minor** vs v1.1.7, so the next release is 1.2.0. v1.1.0 was released at floor minor (`compareEachReport` and two types added; the Node 22.13 floor counted as minor, owner) |
 | Verification | set-wide AND per-report conservation (task 7, 2026-10-28); pdfjs-dist 6.4.299, no polyfill warnings (task 14) |
 | Dependencies | **Bun installs them** (`bun.lock`; owner, 2026-10-28: "dependency installs should go to bun, because it is faster") — the same 20 package versions as npm's lockfile, ~2× faster warm (15.4 s vs `npm ci` 29.4 s); `bun audit`: **no vulnerabilities** (49 packages; `npm audit` 0 since the `@xmldom/xmldom` 0.9.12 override, task 13) |
 
@@ -1054,7 +1054,7 @@ against this package:
 
 ---
 
-## 🔴 16. Take SkyCiv's zip directly — the natural integration point (owner questions, 2026-11-06)
+## ✅ 16. Take SkyCiv's zip directly — DONE 2026-11-06, unreleased (`2734a34`, surface `c6ffaf5`)
 
 **How S3D delivers reports** (owner): it creates each HTML file, bundles them into one zip, and the
 browser downloads it to the Downloads folder. There is no stream to hook into, so a programmatic
@@ -1063,17 +1063,65 @@ matter for a generator written in TS/JS). **Measured from the owner's example ex
 (`…_pack.zip`, entry list only, nothing extracted): 75 entries, all `member_N_report.html`, flat,
 no folders, no other files; ~1.3 MB zipped, 48–67 KB per report; 12 share one size (47,928 B).**
 
-The proposal: `s3d-reportcompiler <reports.zip> [output.pdf]` reads the zip's `.html` entries in
-memory (Bun/Node/Deno all inflate raw deflate natively — no new dependency), treats exactly those
-as the reports, and compiles them with every check as now; the PDF lands beside the zip by
-default. Nothing is unpacked, so no stray file can join the set. Open: entries other than `.html`
-(refuse and name them), nested folders (refuse), zip64 / encryption (refuse). That 75-report export
-would also make a second real-world check set, larger than the 48 — only with the owner's go-ahead,
-and only inside the git-ignored `local/`.
+**Scope (owner, 2026-11-06): "parsing the html files in from the zip file, then creating the
+bundled html file and pdf file and running the check on the bundled html file and pdf file, then
+adding the resulting pdf to the zip file."** So `s3d-reportcompiler <reports.zip>`:
+
+1. **Read.** Parse the zip's central directory in memory and inflate each `.html` entry
+   (`DecompressionStream("deflate-raw")`: Bun, Node, Deno and browsers have it, so no new
+   dependency and the code stays in the I/O-free core). Check each entry's CRC-32 as it is read.
+   Nothing is unpacked to disk. Exactly the `.html` entries are the reports, in the order the
+   folder build uses.
+2. **Refuse** (and name the entry): a folder or nested path; an encrypted entry; zip64; a
+   compression method other than stored or deflate; a bad CRC; two names that differ only in
+   case; and any entry other than `.html`, except this tool's own PDF from an earlier run (see 5).
+3. **Bundle, render and check** with the existing pipeline unchanged: bake, guard, the bundled
+   HTML, the Chrome print, the repack, then step-4 verification of the PDF against the bundled
+   HTML and against each report. A FAIL leaves the zip **untouched**.
+4. **Add the PDF to the zip.** Only after a PASS:
+   - Write a new zip beside the old one. Copy every original entry's compressed bytes verbatim,
+     so the reports are not re-encoded, and add `<zip name>.pdf` stored (a PDF is already
+     compressed).
+   - Re-read that new zip: every original entry's name, CRC and size must be unchanged, and the
+     PDF entry must match the verified PDF byte for byte.
+   - Then rename it over the original, which is atomic.
+5. **A second run** finds its own PDF in the zip. That entry is not a report, and it is replaced.
+6. **The bundled HTML is NOT added to the zip.** It is a `.html`, so the next run would read it as
+   a report. It is kept beside the zip as now (`--no-keep-html` removes it).
+
+**Decided (owner, 2026-11-06): "Into the original zip"** — no copy and no loose PDF; "Build it now".
+
+**As built.** Everything above, plus what building it showed was needed:
+- **Every byte before the central directory belongs to exactly one entry**, its data descriptor
+  included. A descriptor must agree with the central directory. Bytes no entry claims are a file
+  another reader could see.
+- **A name without the UTF-8 flag is read only if it is ASCII.** A guessed code page could
+  misname a report.
+- **An entry stops unpacking at its recorded size.**
+- **The zip is replaced only if it still holds the bytes the reports were read from.** After the
+  rename it is read back again.
+- **A file of the baked HTML's name beside the zip that is not a bake is the user's.** The build
+  stops rather than overwrite it.
+- **A zip takes no output argument and no `--no-verify`.**
+- **If the PDF passed but the zip could not be updated** (locked, changed, check failed), the
+  verified PDF is kept as `<name>.pdf` beside the zip, if that name is free, and the build
+  exits 1.
+
+The core exports `readZipReports`, `zipWithFile`, `checkZipUpdate` and `ZipReports`. The CLI
+wiring is in `main.ts` (`addPdfToZip`).
+
+**Measured on the owner's export** (in memory, nothing written, counts only): 75 reports read in
+23 ms. All 75 entries are deflate, flags 2, made-by Unix, no extras, no descriptors, no comment.
+An update round-trips through `checkZipUpdate`.
+
+**Not yet:** a full build of that export. It would write client output beside the zip, so it
+needs the owner's go-ahead. The same applies to making it a second real check set in `local/`.
 
 ---
 
-## 🔴 17. A browser version, all client-side (owner question, 2026-11-06)
+## ⚪ 17. A browser version — NOT A GOAL (owner, 2026-11-06: "Task 17 is not a goal")
+
+Kept as a record of what was weighed. Task 16 is the integration.
 
 The core already runs in a browser (`tests/browser_example.html`: bakes, guards, prints; measured
 in headless Chrome the same day). What a usable web version needs: a folder / zip picker or drop

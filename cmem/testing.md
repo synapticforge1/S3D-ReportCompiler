@@ -417,6 +417,29 @@ pinning steps, run verbatim in bash against the real remote and JSR, 7/7 verdict
 release gate passes from Git Bash (it failed: `tar: Cannot connect to C:`) and PowerShell. Not run
 here: the workflows themselves (the next release), the Linux branch of the redactor test (CI).
 
+**2026-11-06, zip input (roadmap task 16; owner: "Build it now"):** **48/48 on `bun test` and
+`node --test` on Node 26.12, 24.21 and 22.18.** The 4 new tests use their own zip writer and
+reader (`testZip` / `testUnzip`, built on `node:zlib`), never the tool's.
+- **The PASS test** builds the 13 samples as a zip in the forms other tools write too: stored,
+  data descriptors, a comment. The reports must come back byte-identical, the comment kept, nothing
+  but `pack.html` beside the zip, and a re-run must replace the PDF rather than add a second.
+- **A failing build** (the hidden-content control, zipped) leaves the zip byte-identical.
+- **16 refused shapes** in the core, and through the CLI: a non-report entry, an output argument,
+  `--no-verify`, a missing zip, and a user's own `pack.html` beside the zip.
+- **The update check** catches a changed report byte, PDF byte or comment, a different PDF, and a
+  dropped entry.
+
+Inversions: with the CRC check off, or the every-byte check off, the refusal test fails.
+
+By hand on the samples' zip, made by Windows `tar -a`: PASS on Bun, Deno and Node 22.18. The
+result is read by Windows `tar` (14 entries) and .NET's `ZipFile` (14, sizes match). ⚠️ Feeding a
+zip to `tar` on STDIN from a Bun `spawnSync` under-read it (73 entries; 75 by path). That was the
+pipe, not the zip.
+
+The owner's 75-report export: read in memory, counts only, 23 ms; a round trip through
+`zipWithFile` / `checkZipUpdate` passed. Folder builds' baked HTML is unchanged (`37792fe3…`,
+`ae70d5e0…`).
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in
