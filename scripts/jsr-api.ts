@@ -5,7 +5,7 @@
  * three-way answer live here, once (2026-11-05). The npm lookup lives beside it (2026-11-06): one
  * tag releases both, and `verify-release --npm` checks both.
  *
- * Test hooks: `S3D_JSR_API` and `S3D_NPM_API` (base URLs), `S3D_JSR_TIMEOUT_MS`, `S3D_JSR_RETRY_MS`
+ * Test hooks: `S3D_JSR_API`, `S3D_NPM_API` and `S3D_GITHUB_API` (base URLs), `S3D_JSR_TIMEOUT_MS`, `S3D_JSR_RETRY_MS`
  * (both registries). They exist so tests/build.test.ts can stand fakes on 127.0.0.1. Fenced, because the release guard
  * reads this: the base URL is honoured ONLY for a loopback host (anything else is refused), every
  * run that uses it says so on stderr, and `publish.ts` never tags while it is set.
@@ -21,7 +21,7 @@ export type Look = { info: VersionInfo } | { missing: true } | { error: string }
 export const NPM_NAME = "@synapticforge1/s3d-reportcompiler";
 
 /** A version's npm record, as far as these scripts read it: does npm hold a provenance statement? */
-export type NpmInfo = { provenance: boolean };
+type NpmInfo = { provenance: boolean };
 
 /** One look at npm, three answers like {@link Look}. */
 export type NpmLook = { info: NpmInfo } | { missing: true } | { error: string };
@@ -60,6 +60,39 @@ function fencedBase(hookName: string, real: string, registry: string): string {
 
 const apiBase = () => fencedBase("S3D_JSR_API", REAL_API, "JSR");
 const npmBase = () => fencedBase("S3D_NPM_API", REAL_NPM, "npm");
+const REAL_GITHUB = "https://api.github.com";
+const githubBase = () => fencedBase("S3D_GITHUB_API", REAL_GITHUB, "GitHub");
+
+/** The repository the GitHub release belongs to. */
+export const GITHUB_REPO = "synapticforge1/S3D-ReportCompiler";
+
+/**
+ * Is there a GitHub release for `tag`? Three answers, like {@link lookupVersion}: a release is the
+ * last thing publish.yml makes (`finalize`), after both registries, and nothing asked for it -- a
+ * release recovered by "Run workflow" got none, and every check said ✅ (2026-11-07 review).
+ */
+export async function lookupGithubRelease(
+  tag: string,
+): Promise<{ found: boolean } | { error: string }> {
+  const url = `${githubBase()}/repos/${GITHUB_REPO}/releases/tags/${tag}`;
+  if (githubBase() !== REAL_GITHUB)
+    console.error(`  ⚠️ S3D_GITHUB_API is set: asking ${url}, NOT GitHub (test hook)`);
+  try {
+    const res = await fetch(url, {
+      headers: {
+        accept: "application/vnd.github+json",
+        "user-agent": "s3d-reportcompiler-release",
+      },
+      signal: AbortSignal.timeout(JSR_TIMEOUT_MS),
+    });
+    await res.body?.cancel();
+    if (res.status === 404) return { found: false };
+    if (!res.ok) return { error: `HTTP ${res.status}` };
+    return { found: true };
+  } catch (e) {
+    return { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
+  }
+}
 
 /** True while the test hook redirects the lookup (callers that would tag must refuse). */
 export const usingTestApi = (): boolean => apiBase() !== REAL_API;
@@ -68,7 +101,7 @@ export const JSR_TIMEOUT_MS = envMs("S3D_JSR_TIMEOUT_MS", 20_000);
 export const JSR_RETRY_MS = envMs("S3D_JSR_RETRY_MS", 15_000);
 
 /** `@scope/name` + version → the JSR API URL for that version. */
-export function versionUrl(packageName: string, version: string): string {
+function versionUrl(packageName: string, version: string): string {
   const [scope, name] = packageName.replace(/^@/, "").split("/");
   return `${apiBase()}/scopes/${scope}/packages/${name}/versions/${version}`;
 }

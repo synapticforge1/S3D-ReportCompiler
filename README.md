@@ -211,6 +211,12 @@ you keep a clone: it builds the npm package from your working tree and installs 
 
   `bun run runtimes` re-checks a clone against Node's own LTS schedule — see
   [Supported runtimes](#supported-runtimes) below.
+- **Two dependency pins hold in this repository only.** `package.json` `overrides` pins
+  `@xmldom/xmldom` to 0.9.12 (MathJax's `speech-rule-engine` asks for 0.9.10, which has an
+  advisory) and `@napi-rs/canvas` to 1.0.11. A package manager applies `overrides` from the ROOT
+  project only, so an install of the published package resolves them afresh: add the same
+  `overrides` (npm, Bun) or `pnpm.overrides` to your own `package.json` to get them. MathJax uses
+  `@xmldom/xmldom` for its speech output, which this tool never turns on.
 
 ### First run
 

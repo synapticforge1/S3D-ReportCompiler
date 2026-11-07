@@ -2843,7 +2843,63 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
     /Rekor log ID: 81/,
     /S3D_NPM_API=https:\/\/npm\.example\.invalid is not a loopback/,
   );
+
+  // --github (review 3, 2026-11-07): the GitHub release is publish.yml's last step, and nothing
+  // asked for it. Asked only once both registries pass; fenced like the others.
+  const provenance = json({
+    version: "9.9.9",
+    dist: { attestations: { provenance: { predicateType: "x" } } },
+  });
+  const ghCases: Array<[string, Handler, number, RegExp]> = [
+    ["exists", json({ tag_name: "v9.9.9" }), 0, /the GitHub release v9\.9\.9 exists/],
+    ["missing", json({}, 404), 5, /NO GitHub release v9\.9\.9/],
+    ["503", json({}, 503), 5, /Could not ask GitHub whether the release v9\.9\.9 exists: HTTP 503/],
+  ];
+  for (const [label, handler, code, pattern] of ghCases) {
+    const r = await withFakeJsr(json({ rekorLogId: "82" }), (jsr) =>
+      withFakeJsr(provenance, (npm) =>
+        withFakeJsr(handler, (gh) =>
+          runAsync([VR, "9.9.9", "--npm", "--github"], {
+            env: {
+              ...process.env,
+              ...fast,
+              S3D_JSR_API: jsr,
+              S3D_NPM_API: npm,
+              S3D_GITHUB_API: gh,
+            },
+          }),
+        ),
+      ),
+    );
+    assert.equal(r.code, code, `github ${label}:\n${r.out}`);
+    has(r.out, /S3D_GITHUB_API is set/, pattern);
+  }
+  const ghAway = await withFakeJsr(json({ rekorLogId: "83" }), (jsr) =>
+    runAsync([VR, "9.9.9", "--github"], {
+      env: {
+        ...process.env,
+        ...fast,
+        S3D_JSR_API: jsr,
+        S3D_GITHUB_API: "https://gh.example.invalid",
+      },
+    }),
+  );
+  assert.notEqual(ghAway.code, 0, ghAway.out);
+  has(ghAway.out, /S3D_GITHUB_API=https:\/\/gh\.example\.invalid is not a loopback/);
 });
+
+test(
+  "release: an unknown argument is refused before anything is done",
+  { timeout: TIMEOUT },
+  async () => {
+    const dir = releaseClone("release-unknown-arg");
+    const before = headOf(dir);
+    const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wiat"], { cwd: dir });
+    assert.equal(r.code, 64, r.out);
+    has(r.out, /Unknown argument\(s\): --no-wiat/);
+    assert.equal(headOf(dir), before, "something was committed");
+  },
+);
 
 /**
  * A throwaway clone set up so `bun run release` makes its bump commit: package.json one version
@@ -3126,10 +3182,12 @@ test("review 2, group D: the release path checks what it publishes", () => {
     const next = yml.slice(at + 4).search(/\n {2}[a-z-]+:\n/);
     return next < 0 ? yml.slice(at) : yml.slice(at, at + 4 + next);
   };
-  const [ciGreen, publish, record, npm, finalize] = [
+  const [ciGreen, checks, publish, record, npmBuild, npm, finalize] = [
     "ci-green",
+    "checks",
     "publish",
     "record",
+    "npm-build",
     "npm",
     "finalize",
   ].map(job);
@@ -3141,10 +3199,43 @@ test("review 2, group D: the release path checks what it publishes", () => {
   assert.match(ciGreen, /head_sha=\$\{SHA\}&event=push/, "CI read from a run of any event");
   assert.match(publish, /contents: read/, "the publish job (bun install) may write");
   assert.doesNotMatch(publish, /git push|gh release create/, "the publish job writes");
-  const gate = publish.indexOf("compat.ts release");
-  assert.ok(gate > 0 && gate < publish.indexOf("run: deno publish"), "no SemVer gate before JSR");
+  // The SemVer gate and the upload check run before JSR -- in `checks`, which publish needs.
+  assert.match(checks, /compat\.ts release/, "no SemVer gate before JSR");
+  assert.match(checks, /jsr-upload-check/, "no upload check before JSR");
+  assert.match(publish, /needs: \[ci-green, checks\]/, "JSR does not wait on the gates");
   assert.match(record, /needs: \[ci-green, publish\][\s\S]*refs\/heads\/release\/\$\{TAG\}/);
-  assert.match(npm, /needs: \[ci-green, publish\]/, "npm waits on the release branch");
+  assert.match(npm, /needs: \[ci-green, publish, npm-build\]/, "npm waits on the release branch");
+  // Review 3 (2026-11-07). The publishing credential (`id-token: write`) only where nothing
+  // installed runs: the gates and the npm build hold none.
+  for (const [name, text] of [
+    ["checks", checks],
+    ["npm-build", npmBuild],
+  ] as const) {
+    assert.doesNotMatch(text, /id-token/, `${name} can mint a publishing token`);
+  }
+  const code = (job: string) => job.replace(/^\s*#.*$/gm, ""); // comments are not steps
+  for (const [name, text] of [
+    ["publish", code(publish)],
+    ["npm", code(npm)],
+  ] as const) {
+    assert.doesNotMatch(
+      text,
+      /bun install(?![^\n]*--ignore-scripts)|npm:build|compat\.ts|jsr-upload-check/,
+      `${name} runs dependency code beside its publishing token`,
+    );
+  }
+  //   A run for the same tag never cancels one in progress (it could stop between JSR and the
+  //   release branch); every action is pinned to a commit; npm-only recovery gets its release.
+  assert.match(yml, /cancel-in-progress: false/);
+  for (const file of ["publish.yml", "ci.yml"]) {
+    const text = readFileSync(join(ROOT, ".github", "workflows", file), "utf8");
+    assert.doesNotMatch(
+      text,
+      /uses: \S+@(?![0-9a-f]{40}\b)/,
+      `${file}: an action not pinned to a commit`,
+    );
+  }
+  assert.match(finalize, /github\.event_name == 'workflow_dispatch'/, "no release after npm-only");
   assert.match(
     npm,
     /REL=\$\(git ls-remote origin "refs\/heads\/release\/\$\{TAG\}"/,

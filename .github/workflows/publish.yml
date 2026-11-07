@@ -19,12 +19,15 @@ on:
         description: "Existing tag to publish to npm only (e.g. v1.1.0)"
         required: true
 
-# One run per tag at a time; a newer run for the same tag cancels the older. Without it, a release
-# retried after moving its tag (publish.ts force-moves an unpublished tag, by design) left the
-# first run alive, and it went on to publish the OLD commit under that version (2026-11-06 review).
+# One run per tag at a time; a newer run for the same tag WAITS for the older -- it never cancels
+# it. Cancelling (2026-11-06 to -07) could stop a run after `deno publish` succeeded and before
+# `record` wrote release/<tag>: JSR had the version, npm-only recovery needs that branch, so npm
+# could never get it (2026-11-07 review). Cancelling is not needed for the case it was added for --
+# a release retried after moving its tag: the old run's ci-green refuses a tag that no longer
+# points at its pushed commit, and every job re-checks the tag right before its immutable step.
 concurrency:
   group: publish-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # Nothing is published from a commit CI did not pass. `bun run release` pushes the commit to main
@@ -114,25 +117,68 @@ jobs:
           echo "::error::No completed CI run for ${SHA} after 40 minutes — refusing to publish."
           exit 1
 
-  publish:
+  # The gates that RUN third-party code -- the dependencies (MathJax, pdf.js, the native canvas) in
+  # the compatibility gate, Deno and tar in the upload check -- in a job that holds no publishing
+  # credential. `id-token: write` IS the credential (JSR and npm both trust this workflow's OIDC
+  # token), and every step of a job that has it can ask for one: these used to run in the publish
+  # job itself (2026-11-07 review). The publish job below installs without running anything.
+  checks:
     needs: ci-green
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    # No write access to the repository here: this job runs `bun install` (third-party code), and
-    # the only writes a release makes -- its branch and its GitHub release -- are in the `record`
-    # and `finalize` jobs, which install nothing (2026-11-06 review).
+    permissions:
+      contents: read
+    steps:
+      # Every action pinned to a commit (2026-11-07 review): a moved tag of a third-party action
+      # would otherwise run new code in a release. The comment names the version it was.
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.ci-green.outputs.sha }} # the exact commit ci-green resolved and checked
+          fetch-depth: 0 # the SemVer gate reads the last v* tag
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The last gate before an IMMUTABLE version: publish to a fake JSR on 127.0.0.1 (dummy token,
+      # no provenance) and read the tarball — `deno publish` has exited 0 on a corrupted upload.
+      - name: The upload is this package, intact
+        run: bun scripts/jsr-upload-check.ts
+
+      # SemVer is a gate result, and the gate ran only on the developer's machine (`bun run
+      # release`): a hand-edited version and a pushed tag published a patch that removed an export,
+      # provided CI was green (2026-11-06 review). The same gate, here, on the tagged commit: the
+      # surface since the last tag, and the last tag's samples on the new code (Chrome renders).
+      - name: The compatibility gate allows this version
+        run: bun scripts/compat.ts release "$(bun -p "require('./jsr.json').version")" --unpublished
+
+  publish:
+    needs: [ci-green, checks]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # No write access to the repository here, and no third-party code run: the dependencies are
+    # installed with their scripts off, for `deno publish` to READ (nodeModulesDir "manual"). The
+    # only writes a release makes -- its branch and its GitHub release -- are in the `record` and
+    # `finalize` jobs, which install nothing (2026-11-06 review).
     permissions:
       contents: read
       id-token: write
 
     steps:
-      # v5 targets Node 24. v4 targets Node 20, which the runners now force onto Node 24 anyway and
-      # warn about — noise that would eventually hide a warning worth reading.
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.ci-green.outputs.sha }} # the exact commit ci-green resolved and checked
-          fetch-depth: 0 # the SemVer gate reads the last v* tag
 
       # DO NOT pin this to chase a missing JSR provenance attestation. That experiment was already
       # run on the sibling `wasmtk` project on 2026-07-30 and RULED OUT: its provenance history
@@ -144,7 +190,7 @@ jobs:
       # The absence was a JSR-side issue, not a defect in this workflow's provenance setup. Floating
       # `v2.x` is correct, and nothing here needs changing to obtain an attestation.
       - name: Setup Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
           deno-version: v2.x
 
@@ -159,12 +205,13 @@ jobs:
       # rather than drift. "manual" is deliberate — see cmem/architecture.md: it keeps Deno reading
       # the same node_modules as Node and Bun, which is what makes the three produce identical output.
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      # --ignore-scripts: in the job that can mint a publishing token, nothing installed runs.
+      - name: Install dependencies (no scripts)
+        run: bun install --frozen-lockfile --ignore-scripts
 
       # Provenance requires a GitHub OIDC token. The `id-token: write` permission above is what
       # injects ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN into the runner. If they are absent despite the
@@ -178,11 +225,6 @@ jobs:
           else
             echo "::warning::OIDC token NOT available (URL present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}, TOKEN present: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}). deno publish will skip provenance. Verify id-token:write is honored — check org/enterprise Settings → Actions → General OIDC policy."
           fi
-
-      # The last gate before an IMMUTABLE version: publish to a fake JSR on 127.0.0.1 (dummy token,
-      # no provenance) and read the tarball — `deno publish` has exited 0 on a corrupted upload.
-      - name: The upload is this package, intact
-        run: bun scripts/jsr-upload-check.ts
 
       # Immediately before the immutable step: the tag still points at this commit, it names the
       # version jsr.json declares, and JSR does not have that version yet. Until 2026-11-06 the
@@ -214,15 +256,28 @@ jobs:
           fi
           echo "✅ ${TAG} = ${SHA}, jsr.json ${VERSION}, not on JSR yet"
 
-      # SemVer is a gate result, and the gate ran only on the developer's machine (`bun run
-      # release`): a hand-edited version and a pushed tag published a patch that removed an export,
-      # provided CI was green (2026-11-06 review). The same gate, here, on the tagged commit: the
-      # surface since the last tag, and the last tag's samples on the new code (Chrome renders).
-      - name: The compatibility gate allows this version
-        run: bun scripts/compat.ts release "$(bun -p "require('./jsr.json').version")" --unpublished
-
       - name: Publish to JSR
         run: deno publish
+
+  # Informational, in its own job: inside `publish` its two-minute poll kept the job running after
+  # `deno publish`, and `record` (the release branch npm-only recovery needs) waited on it.
+  jsr-score:
+    needs: [ci-green, publish]
+    if: github.event_name == 'push' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.ci-green.outputs.sha }}
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
 
       # Reports whether JSR recorded a provenance attestation. It does NOT fail the job.
       #
@@ -286,7 +341,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.ci-green.outputs.sha }}
       - name: Create the release branch at the commit JSR got
@@ -306,7 +361,10 @@ jobs:
   # JS + .d.ts, a generated manifest with a bin). Trusted publishing: `npm publish` authenticates
   # with this run's OIDC token (id-token: write) — no npm token exists anywhere — and npm records
   # provenance itself. CI proves the tarball (`npm:prove`) on every push, the tagged commit's too.
-  npm:
+  # The npm package is BUILT here, with no publishing credential: the build runs tsc and the
+  # installed dependencies (2026-11-07 review: it ran in the job holding `id-token: write`). The
+  # `npm` job below publishes this artifact, and runs nothing but npm and git.
+  npm-build:
     needs: [ci-green, publish]
     # After a successful JSR publish on a tag push; or alone, on "Run workflow" with a tag -- and
     # in both cases only after ci-green passed for the commit (the dispatch path used to skip it:
@@ -317,27 +375,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # The exact commit ci-green resolved -- the one JSR got. By tag NAME (as it was), a tag
           # moved after the JSR job had checked out its commit would have given npm another one.
           ref: ${{ needs.ci-green.outputs.sha }}
 
-      # Node 24 bundles npm 12, past trusted publishing's npm 11.5.1 floor. NO `registry-url`: with
-      # it, setup-node writes an .npmrc whose token is NODE_AUTH_TOKEN's placeholder
-      # (XXXXX-XXXXX-…), and when the OIDC exchange failed npm fell back to that "token" and the
-      # registry answered 404 (1.1.1, run 40739241100). Without it a failed exchange says so.
-      - name: Setup Node
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
 
@@ -347,8 +394,46 @@ jobs:
       - name: Build the npm package
         run: bun run npm:build
 
+      - name: Keep the package for the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-dist
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  npm:
+    needs: [ci-green, publish, npm-build]
+    if: "!cancelled() && needs.npm-build.result == 'success'"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      # For the pinned check below (the tag and the release branch, read with git), and jsr.json.
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.ci-green.outputs.sha }}
+
+      # Node 24 bundles npm 12, past trusted publishing's npm 11.5.1 floor. NO `registry-url`: with
+      # it, setup-node writes an .npmrc whose token is NODE_AUTH_TOKEN's placeholder
+      # (XXXXX-XXXXX-…), and when the OIDC exchange failed npm fell back to that "token" and the
+      # registry answered 404 (1.1.1, run 40739241100). Without it a failed exchange says so.
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+
+      - name: The package npm-build made
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: npm-dist
+          path: dist/
+
       # The tag names the version; the built manifest must say the same, or this would publish a
-      # version nobody tagged.
+      # version nobody tagged. And the manifest runs nothing on publish (no `scripts`).
       - name: The package version is the tag's
         env:
           TAG: ${{ needs.ci-green.outputs.tag }}
@@ -356,6 +441,10 @@ jobs:
           VERSION=$(node -p 'require("./dist/package.json").version')
           if [ "v${VERSION}" != "${TAG}" ]; then
             echo "::error::dist/package.json is ${VERSION}, the tag is ${TAG} — refusing to publish."
+            exit 1
+          fi
+          if [ "$(node -p 'Object.keys(require("./dist/package.json").scripts ?? {}).length')" != "0" ]; then
+            echo "::error::dist/package.json has scripts, which npm publish would run here — refusing."
             exit 1
           fi
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
@@ -395,7 +484,7 @@ jobs:
             exit 1
           fi
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            PKG=$(bun -p "require('./jsr.json').name"); SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}; NAME=${PKG#*/}
+            PKG=$(node -p "require('./jsr.json').name"); SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}; NAME=${PKG#*/}
             CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://api.jsr.io/scopes/${SCOPE}/packages/${NAME}/versions/${VERSION}")
             if [ "$CODE" != "200" ]; then
               echo "::error::JSR answered ${CODE} for ${PKG}@${VERSION}: npm-only publishing is for a version already on JSR — refusing."
@@ -451,10 +540,15 @@ jobs:
           cat ../npm-publish.log
 
   # The GitHub release comes LAST, after both registries: it used to be created between JSR and npm,
-  # so a failure there skipped npm. Installs nothing; may write.
+  # so a failure there skipped npm. Installs nothing; may write. On "Run workflow" (npm-only
+  # recovery) too: it used to run on a tag push alone, so a release whose npm job failed and was
+  # recovered by hand got no GitHub release, and nothing said so (2026-11-07 review). There the
+  # release branch exists already -- the npm job required it.
   finalize:
     needs: [ci-green, record, npm]
-    if: github.event_name == 'push' && needs.record.result == 'success' && needs.npm.result == 'success'
+    if: >-
+      !cancelled() && needs.npm.result == 'success' &&
+      (needs.record.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -59,6 +59,12 @@ CompiledPDF/
 !/tests/HTMLFilesToBeCompiled/*.html
 !/tests/browser_example.html
 
+# The lint canary's planted file (scripts/check-lint-canary.ts): removed when a run ends, but a run
+# killed mid-way left it, stageable (2026-11-07 review). NOT the format canary's: `bun fmt` skips
+# ignored files, so ignoring them blinds that canary (measured: "4 problem(s)"); it clears its
+# leftovers before planting instead.
+/scripts/__lint_canary.ts
+
 # Generated browser bundle — rebuild with `bun run bundle:browser`
 /tests/report_core.browser.js
 

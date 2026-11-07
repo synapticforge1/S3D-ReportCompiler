@@ -47,6 +47,17 @@ const manifest = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url)
   version: string;
 };
 
+// Unknown arguments are refused before anything is done: `--no-wiat` used to be ignored (the #12 /
+// #43 class; verify-release refuses them, this did not) (2026-11-07 review).
+const KNOWN_ARGS = ["--no-wait"];
+const unknownArgs = process.argv.slice(2).filter((a) => !KNOWN_ARGS.includes(a));
+if (unknownArgs.length > 0) {
+  console.error(
+    `Unknown argument(s): ${unknownArgs.join(", ")}. Supported: ${KNOWN_ARGS.join(", ")}`,
+  );
+  process.exit(64);
+}
+
 const version = manifest.version;
 const tag = `v${version}`;
 
@@ -335,7 +346,9 @@ console.log(`Watch progress at: https://github.com/synapticforge1/S3D-ReportComp
 // Skip with --no-wait when you do not want to hold the terminal; the check is
 // then `bun run verify-release` whenever you like.
 if (process.argv.slice(2).includes("--no-wait")) {
-  console.log(`\n--no-wait: not waiting. Confirm with:  bun run verify-release`);
+  console.log(
+    `\n--no-wait: not waiting. Confirm with:  bun run verify-release -- --wait --npm --github`,
+  );
 } else {
   console.log(`\nWaiting for the workflow to publish, then checking provenance…`);
   console.log(
@@ -346,10 +359,11 @@ if (process.argv.slice(2).includes("--no-wait")) {
   // 2026-10-26 the output was captured and never printed (Deno's `.output()`), so a release
   // showed nothing here and an unattested one was visible only as an exit code.
   // `--npm`: one tag releases both registries, so both are confirmed. It used to ask JSR only,
-  // and a failed npm job (1.1.1's) still ended the release with ✅ and exit 0.
+  // and a failed npm job (1.1.1's) still ended the release with ✅ and exit 0. `--github`: and
+  // the GitHub release, publish.yml's last step (2026-11-07 review: nothing asked for it).
   const check = spawnSync(
     self[0],
-    [...self.slice(1), "scripts/verify-release.ts", version, "--wait", "--npm"],
+    [...self.slice(1), "scripts/verify-release.ts", version, "--wait", "--npm", "--github"],
     { stdio: "inherit" },
   );
   const code = check.status ?? 1;

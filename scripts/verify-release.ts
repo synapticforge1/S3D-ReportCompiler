@@ -6,6 +6,8 @@
  *   bun run verify-release --wait     # poll while JSR ingests (after a release)
  *   bun run verify-release --npm      # npm too: published there WITH provenance (the release
  *                                     # passes this; older versions predate npm, so not default)
+ *   bun run verify-release --github   # and the GitHub release for the tag exists (the release
+ *                                     # passes this too)
  *
  * WHY THIS EXISTS
  * ---------------
@@ -28,14 +30,17 @@
  * Exit codes: 0 attested (and, with --npm, on npm with provenance) · 1 published but NOT
  * attested (yanked or not) · 2 not published yet, or JSR could not be asked · 3 attested but
  * YANKED · 4 (--npm) attested on JSR, but npm lacks the version, its provenance, or an answer ·
- * 64 a usage error.
+ * 5 (--github) both registries fine, but no GitHub release for the tag, or no answer · 64 a
+ * usage error.
  */
 
 import { readFileSync } from "node:fs";
 import {
+  GITHUB_REPO,
   JSR_RETRY_MS,
   JSR_TIMEOUT_MS,
   type Look,
+  lookupGithubRelease,
   lookupNpmVersion,
   lookupVersion,
   NPM_NAME,
@@ -52,9 +57,10 @@ const argv = process.argv.slice(2);
 const args = argv.filter((a) => !a.startsWith("-"));
 // Unknown flags are refused, not ignored: a mistyped `--wiat` straight after a release used to
 // become a single look, and report "not on JSR" for a release that was simply still running.
-const unknownFlags = argv.filter((a) => a.startsWith("-") && a !== "--wait" && a !== "--npm");
+const FLAGS = ["--wait", "--npm", "--github"];
+const unknownFlags = argv.filter((a) => a.startsWith("-") && !FLAGS.includes(a));
 if (unknownFlags.length > 0 || args.length > 1 || (args[0] && !/^\d+\.\d+\.\d+$/.test(args[0]))) {
-  console.error(`usage: verify-release.ts [X.Y.Z] [--wait] [--npm]`);
+  console.error(`usage: verify-release.ts [X.Y.Z] [--wait] [--npm] [--github]`);
   if (unknownFlags.length > 0) console.error(`  unknown option(s): ${unknownFlags.join(", ")}`);
   if (args.length > 1) console.error(`  one version at most; got ${args.join(", ")}`);
   else if (args[0]) console.error(`  not a version: ${args[0]}`);
@@ -62,6 +68,7 @@ if (unknownFlags.length > 0 || args.length > 1 || (args[0] && !/^\d+\.\d+\.\d+$/
 }
 const wait = argv.includes("--wait");
 const checkNpm = argv.includes("--npm");
+const checkGithub = argv.includes("--github");
 const version = args[0] ?? jsrJson.version;
 
 console.log(`Checking ${jsrJson.name}@${version} …`);
@@ -132,7 +139,8 @@ if (info.yanked && info.rekorLogId) {
 if (info.rekorLogId) {
   console.log(`\n✅ ${version} is published AND attested.`);
   console.log(`   Rekor log ID: ${info.rekorLogId}`);
-  process.exit(checkNpm ? await npmVerdict() : 0);
+  const npm = checkNpm ? await npmVerdict() : 0;
+  process.exit(npm !== 0 ? npm : checkGithub ? await githubVerdict() : 0);
 }
 
 console.error(
@@ -148,6 +156,43 @@ console.error(`     bun run bump`);
 console.error(`     bun run release\n`);
 console.error(`   ⚠️  jsr.io may still show score 100 — provenance is not scored.`);
 process.exit(1);
+
+/**
+ * `--github`: publish.yml's last job makes the GitHub release, after both registries. Returns 0
+ * when it exists, else 5 -- waited for under `--wait`, like the registries.
+ */
+async function githubVerdict(): Promise<number> {
+  const tag = `v${version}`;
+  console.log(`\nChecking the GitHub release ${tag} …`);
+  let g: { found: boolean } | { error: string } = { error: "not asked" };
+  for (let i = 1; i <= attempts; i++) {
+    g = await lookupGithubRelease(tag);
+    if ("found" in g && g.found) break;
+    if (i < attempts) {
+      console.log(
+        "found" in g
+          ? `  no GitHub release yet (${i}/${attempts}) — it is made after npm`
+          : `  could not ask GitHub (${i}/${attempts}): ${g.error} — retrying`,
+      );
+      await new Promise((r) => setTimeout(r, JSR_RETRY_MS));
+    }
+  }
+  if ("found" in g && g.found) {
+    console.log(`✅ the GitHub release ${tag} exists.`);
+    return 0;
+  }
+  if ("found" in g) {
+    console.error(`\n❌ ${version} is on both registries, but there is NO GitHub release ${tag}.`);
+    console.error(`   publish.yml's finalize job makes it; check that run, or run it again with`);
+    console.error(
+      `   "Run workflow" and the tag ${tag}: https://github.com/${GITHUB_REPO}/actions`,
+    );
+  } else {
+    console.error(`\n⚠️  Could not ask GitHub whether the release ${tag} exists: ${g.error}.`);
+    console.error(`   This is not a verdict. Re-run: bun run verify-release ${version} --github`);
+  }
+  return 5;
+}
 
 /**
  * `--npm`: the same tag publishes to npm after JSR (publish.yml's `npm` job). Without this the

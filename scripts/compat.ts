@@ -16,7 +16,8 @@
  *                cannot see;
  *   - `symbol`   every symbol in the `.d.ts` tsc emits for each export, one line each, comments
  *                removed and whitespace collapsed (moving a line or editing prose is not a change);
- *   - `cli-flag` / `cli-usage`  the options and the USAGE shapes `main.ts --help` prints.
+ *   - `cli-flag` / `cli-usage`  the options and the USAGE shapes `main.ts --help` prints;
+ *   - `cli-env`  every environment variable `--help` names (`CHROME_PATH`, `S3D_*`).
  * Not covered, by design: exit codes and the CLI's prose (not machine-readable from --help), and
  * the npm dependencies' own types (the tag's surface is generated against today's node_modules).
  *
@@ -214,6 +215,10 @@ function surface(root: string): string[] {
         lines.push(`cli-flag\t${flag.trim()}`);
     }
   }
+  // The environment variables --help documents are interface too: renaming S3D_CHROME_TIMEOUT_MS
+  // broke every script that set it, and passed this gate as a patch (2026-11-07 review).
+  for (const m of help.out.matchAll(/\b(CHROME_PATH|S3D_[A-Z0-9_]+)\b/g))
+    lines.push(`cli-env\t${m[1]}`);
   return [...new Set(lines)].sort();
 }
 
