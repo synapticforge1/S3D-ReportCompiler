@@ -8,6 +8,7 @@ cli-flag	-?
 cli-flag	-h
 cli-flag	-v
 cli-usage	s3d-reportcompiler
+cli-usage	s3d-reportcompiler <reports.zip>
 cli-usage	s3d-reportcompiler <reportsFolder>
 cli-usage	s3d-reportcompiler <reportsFolder> <output.pdf>
 export	.	./src/report_core.ts
@@ -24,12 +25,14 @@ symbol	.	ReportConservation	typeAlias	export type ReportConservation = { report:
 symbol	.	SourceTokens	typeAlias	export type SourceTokens = { words: Set<string>; numbers: Set<string>; expectedImages: number; }
 symbol	.	VERSION	variable	export declare const VERSION = "<VERSION>"
 symbol	.	VerificationResult	typeAlias	export type VerificationResult = { missingWords: string[]; missingNumbers: string[]; leftoverLatex: string[]; splitDiagrams: number[]; failures: string[]; }
+symbol	.	ZipReports	typeAlias	export type ZipReports = { reports: { name: string; html: string; }[]; hasOwn: boolean; }
 symbol	.	assembleDocument	function	export declare function assembleDocument(bodies: string[], styles: string[], mathCss: string): string
 symbol	.	audit	variable	export declare const audit: { loadersRemoved: number; bodyTagMissing: number; visibilityNeutralised: number; heightNeutralised: number; atPageDropped: number; strayTokensDropped: number; }
 symbol	.	bakeBody	function	export declare function bakeBody(src: string, prefix: string): string
 symbol	.	bakeRemovals	variable	export declare const bakeRemovals: { activeAttributes: number; metaBaseTags: number; blocklessAtRules: number; atRules: number; bodySheetsMoved: number; }
 symbol	.	bakeStyle	function	export declare function bakeStyle(src: string, scope: string, prefix: string): string
 symbol	.	buildMathRegex	function	export declare function buildMathRegex(delims: Delim[]): RegExp
+symbol	.	checkZipUpdate	function	export declare function checkZipUpdate(original: Uint8Array, updated: Uint8Array, name: string, file: Uint8Array): Promise<string[]>
 symbol	.	compareAgainstPdf	function	export declare function compareAgainstPdf(src: SourceTokens, pdf: PdfObservations, reportCount: number): VerificationResult
 symbol	.	compareEachReport	function	export declare function compareEachReport(sources: string[], pageTexts: string[]): PerReportResult
 symbol	.	cssWarnings	variable	export declare const cssWarnings: Set<string>
@@ -42,6 +45,7 @@ symbol	.	mathStats	variable	export declare const mathStats: { converted: number;
 symbol	.	mathStyleSheet	function	export declare function mathStyleSheet(): string
 symbol	.	parseDelimiters	function	export declare function parseDelimiters(src: string): Delim[]
 symbol	.	portableSvg	function	export declare function portableSvg(html: string): string
+symbol	.	readZipReports	function	export declare function readZipReports(zip: Uint8Array, ownName: string): Promise<ZipReports>
 symbol	.	resetBakeState	function	export declare function resetBakeState(): void
 symbol	.	scopeCss	function	export declare function scopeCss(css: string, scope: string, prefix: string): string
 symbol	.	seenOpeners	variable	export declare const seenOpeners: Set<string>
@@ -50,6 +54,7 @@ symbol	.	sortReportNames	function	export declare function sortReportNames(names:
 symbol	.	svgStyleWarnings	variable	export declare const svgStyleWarnings: Set<string>
 symbol	.	textNumbers	function	export declare function textNumbers(text: string): Set<string>
 symbol	.	textWords	function	export declare function textWords(text: string): Set<string>
+symbol	.	zipWithFile	function	export declare function zipWithFile(zip: Uint8Array, name: string, file: Uint8Array, date: Date): Uint8Array
 symbol	./runtime	RUNTIME	variable	export declare const RUNTIME: Runtime
 symbol	./runtime	RunResult	typeAlias	export type RunResult = { code: number; stderr: string; }
 symbol	./runtime	Runtime	typeAlias	export type Runtime = "deno" | "bun" | "node" | "browser"
