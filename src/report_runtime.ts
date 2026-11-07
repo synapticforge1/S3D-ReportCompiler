@@ -109,15 +109,50 @@ export async function writeFile(file: string, data: Uint8Array | string): Promis
 }
 
 /**
- * Names of the files directly inside `dir`.
+ * Names of the files directly inside `dir` — regular files, and links that lead to one.
  *
- * One level deep and files only — subdirectories are not descended into and
- * not returned, which is what lets an output folder sit safely inside the
- * folder being scanned for reports.
+ * One level deep — subdirectories are not descended into and not returned, which is what lets an
+ * output folder sit safely inside the folder being scanned for reports. A symbolic link to a file
+ * IS a file to everyone who opens it: until 2026-11-06 links were left out, so a report that was a
+ * link was missing from the PDF and from both sides of its verification, and the build passed.
  */
 export async function listFiles(dir: string): Promise<string[]> {
-  const entries = await (await fs()).readdir(dir, { withFileTypes: true });
-  return entries.filter((e) => e.isFile()).map((e) => e.name);
+  const f = await fs();
+  const entries = await f.readdir(dir, { withFileTypes: true });
+  const out: string[] = [];
+  for (const e of entries) {
+    if (e.isFile()) out.push(e.name);
+    else if (e.isSymbolicLink()) {
+      try {
+        if ((await f.stat(`${dir}/${e.name}`)).isFile()) out.push(e.name);
+      } catch {
+        // a broken link: not a file (listNames still shows it)
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Every entry name directly inside `dir`, whatever it is — so a caller can account for each one
+ * {@link listFiles} did not return (a folder, a broken link, a device).
+ */
+export async function listNames(dir: string): Promise<string[]> {
+  return await (await fs()).readdir(dir);
+}
+
+/**
+ * A file's identity on its filesystem (device and file number), or `null` if it does not exist.
+ * Two paths with the same identity are the same file — a hard link included, which no path
+ * comparison (real path, case, separators) can see.
+ */
+export async function fileIdentity(file: string): Promise<string | null> {
+  try {
+    const s = await (await fs()).stat(file, { bigint: true });
+    return `${s.dev}:${s.ino}`;
+  } catch {
+    return null;
+  }
 }
 
 /** True if `file` exists and is a regular file. */

@@ -113,6 +113,8 @@ import {
   skippedDelims,
   sortReportNames,
   svgStyleWarnings,
+  bakeRemovals,
+  cssWarnings,
   VERSION,
 } from "./src/report_core.ts";
 
@@ -569,6 +571,21 @@ try {
   rt.exit(1);
 }
 
+// Every ".html" entry is accounted for: compiled, or reported as skipped below. One that is not a
+// readable file -- a folder named *.html, a broken link -- is refused here: it is a report the
+// package would otherwise lack without a word (a linked report was missing that way, with PASS).
+{
+  const unreadable = (await rt.listNames(htmlDir)).filter(
+    (n) => n.toLowerCase().endsWith(".html") && !allHtml.includes(n),
+  );
+  if (unreadable.length > 0) {
+    console.error(`Not a readable report file (a folder, or a broken link?):`);
+    for (const n of unreadable) console.error(`  ${rt.joinPath(htmlDir, n)}`);
+    console.error(`\nEvery .html in the input folder is a report. Fix or move these, then re-run.`);
+    rt.exit(1);
+  }
+}
+
 // Read once, here: every input is needed below to tell reports from previous
 // bakes, and again to compile.
 const contents = new Map<string, string>();
@@ -587,9 +604,15 @@ const bakedLeftovers = new Set(allHtml.filter((n) => isBakedDocument(contents.ge
 // input folder another way still names the same file. An output path that does
 // not exist yet cannot overwrite anything. Only a previous bake may be replaced,
 // and only by the baked HTML.
+// By file identity too (device + file number): a hard link names the same file under another
+// path, which no real-path comparison can see (2026-11-06).
 const inputByRealPath = new Map<string, string>();
+const inputByIdentity = new Map<string, string>();
 for (const name of allHtml) {
-  inputByRealPath.set(pathKey(await rt.realPath(rt.joinPath(htmlDir, name))), name);
+  const path = rt.joinPath(htmlDir, name);
+  inputByRealPath.set(pathKey(await rt.realPath(path)), name);
+  const id = await rt.fileIdentity(path);
+  if (id !== null) inputByIdentity.set(id, name);
 }
 for (const out of new Set([outputPdf, outputHtml])) {
   let real: string;
@@ -598,7 +621,8 @@ for (const out of new Set([outputPdf, outputHtml])) {
   } catch {
     continue; // nothing there yet
   }
-  const name = inputByRealPath.get(real);
+  const id = await rt.fileIdentity(out);
+  const name = inputByRealPath.get(real) ?? (id === null ? undefined : inputByIdentity.get(id));
   if (name === undefined) continue;
   if (out === outputHtml && out !== outputPdf && bakedLeftovers.has(name)) continue;
   console.error(`The output would overwrite a source report:\n  ${rt.joinPath(htmlDir, name)}\n`);
@@ -702,6 +726,26 @@ console.log(
 if (audit.bodyTagMissing > 0) {
   console.warn(`  warning: ${audit.bodyTagMissing} report(s) had no <body>; whole file used`);
 }
+// The rest of what the bake removes or moves -- printed only when it removed something, so an
+// ordinary build's output is unchanged.
+const removed = [
+  [bakeRemovals.activeAttributes, "event handler(s) / javascript: URL(s)"],
+  [bakeRemovals.metaBaseTags, "<meta>/<base> tag(s) in a body"],
+  [bakeRemovals.blocklessAtRules, "@import/@charset/@namespace rule(s)"],
+  [bakeRemovals.atRules, "CSS at-rule(s) that cannot be scoped"],
+  [bakeRemovals.bodySheetsMoved, "body <style> block(s) moved into the scoped sheet"],
+] as const;
+if (removed.some(([n]) => n > 0)) {
+  console.log(
+    `  removed:  ${removed
+      .filter(([n]) => n > 0)
+      .map(([n, what]) => `${n} ${what}`)
+      .join(", ")}`,
+  );
+}
+for (const rule of cssWarnings) {
+  console.warn(`  warning: CSS "${rule}" cannot be scoped to its report; it was left out`);
+}
 
 const leftovers = findLeftoverMath(bodies.join(""));
 if (leftovers.length > 0 || mathStats.failed > 0) {
@@ -768,7 +812,11 @@ const externalRefs =
 // Event-handler attributes are scripts too; the bake removes them, so any left is a bake bug.
 const scripts =
   (combinedHtml.match(/<script/gi) ?? []).length +
-  (combinedHtml.match(/<[a-zA-Z][^<>]*\son[a-z]+\s*=/gi) ?? []).length;
+  (combinedHtml.match(/<[a-zA-Z](?:"[^"]*"|'[^']*'|[^"'<>])*>/g) ?? []).filter((tag) =>
+    // Quoted values removed first, so "on…=" inside one is text; read whole, so a ">" inside an
+    // earlier value does not hide a handler after it.
+    /\son[a-z]+\s*=/i.test(tag.replace(/"[^"]*"|'[^']*'/g, '""')),
+  ).length;
 if (externalRefs > 0 || scripts > 0) {
   console.warn(
     `  warning: baked HTML still has ${scripts} script(s) and ${externalRefs} external ref(s)`,

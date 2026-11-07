@@ -20,6 +20,7 @@ import type { AddressInfo } from "node:net";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -117,9 +118,12 @@ test("unknown delimiter: the guard refuses, no PDF", { timeout: TIMEOUT }, () =>
   assert.equal(r.code, 1, tail(r.out));
   has(
     r.out,
-    /math:\s+97 expressions, 0 failed/, // "0 failed" while LaTeX survives: the point of the guard
+    // "0 failed" while LaTeX survives: the point of the guard. 87, not 97, since 2026-11-06: the
+    // fallback (no config) no longer has a bare `$` -- MathJax's own defaults do not either -- so
+    // the sample's ten `$…$` expressions stay unrendered too, and the guard counts 270 commands.
+    /math:\s+87 expressions, 0 failed/,
     /ERROR: unrendered mathematics reached the baked document/,
-    /250 TeX command\(s\)/,
+    /270 TeX command\(s\)/,
   );
   hasNot(r.out, /Verifying against the source reports/);
   assert.ok(!existsSync(r.pdf), "a PDF was written");
@@ -787,14 +791,17 @@ test("CSS scoping, SVG sheets, attributes and entities, as a browser reads them"
   //    not: `body.dark p` used to become `.rs9 .dark p`, a descendant's class.
   const qualified = flat(
     core.bakeStyle(
-      '<html><head><style>body.dark p{color:red} body.light p{color:blue} body:hover{x:y}</style></head><body class="x dark"><p>t</p></body></html>',
+      '<html><head><style>body.dark p{color:red} body.light p{color:blue} body:hover{x:y} body:has(p){z:1}</style></head><body class="x dark"><p>t</p></body></html>',
       ".rs9",
       "r9-",
     ),
   );
   assert.match(qualified, /\.rs9 p \{color:red\}/, "the matching qualifier was not settled");
   assert.doesNotMatch(qualified, /light|blue/, "a rule its source never applied survived");
-  assert.match(qualified, /\.rs9:hover \{x:y\}/, "a pseudo-class left the wrapper");
+  //    A printed page is never hovered: `body:hover` holds for no source and is dropped (it used to
+  //    stay on the wrapper). `:has()` depends on content, which the wrapper holds: it stays.
+  assert.doesNotMatch(qualified, /hover|x:y/, "a state a printed page never has was kept");
+  assert.match(qualified, /\.rs9:has\(p\) \{z:1\}/, ":has() did not stay on the wrapper");
   //    Attribute qualifiers are settled too, and read whole: the `~` inside `[class~=…]` is not
   //    a sibling combinator (the rule used to be dropped), and `html[lang=en]` is decided by the
   //    source's <html> (it used to land on the wrapper, which has no lang, and match nothing).
@@ -813,7 +820,9 @@ test("CSS scoping, SVG sheets, attributes and entities, as a browser reads them"
   assert.match(attrQualified, /\.rs9 p \{a:1\}/, "[class~=…] was not settled");
   assert.match(attrQualified, /\.rs9 q \{b:2\}/, "[lang|=en] was not settled");
   assert.doesNotMatch(attrQualified, /c:3|d:4/, "a rule its source never applied survived");
-  assert.match(attrQualified, /\.rs9:not\(\.y\) i \{e:5\}/, "a pseudo-class after a class");
+  //    `:not(.y)` is decided against the source <body> too (it has no `y`): it holds, and leaves
+  //    nothing on the wrapper (it used to stay there, judged against the wrong element).
+  assert.match(attrQualified, /\.rs9 i \{e:5\}/, "a pseudo-class after a class");
   assert.match(attrQualified, /\.rs9 b \{f:6\}/, "[lang=EN-gb] is caseless in HTML, as in Chrome");
   assert.doesNotMatch(attrQualified, /g:7|h:8/, "the s flag, or class, compared without case");
 
@@ -892,8 +901,8 @@ test("a second batch starts clean, and the reference guard is the core's", async
     probe,
     [
       `import * as core from ${JSON.stringify(coreUrl)};`,
-      // Batch 1: no config (the fallback delimiters, "$" among them) and one bad expression.
-      `core.bakeBody("<html><body>[mathin]\\\\frac{1}{[mathin]</body></html>", "r0-");`,
+      // Batch 1: a config declaring `$` (the fallback no longer does) and one bad expression.
+      `core.bakeBody(${JSON.stringify(`<html><head><script type="text/x-mathjax-config">MathJax.Hub.Config({tex2jax:{inlineMath:[['$','$']]}});</script></head><body>$\\frac{1}{$</body></html>`)}, "r0-");`,
       `const before = core.mathStats.failed;`,
       `const batch2 = () => core.bakeBody(${JSON.stringify(`<html><head>${config}</head><body>Cost: $5 per bolt. [mathin]x^2[mathin]</body></html>`)}, "r0-");`,
       `const inherited = { failed: core.mathStats.failed, leftovers: core.findLeftoverMath(batch2()) };`,
@@ -955,6 +964,234 @@ test("a second batch starts clean, and the reference guard is the core's", async
   ]);
   assert.deepEqual(two.broken, [{ report: 1, target: "grad" }]);
 });
+
+test("full review, group A: no wrong content passes -- maths, body, tags, CSS, labels", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  const cfg = (inline: string, display = "") =>
+    `<script type="text/x-mathjax-config">MathJax.Hub.Config({tex2jax:{${inline}${display}}});</script>`;
+  const page = (head: string, body: string) =>
+    `<html><head>${head}</head><body>${body}</body></html>`;
+
+  // A1. Maths can no longer pass as prose.
+  //  - The config read in every JavaScript spelling: quoted keys, \u / \x escapes.
+  core.resetBakeState();
+  const quoted = `<script>MathJax.Hub.Config({"tex2jax":{"inlineMath":[["\\\\(","\\\\)"]]}});</script>`;
+  assert.deepEqual(
+    core.parseDelimiters(page(quoted, "")).map((d: { open: string }) => d.open),
+    ["\\("],
+  );
+  assert.deepEqual(
+    core
+      .parseDelimiters(page(cfg("inlineMath:[['\\u0024','\\x24']]"), ""))
+      .map((d: { open: string }) => d.open),
+    ["$"],
+  );
+  //  - A config whose every pair is refused uses NO delimiters, not the fallback: prose stays prose.
+  core.resetBakeState();
+  const refused = cfg("inlineMath:[['\\(','\\)']],", "displayMath:[['\\[','\\]']]");
+  assert.deepEqual(core.parseDelimiters(page(refused, "")), []);
+  const prose = core.bakeBody(page(refused, "<p>Cost $5 per bolt, total $10 each</p>"), "r0-");
+  assert.ok(prose.includes("Cost $5 per bolt, total $10 each"), "prose was typeset as maths");
+  //  - The fallback has no bare $, so a report with no config keeps its costs as prose too.
+  assert.ok(!core.FALLBACK_DELIMS.some((d: { open: string }) => d.open === "$"));
+  //  - The guard looks for every standard delimiter, declared or not, and for failures.
+  core.resetBakeState();
+  const unread = core.bakeBody(page(refused, "<p>\\(a+b=12.5\\)</p>"), "r0-");
+  assert.ok(
+    core.findLeftoverMath(unread).some((l: string) => l.includes('"\\("')),
+    "\\( passed the guard",
+  );
+  core.resetBakeState();
+  const failed = core.bakeBody(
+    page(cfg("inlineMath:[['[mathin]','[mathin]']]"), "[mathin]x^^2[mathin]"),
+    "r0-",
+  );
+  assert.ok(
+    core.findLeftoverMath(failed).some((l: string) => /failed to typeset/.test(l)),
+    "a failure with no TeX command passed the guard",
+  );
+  //  - And the PDF check does too.
+  const pdfObs = {
+    text: "the result \\(a+b\\) here",
+    pages: 1,
+    imagePaints: 0,
+    diagramTitlePages: [],
+    diagramAxisPages: [],
+    headingPages: [1],
+    blankPages: [],
+  };
+  assert.ok(
+    core.compareAgainstPdf({ words: new Set(), numbers: new Set(), expectedImages: 0 }, pdfObs, 1)
+      .leftoverLatex.length > 0,
+    "\\( in the PDF text passed",
+  );
+
+  // A3. Text after </body> (or before <body>) is the reader's: in the bake AND the verification.
+  core.resetBakeState();
+  const tail = "<html><head></head>Before 41.5<body><p>Kept 12.5</p></body><p>Lost 99.9</p></html>";
+  const tailBody = core.bakeBody(tail, "r0-");
+  assert.ok(
+    tailBody.includes("99.9") && tailBody.includes("41.5"),
+    "the bake dropped text outside <body>",
+  );
+  const tokens = core.extractSourceTokens([tail]);
+  assert.ok(
+    tokens.numbers.has("99.9") && tokens.numbers.has("41.5"),
+    "the verification dropped it too",
+  );
+
+  // A4. Tags are read quote-aware: a ">" inside a value no longer hides what follows it.
+  core.resetBakeState();
+  const gt = core.bakeBody(
+    page(
+      "",
+      '<svg><linearGradient title="ratio > 1" id="g"></linearGradient>' +
+        '<rect title="a > b" onclick="void 0" fill="url(#g)"/><use title="x > y" href="#g"/>' +
+        '<meta title="p > q" http-equiv="refresh"></svg>',
+    ),
+    "r0-",
+  );
+  assert.match(gt, /id="r0-g"/, "an id after a quoted > was not renamed");
+  assert.match(gt, /href="#r0-g"/, "an href after a quoted > was not renamed");
+  assert.doesNotMatch(gt, /onclick|<meta/, "a handler or <meta> after a quoted > survived");
+  const brokenSrc =
+    '<svg><linearGradient id="g"></linearGradient><use title="a > b" href="#g"/></svg>';
+  const broken = core.findBrokenReferences([
+    {
+      source: brokenSrc,
+      style: "",
+      body: '<svg><linearGradient id="r0-g"></linearGradient><use title="a > b" href="#g"/></svg>',
+      prefix: "r0-",
+    },
+  ]);
+  assert.deepEqual(
+    broken.broken,
+    [{ report: 0, target: "g" }],
+    "the guard missed a reference after a quoted >",
+  );
+  // An \eqref href is percent-encoded; the guard decodes it as a browser does.
+  assert.deepEqual(
+    core.findBrokenReferences([
+      {
+        source: "",
+        style: "",
+        body: '<mjx-x id="r0-mjx-eqn:t1"></mjx-x><a href="#r0-mjx-eqn%3At1">(1)</a>',
+        prefix: "r0-",
+      },
+    ]).broken,
+    [],
+    "a correct \\eqref was called broken",
+  );
+
+  // A5. CSS keeps applying exactly where it applied.
+  const scoped = (
+    css: string,
+    html = '<html lang="en"><head></head><body class="dark"></body></html>',
+  ) => {
+    core.resetBakeState();
+    return flat(
+      core.bakeStyle(html.replace("</head>", `<style>${css}</style></head>`), ".rs0", "r0-"),
+    );
+  };
+  assert.match(
+    scoped('rect[fill="#ffcc00"]{a:1}'),
+    /\[fill="#ffcc00"\]/,
+    "a hex colour was renamed as an id",
+  );
+  assert.match(
+    scoped('[id="x"]{a:1} a[href^="#top"]{b:2}'),
+    /\[id="r0-x"\].*\[href\^="#r0-top"\]/,
+    "id-valued attributes not renamed",
+  );
+  assert.equal(scoped("html > p {a:1}"), "", "html > p reached the report's top-level elements");
+  assert.equal(scoped("body:not(.dark) p {a:1}"), "", ":not was judged against the wrapper");
+  assert.match(scoped("body:not(.light) p {a:1}"), /^\.rs0 p \{a:1\}$/);
+  assert.equal(
+    scoped("body:first-child p {a:1} body:hover p {b:2}"),
+    "",
+    "structural / dynamic states",
+  );
+  assert.match(
+    scoped("html:lang(en) p {a:1} body:nth-child(2) q {b:2}"),
+    /\.rs0 p \{a:1\}.*\.rs0 q \{b:2\}/,
+  );
+  assert.match(
+    scoped("@scope (.card) { p {a:1} }"),
+    /^@scope \(\.rs0 \.card\) \{ p \{a:1\} \}$/,
+    "@scope was not scoped",
+  );
+  assert.match(scoped("@starting-style { p {a:1} }"), /^@starting-style \{ \.rs0 p \{a:1\} \}$/);
+  const unknown = scoped("@document url-prefix() { p {a:1} } q {b:2}");
+  assert.equal(unknown, ".rs0 q {b:2}", "an unknown at-rule passed through unscoped");
+  assert.ok(
+    [...core.cssWarnings].some((w: string) => w.startsWith("@document")),
+    "the dropped at-rule was not named",
+  );
+  assert.equal(core.bakeRemovals.atRules, 1, "the dropped at-rule was not counted");
+
+  // A6. Equation labels are per report, and reset per batch.
+  core.resetBakeState();
+  const label = page(
+    cfg("inlineMath:[['[mathin]','[mathin]']],", "displayMath:[['[math]','[math]']]"),
+    "[math]x=1 \\label{eq}\\tag{1}[math]",
+  );
+  core.bakeBody(label, "r0-");
+  core.bakeBody(label, "r1-");
+  assert.equal(core.mathStats.failed, 0, "the same \\label in two reports failed");
+  core.resetBakeState();
+  core.bakeBody(label, "r0-");
+  assert.equal(core.mathStats.failed, 0, "a \\label failed after a reset");
+
+  // Every removal is counted.
+  core.resetBakeState();
+  core.bakeBody(page("", '<meta charset="x"><p onclick="void 0">x</p><style>p{}</style>'), "r0-");
+  core.bakeStyle(page("<style>@import url(x.css); p{}</style>", ""), ".rs0", "r0-");
+  assert.deepEqual(
+    { ...core.bakeRemovals },
+    { activeAttributes: 1, metaBaseTags: 1, blocklessAtRules: 1, atRules: 0, bodySheetsMoved: 1 },
+  );
+});
+
+test(
+  "full review, group A: linked and odd report entries are never dropped",
+  { timeout: TIMEOUT },
+  () => {
+    const input = control("control-custom-delimiters", join(work, "links"));
+    const elsewhere = join(work, "links-elsewhere");
+    mkdirSync(elsewhere, { recursive: true });
+    // A report that is a symbolic link: compiled, not dropped (it was: 12 of 13, PASS).
+    writeFileSync(join(elsewhere, "e_report.html"), readFileSync(join(input, "d_report.html")));
+    symlinkSync(join(elsewhere, "e_report.html"), join(input, "e_report.html"), "file");
+    const r = run([MAIN, input, join(work, "links-out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /Compiling 2 report\(s\)/, /per-report: 2\/2/);
+
+    // A broken link or a folder named *.html: refused, named.
+    const odd = control("control-custom-delimiters", join(work, "links-odd"));
+    symlinkSync(join(elsewhere, "missing.html"), join(odd, "gone_report.html"), "file");
+    mkdirSync(join(odd, "folder_report.html"));
+    const o = run([MAIN, odd, join(work, "links-odd-out", "c.pdf")]);
+    assert.equal(o.code, 1, tail(o.out));
+    has(o.out, /Not a readable report file/, /gone_report\.html/, /folder_report\.html/);
+    hasNot(o.out, /Compiling/);
+
+    // An output that is a HARD link to a report: refused (realpath cannot see it).
+    const hl = control("control-custom-delimiters", join(work, "links-hard"));
+    const outDir = join(work, "links-hard-out");
+    mkdirSync(outDir, { recursive: true });
+    linkSync(join(hl, "d_report.html"), join(outDir, "x.html"));
+    const original = readFileSync(join(hl, "d_report.html"), "utf8");
+    const h = run([MAIN, hl, join(outDir, "x.pdf")]);
+    assert.equal(h.code, 1, tail(h.out));
+    has(h.out, /The output would overwrite a source report/);
+    assert.equal(
+      readFileSync(join(hl, "d_report.html"), "utf8"),
+      original,
+      "the report was overwritten",
+    );
+  },
+);
 
 test("the bake carries no event handlers or javascript: URLs", async () => {
   // A report is user-supplied HTML; the render must not execute anything from it (#55).

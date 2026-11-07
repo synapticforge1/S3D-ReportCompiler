@@ -97,13 +97,29 @@ export const MATHJAX_FONTS =
  */
 export type Delim = { open: string; close: string; display: boolean };
 
-/** Used only when a report carries no readable `tex2jax` config. */
+/**
+ * Used only when a report carries no `tex2jax` config at all: SkyCiv's own markers, and MathJax's
+ * own defaults (`$$..$$`, `\[..\]`, `\(..\)`). Not a bare `$`: MathJax does not default to it, and
+ * as a fallback it turned prose ("$5 per bolt, total $10") into maths (2026-11-06).
+ */
 export const FALLBACK_DELIMS: Delim[] = [
   { open: "[mathin]", close: "[mathin]", display: false },
   { open: "[math]", close: "[math]", display: true },
   { open: "$$", close: "$$", display: true },
-  { open: "$", close: "$", display: false },
+  { open: "\\[", close: "\\]", display: true },
+  { open: "\\(", close: "\\)", display: false },
 ];
+
+/**
+ * Every delimiter the guard looks for, whatever a report declared: the fallback's, SkyCiv's, and
+ * the standard TeX ones. The guard used to look only for the openers it had been told about, so
+ * maths under an undeclared or unread delimiter -- `\(a+b=12.5\)` -- passed as prose. A bare `$` is
+ * not here: in prose it is a currency sign; it is checked when a report declares it.
+ */
+const ALWAYS_GUARDED = ["[mathin]", "[math]", "$$", "\\(", "\\)", "\\[", "\\]"];
+
+/** The marker on an expression that failed to typeset, so the guard sees the failure too. */
+const UNRENDERED = "data-s3d-unrendered";
 
 // Bounds a single expression so an unbalanced delimiter cannot consume the rest
 // of the document. Longest real body measured in this set: 219 characters.
@@ -122,8 +138,28 @@ const MAX_MATH_BODY = 2000;
  * `"["` -- which is why the degenerate-delimiter check below exists.
  */
 function decodeJsString(literal: string): string {
-  return literal.replace(/\\(.)/g, (_m, c) =>
-    c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c,
+  // Every escape JavaScript has: `$` is "$", not "u0024" (an unread escape made an opener
+  // nothing in the body could match, and the maths stayed prose). A line continuation is nothing.
+  const simple: Record<string, string> = {
+    n: "\n",
+    t: "\t",
+    r: "\r",
+    b: "\b",
+    f: "\f",
+    v: "\v",
+    0: "\0",
+  };
+  return literal.replace(
+    /\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(\r\n|[\s\S]))/g,
+    (_m, braced: string | undefined, u4: string | undefined, x2: string | undefined, c: string) => {
+      const hex = braced ?? u4 ?? x2;
+      if (hex !== undefined) {
+        const code = parseInt(hex, 16);
+        return code <= 0x10ffff ? String.fromCodePoint(code) : "";
+      }
+      if (c === "\n" || c === "\r\n" || c === "\r" || c === " " || c === " ") return "";
+      return Object.hasOwn(simple, c) ? simple[c] : c;
+    },
   );
 }
 
@@ -132,7 +168,9 @@ function decodeJsString(literal: string): string {
  * occur inside string literals.
  */
 function sliceArrayLiteral(src: string, key: string): string | null {
-  const at = src.search(new RegExp(`${key}\\s*:\\s*\\[`));
+  // The key as JavaScript allows it: bare, or quoted either way (a JSON-style config,
+  // `"inlineMath": [...]`, used to go unread, and the fallback delimiters stood in for it).
+  const at = src.search(new RegExp(`(?<![\\w$])(["']?)${key}\\1\\s*:\\s*\\[`));
   if (at < 0) return null;
 
   const start = src.indexOf("[", at + key.length);
@@ -196,7 +234,13 @@ function readPairs(src: string, key: string, display: boolean): Delim[] {
  */
 export function parseDelimiters(src: string): Delim[] {
   const found = [...readPairs(src, "displayMath", true), ...readPairs(src, "inlineMath", false)];
-  if (found.length === 0) return FALLBACK_DELIMS;
+  // The fallback is for a report with NO config. A config that was read but whose every pair was
+  // refused declared its own delimiters, just unusable ones: falling back then applied delimiters
+  // it never declared (a bare `$` once turned prose into maths). No delimiters instead -- the
+  // guard, which looks for every standard one, refuses whatever maths the report holds.
+  const declared =
+    sliceArrayLiteral(src, "displayMath") !== null || sliceArrayLiteral(src, "inlineMath") !== null;
+  if (found.length === 0) return declared ? [] : FALLBACK_DELIMS;
 
   // Longest opener first, so $$ is tried before $ and [mathin] before any
   // shorter pair that shares its prefix.
@@ -248,6 +292,43 @@ export const audit = {
   strayTokensDropped: 0,
 };
 
+/**
+ * The rest of what the bake removes or moves, counted like {@link audit} (kept apart so `audit`'s
+ * shape -- part of the published API -- does not change). Until 2026-11-06 these went uncounted,
+ * though the module promised every removal was: event-handler attributes and `javascript:` URLs
+ * (`activeAttributes`), `<meta>` / `<base>` in a body (`metaBaseTags`), `@import` / `@charset` /
+ * `@namespace` (`blocklessAtRules`), block at-rules this cannot scope (`atRules`, each named in
+ * {@link cssWarnings}), and body `<style>` blocks moved into the scoped sheet (`bodySheetsMoved`).
+ */
+export const bakeRemovals = {
+  activeAttributes: 0,
+  metaBaseTags: 0,
+  blocklessAtRules: 0,
+  atRules: 0,
+  bodySheetsMoved: 0,
+};
+
+/**
+ * A start tag's attributes, read as a browser reads them: an attribute name runs to whitespace,
+ * `/`, `>` or `=`; a value is quoted either way -- a `>` inside the quotes does NOT end the tag --
+ * or bare; a quote only opens a value right after `=`. Every tag-level step used to read tags as
+ * `<[^<>]*>`, ending at the first `>`, quoted or not: `<linearGradient title="ratio > 1" id="g">`
+ * kept its id un-renamed, and the handlers, `href`s and `id`s after such a value went unread by
+ * every rewrite (2026-11-06; quoted `>` occurs in all 48 client reports).
+ */
+// Each step can match a given stretch ONE way only -- a single whitespace character, a whole name
+// (the lookahead forbids splitting it), a whole bare value -- so a tag that never closes fails in
+// linear time instead of trying every split (a nested `(\s+)*` is exponential).
+const TAG_ATTRS = String.raw`(?:\s|\/|[^\s/>=]+(?![^\s/>=])(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+(?![^\s>])|(?=[\s>])))?)*`;
+
+/** A start tag named `name` (a regex alternation; default: any), read with {@link TAG_ATTRS}. */
+function startTagRe(name = "[a-zA-Z][^\\s/>]*", flags = "gi"): RegExp {
+  return new RegExp(`<(${name})(?![^\\s/>])(${TAG_ATTRS})>`, flags);
+}
+
+/** `<style …>…</style>`, its attributes read with {@link TAG_ATTRS}: groups 1 attributes, 2 sheet. */
+const STYLE_ELEMENT = String.raw`<style(?![^\s/>])(${TAG_ATTRS})>([\s\S]*?)<\/style\s*>`;
+
 // The three below are annotated rather than left to inference: JSR rejects a
 // public API whose types it cannot read without running the type checker
 // ("slow types"), and these are exported.
@@ -278,14 +359,86 @@ export const svgStyleWarnings: Set<string> = new Set();
 // is what stands in for the document once many of them share one page.
 // ---------------------------------------------------------------------------
 
+/** Attributes whose VALUE the bake renames because it is an id (or a list of ids). */
+const ID_VALUED_ATTRS = new Set([
+  "id",
+  "for",
+  "headers",
+  "aria-labelledby",
+  "aria-describedby",
+  "aria-controls",
+  "aria-owns",
+]);
+
 /**
- * Prefix id selectors, only where an id can legally appear.
- *
- * ⚠️ Doing this by plain text search would rewrite hex colours -- `#fff` is not
- * an id.
+ * Prefix the ids a selector names, exactly where the bake renamed them: an `#id` OUTSIDE strings
+ * and attribute selectors, and inside an attribute selector only when that attribute holds an id
+ * (`[id="x"]`, `[for=x]`, and `[href^="#x"]` -- the bake renames `href="#x"` too). Anything else in
+ * brackets or quotes is a value and is left alone: a plain text search renamed the hex colour in
+ * `rect[fill="#ffcc00"]`, and the rule never matched again (2026-11-06).
  */
 function namespaceIds(selector: string, prefix: string): string {
-  return selector.replace(/#([A-Za-z_][\w-]*)/g, (_m, id) => `#${prefix}${id}`);
+  let out = "";
+  let i = 0;
+  while (i < selector.length) {
+    const ch = selector[i];
+    if (ch === "\\") {
+      out += selector.slice(i, i + 2);
+      i += 2;
+    } else if (ch === '"' || ch === "'") {
+      const end = closeQuote(selector, i);
+      out += selector.slice(i, end);
+      i = end;
+    } else if (ch === "[") {
+      const end = closeOf(selector, i);
+      const stop = end < 0 ? selector.length : end;
+      out += namespaceAttrSelector(selector.slice(i, stop), prefix);
+      i = stop;
+    } else if (ch === "#" && /^(?:[A-Za-z_-]|\P{ASCII}|\\)/u.test(selector.slice(i + 1))) {
+      const m = /^#((?:[\w-]|\P{ASCII}|\\.)+)/u.exec(selector.slice(i));
+      const id = m?.[1] ?? "";
+      out += `#${prefix}${id}`;
+      i += 1 + id.length;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+/** Index just past the quote that closes the one at `at` (escapes respected). */
+function closeQuote(s: string, at: number): number {
+  for (let k = at + 1; k < s.length; k++) {
+    if (s[k] === "\\") k++;
+    else if (s[k] === s[at]) return k + 1;
+  }
+  return s.length;
+}
+
+/** One attribute selector `[name op value flag]`, its value prefixed when the bake renamed it. */
+function namespaceAttrSelector(part: string, prefix: string): string {
+  const m =
+    /^\[(\s*)((?:[\w-]+\|)?[\w:-]+)(\s*)(?:([~|^$*]?=)(\s*)(?:"([^"]*)"|'([^']*)'|([^\s\]]+))([\s\S]*))?\]$/.exec(
+      part,
+    );
+  if (!m?.[4]) return part;
+  const [, s1, rawName, s2, op, s3, dq, sq, bare, tail] = m;
+  const name = rawName.replace(/^[\w-]*\|/, "").toLowerCase();
+  const value = dq ?? sq ?? bare ?? "";
+  let next = value;
+  if (ID_VALUED_ATTRS.has(name) && value !== "" && op !== "$=" && op !== "*=") {
+    next = `${prefix}${value}`;
+  } else if (
+    (name === "href" || name === "xlink:href") &&
+    (op === "=" || op === "^=") &&
+    /^#./.test(value)
+  ) {
+    next = `#${prefix}${value.slice(1)}`;
+  }
+  if (next === value) return part;
+  const q = dq !== undefined ? '"' : sq !== undefined ? "'" : "";
+  return `[${s1}${rawName}${s2}${op}${s3}${q}${next}${q}${tail}]`;
 }
 
 /** The attributes of a source document's `<html>` or `<body>` tag, by lower-cased name. */
@@ -296,8 +449,7 @@ type RootTags = { html: RootTag; body: RootTag };
 
 /** Read the `<html>` and `<body>` start tags of a source document. */
 function rootTags(src: string): RootTags {
-  const read = (name: string): RootTag =>
-    attrsOf(new RegExp(`<${name}\\b[^<>]*>`, "i").exec(src)?.[0] ?? "");
+  const read = (name: string): RootTag => attrsOf(startTagRe(name, "i").exec(src)?.[0] ?? "");
   return { html: read("html"), body: read("body") };
 }
 
@@ -373,13 +525,144 @@ const CASELESS_ATTRS = new Set(
   ).split(" "),
 );
 
+/** Which root a qualifier is written on: `<html>` (or `:root`) or `<body>`. */
+type RootRole = "html" | "body";
+
+/** Does An+B (`odd`, `even`, `3`, `2n+1`, `-n+2`) select position `index` (1-based)? */
+function nthMatches(formula: string, index: number): boolean | undefined {
+  const f = formula.trim().toLowerCase().replace(/\s+/g, "");
+  if (f === "odd") return index % 2 === 1;
+  if (f === "even") return index % 2 === 0;
+  const m = /^([+-]?\d*)n([+-]\d+)?$|^([+-]?\d+)$/.exec(f);
+  if (!m) return undefined; // `of S`, or something this does not read
+  if (m[3] !== undefined) return index === Number(m[3]);
+  const a = m[1] === "" || m[1] === "+" ? 1 : m[1] === "-" ? -1 : Number(m[1]);
+  const b = Number(m[2] ?? 0);
+  if (a === 0) return index === b;
+  const n = (index - b) / a;
+  return Number.isInteger(n) && n >= 0;
+}
+
 /**
- * Does `part` hold for the source's own tag? true / false for a class, an id or an attribute
- * selector; undefined for a pseudo-class, which depends on state rather than on the source.
+ * Does a pseudo-class written on `<html>` / `<body>` hold for the SOURCE document, as a browser
+ * printing it would decide? The wrapper standing in for the root is a `<div>` among siblings,
+ * with none of the root's attributes and none of its position, so leaving a pseudo-class on it
+ * judged the wrong element: `body:not(.dark)` on `<body class="dark">` used to apply (2026-11-06).
+ * - `:not` / `:is` / `:where` / `:matches`: decided from their arguments, when every one is.
+ * - Structural: `<html>` is the only child of the document; `<body>` the 2nd child of `<html>`
+ *   (the parser always creates `<head>` first) and the last; neither is `:empty`.
+ * - States a printed page never has (`:hover`, `:focus`, `:target`, `:checked`, …) and `:link`:
+ *   false.
+ * - `:lang()` / `:dir()`: from the `lang` / `dir` attribute, `<body>` inheriting `<html>`'s.
+ * - `:has()` and anything unknown: undefined -- left for the wrapper, which holds the same content.
  */
-function holdsFor(part: string, tag: RootTag): boolean | undefined {
+function pseudoHolds(part: string, roots: RootTags, role: RootRole): boolean | undefined {
+  if (part.startsWith("::")) return undefined; // a pseudo-element: not a condition
+  const m = /^:([\w-]+)(?:\(([\s\S]*)\))?$/.exec(part);
+  if (!m) return undefined;
+  const name = m[1].toLowerCase();
+  const arg = m[2] ?? "";
+  const tag = roots[role];
+  const any = (verdicts: (boolean | undefined)[]) =>
+    verdicts.includes(true) ? true : verdicts.includes(undefined) ? undefined : false;
+  const compound = (sel: string): boolean | undefined => {
+    const s = sel.trim();
+    const typed = /^(html|body|\*)(?![\w-])/i.exec(s);
+    if (typed && typed[1] !== "*" && typed[1].toLowerCase() !== role) return false;
+    const parts = qualifierParts(typed ? s.slice(typed[0].length) : s);
+    if (!parts) return undefined;
+    const verdicts = parts.map((p) => holdsFor(p, roots, role));
+    return verdicts.includes(false) ? false : verdicts.includes(undefined) ? undefined : true;
+  };
+  switch (name) {
+    case "not": {
+      const v = any(splitSelectorList(arg).map(compound));
+      return v === undefined ? undefined : !v;
+    }
+    case "is":
+    case "where":
+    case "matches":
+    case "-webkit-any":
+      return any(splitSelectorList(arg).map(compound));
+    case "root":
+      return role === "html";
+    case "first-child":
+      return role === "html";
+    case "last-child":
+    case "last-of-type":
+    case "first-of-type":
+    case "only-of-type":
+      return true;
+    case "only-child":
+      return role === "html";
+    case "nth-child":
+      return nthMatches(arg, role === "html" ? 1 : 2);
+    case "nth-last-child":
+    case "nth-of-type":
+    case "nth-last-of-type":
+      return nthMatches(arg, 1);
+    case "empty":
+    case "hover":
+    case "active":
+    case "focus":
+    case "focus-within":
+    case "focus-visible":
+    case "visited":
+    case "link":
+    case "any-link":
+    case "target":
+    case "target-within":
+    case "checked":
+    case "indeterminate":
+    case "placeholder-shown":
+    case "autofill":
+    case "user-valid":
+    case "user-invalid":
+    case "popover-open":
+    case "fullscreen":
+    case "modal":
+    case "picture-in-picture":
+    case "playing":
+    case "paused":
+      return false;
+    case "lang": {
+      const lang = (
+        tag.get("lang") ??
+        (role === "body" ? roots.html.get("lang") : undefined) ??
+        ""
+      ).toLowerCase();
+      return any(
+        splitSelectorList(arg).map((l) => {
+          const want = l
+            .trim()
+            .replace(/^["']|["']$/g, "")
+            .toLowerCase();
+          return want !== "" && (lang === want || lang.startsWith(`${want}-`));
+        }),
+      );
+    }
+    case "dir": {
+      const dir = (
+        tag.get("dir") ??
+        (role === "body" ? roots.html.get("dir") : undefined) ??
+        "ltr"
+      ).toLowerCase();
+      return dir === "auto" ? undefined : dir === arg.trim().toLowerCase();
+    }
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Does `part` hold for the source's own root tag? true / false for a class, an id, an attribute
+ * selector or a pseudo-class it can decide ({@link pseudoHolds}); undefined otherwise.
+ */
+function holdsFor(part: string, roots: RootTags, role: RootRole): boolean | undefined {
+  const tag = roots[role];
   if (part[0] === ".") return (tag.get("class") ?? "").split(/\s+/).includes(part.slice(1));
   if (part[0] === "#") return tag.get("id") === part.slice(1);
+  if (part[0] === ":") return pseudoHolds(part, roots, role);
   if (part[0] !== "[") return undefined;
   const m =
     /^\[\s*([^\s~|^$*=\]]+)\s*(?:([~|^$*]?=)\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]+))\s*([iIsS])?\s*)?\]$/.exec(
@@ -423,13 +706,17 @@ function holdsFor(part: string, tag: RootTag): boolean | undefined {
  * read -- it is all left. (`html[lang=en]` used to be left too: the wrapper has no `lang`, so the
  * rule matched nothing.)
  */
-function settleQualifier(qualifier: string, tag: RootTag | undefined): string | null {
-  if (!tag) return qualifier;
+function settleQualifier(
+  qualifier: string,
+  roots: RootTags | undefined,
+  role: RootRole,
+): string | null {
+  if (!roots) return qualifier;
   const parts = qualifierParts(qualifier);
   if (!parts) return qualifier;
   let rest = "";
   for (const p of parts) {
-    const holds = holdsFor(p, tag);
+    const holds = holdsFor(p, roots, role);
     if (holds === false) return null;
     if (holds === undefined) rest += p;
   }
@@ -450,15 +737,15 @@ function scopeSelector(selector: string, scope: string, prefix: string, roots?: 
   let qualifier = "";
   let combinator = " ";
   let rooted = false;
+  let lastRole: RootRole | null = null;
   for (;;) {
     const m = /^(html|body|:root)(?![\w-])/i.exec(s);
     if (!m) break;
     rooted = true;
+    const role: RootRole = m[1].toLowerCase() === "body" ? "body" : "html";
     const end = compoundEnd(s, m[0].length);
-    const settled = settleQualifier(
-      s.slice(m[0].length, end),
-      roots?.[m[1].toLowerCase() === "body" ? "body" : "html"],
-    );
+    // `:root` is itself a pseudo-class on <html>; its qualifier is what follows it.
+    const settled = settleQualifier(s.slice(m[0].length, end), roots, role);
     if (settled === null) return "";
     qualifier += settled;
     const after = /^\s*([>+~]?)\s*/.exec(s.slice(end)) ?? ["", ""];
@@ -467,8 +754,13 @@ function scopeSelector(selector: string, scope: string, prefix: string, roots?: 
     // reach the NEXT report's wrapper.
     if (after[1] === "+" || after[1] === "~") return "";
     combinator = after[1] === ">" ? " > " : " ";
+    lastRole = role;
     if (!s) break;
   }
+  // `html > X`: <html>'s only children are <head> (never drawn) and <body> (consumed above), so X
+  // matches nothing. Mapped onto the wrapper it became `.rs0 > X` -- the report's own top-level
+  // elements, which the source rule never touched (`html > p {display:none}` hid them).
+  if (lastRole === "html" && combinator === " > " && s) return "";
 
   const rest = namespaceIds(s, prefix);
   if (!rooted) return `${scope} ${rest}`;
@@ -514,15 +806,51 @@ function splitSelectorList(list: string): string[] {
  * @param prefix id namespace, e.g. `"r7-"`
  */
 export function scopeCss(css: string, scope: string, prefix: string): string {
-  return scopeRules(css, (s) => scopeSelector(s, scope, prefix));
+  return scopeRules(
+    css,
+    (s) => scopeSelector(s, scope, prefix),
+    (s) => namespaceIds(s, prefix),
+  );
 }
 
+/** Block at-rules holding style rules, scoped recursively. */
+const NESTING_AT_RULES = new Set(["media", "supports", "layer", "container", "starting-style"]);
+
+/** Block at-rules holding no selector to scope (declarations, keyframe steps): kept as written. */
+const DECLARATION_AT_RULES = new Set([
+  "font-face",
+  "keyframes",
+  "-webkit-keyframes",
+  "-moz-keyframes",
+  "counter-style",
+  "property",
+  "font-feature-values",
+  "font-palette-values",
+  "view-transition",
+  "position-try",
+]);
+
 /**
- * The walk behind {@link scopeCss}, with the per-selector rewrite supplied: each
- * selector of each rule goes through `mapSelector` ("" drops it), at any depth
- * of `@media`/`@supports`/`@layer`/`@container`. `@page` is dropped.
+ * At-rules dropped because this cannot scope them -- each named, never silent. An at-rule passed
+ * through unscoped reached every report on the page (`@scope` once did).
  */
-function scopeRules(css: string, mapSelector: (selector: string) => string): string {
+export const cssWarnings: Set<string> = new Set();
+
+/**
+ * The walk behind {@link scopeCss}, with the per-selector rewrite supplied: each selector of each
+ * rule goes through `mapSelector` ("" drops it), at any depth of the {@link NESTING_AT_RULES}.
+ * `@scope`'s root selectors go through `mapSelector` too (none: the document, so the wrapper), and
+ * its inner rules, relative to that root, through `idsOnly`. `@page` is dropped (we set the page);
+ * the {@link DECLARATION_AT_RULES} are kept; any other block at-rule is dropped and named in
+ * {@link cssWarnings}.
+ */
+function scopeRules(
+  css: string,
+  mapSelector: (selector: string) => string,
+  idsOnly: (selector: string) => string,
+  /** What a root-less `@scope` means here: the document (`"body"`), or an SVG's own `<svg>`. */
+  docRoot = "body",
+): string {
   const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const out: string[] = [];
   let i = 0;
@@ -584,11 +912,31 @@ function scopeRules(css: string, mapSelector: (selector: string) => string): str
         .toLowerCase();
       // We define page geometry ourselves; a report's own @page would fight it.
       if (name === "page") continue;
-      if (["media", "supports", "layer", "container"].includes(name)) {
-        out.push(`${prelude} {\n${scopeRules(block, mapSelector)}\n}`);
-      } else {
-        // @font-face, @keyframes: no selectors to scope.
+      if (NESTING_AT_RULES.has(name)) {
+        out.push(`${prelude} {\n${scopeRules(block, mapSelector, idsOnly, docRoot)}\n}`);
+      } else if (name === "scope") {
+        // `@scope (A) to (B)`: A is the root -- mapped like any selector (no prelude: the
+        // document, i.e. the wrapper); B and the inner rules are relative to it, so only their
+        // ids are renamed.
+        const pm = /^@scope\s*(?:\(([\s\S]*?)\))?\s*(?:to\s*\(([\s\S]*)\))?\s*$/i.exec(prelude);
+        if (!pm) {
+          cssWarnings.add(prelude);
+          bakeRemovals.atRules++;
+          continue;
+        }
+        const roots = pm[1]
+          ? splitSelectorList(pm[1]).map(mapSelector).filter(Boolean)
+          : [mapSelector(docRoot)];
+        if (roots.length === 0) continue; // the root matched nothing in the source
+        const limit = pm[2] ? ` to (${splitSelectorList(pm[2]).map(idsOnly).join(", ")})` : "";
+        out.push(
+          `@scope (${roots.join(", ")})${limit} {\n${scopeRules(block, idsOnly, idsOnly, docRoot)}\n}`,
+        );
+      } else if (DECLARATION_AT_RULES.has(name)) {
         out.push(`${prelude} {${block}}`);
+      } else {
+        cssWarnings.add(prelude);
+        bakeRemovals.atRules++;
       }
       continue;
     }
@@ -657,7 +1005,7 @@ export function portableSvg(html: string): string {
 }
 
 /** `<style ...>` blocks, capturing the attributes and the sheet. */
-const STYLE_BLOCK = /<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
+const STYLE_BLOCK = new RegExp(STYLE_ELEMENT, "gi");
 
 /**
  * What a `<style>` block's attributes make of it, as a browser reads them:
@@ -791,9 +1139,7 @@ function hoistSvgRules(sheet: string, apply: (selector: string, attrs: string) =
 function removeElementById(html: string, id: string): string {
   // The attribute named id, read in order -- not data-id=, and not "id=" inside
   // another attribute's value (whose element is not the one asked for).
-  const m = [...html.matchAll(/<([a-zA-Z][\w-]*)[^<>]*>/g)].find(
-    (t) => attrsOf(t[0]).get("id") === id,
-  );
+  const m = [...html.matchAll(startTagRe())].find((t) => attrsOf(t[0]).get("id") === id);
   if (!m || m.index === undefined) return html;
 
   const tag = m[1];
@@ -821,21 +1167,20 @@ const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
 
 const chtml = new CHTML({ fontURL: MATHJAX_FONTS });
-const mjDoc = mathjax.document("", {
-  InputJax: new TeX({
-    packages: AllPackages,
-    // ⚠️ MathJax limitation (re-check on every MathJax update; roadmap task 8): by default a TeX
-    // error does NOT throw -- MathJax typesets an inline red error box ("Misplaced &",
-    // "Undefined control sequence") and convert() returns normally, so the bake counted it as
-    // converted and the box went into the sealed PDF. Thrown, it reaches tex2html's catch, is
-    // counted as failed, and the build refuses. (Measured 2026-11-05: 0 error boxes in the 13
-    // samples and the 48-report client set, so this changes no current output.)
-    formatError: (_jax: unknown, err: Error) => {
-      throw err;
-    },
-  }),
-  OutputJax: chtml,
+/** The TeX input, named so its label table can be reset per report (`tags.reset`). */
+const texInput = new TeX({
+  packages: AllPackages,
+  // ⚠️ MathJax limitation (re-check on every MathJax update; roadmap task 8): by default a TeX
+  // error does NOT throw -- MathJax typesets an inline red error box ("Misplaced &",
+  // "Undefined control sequence") and convert() returns normally, so the bake counted it as
+  // converted and the box went into the sealed PDF. Thrown, it reaches tex2html's catch, is
+  // counted as failed, and the build refuses. (Measured 2026-11-05: 0 error boxes in the 13
+  // samples and the 48-report client set, so this changes no current output.)
+  formatError: (_jax: unknown, err: Error) => {
+    throw err;
+  },
 });
+const mjDoc = mathjax.document("", { InputJax: texInput, OutputJax: chtml });
 
 /**
  * Running totals for maths conversion, cumulative across every report baked in
@@ -850,8 +1195,9 @@ export const mathStats = { converted: 0, failed: 0, firstFailure: "" };
 
 /**
  * Start a new batch: zero every running counter and empty every diagnostic set --
- * {@link mathStats}, {@link audit}, {@link delimSignatures}, {@link seenOpeners},
- * {@link skippedDelims} and {@link svgStyleWarnings}.
+ * {@link mathStats}, {@link audit}, {@link bakeRemovals}, {@link delimSignatures},
+ * {@link seenOpeners}, {@link skippedDelims}, {@link svgStyleWarnings} and {@link cssWarnings} --
+ * and clear MathJax's equation labels and numbering (each report also gets a fresh table).
  *
  * They are module-level and cumulative, which suits the CLI (one build per process) and nothing
  * else: a page or a server that bakes a second batch inherited the first one's failures and
@@ -867,10 +1213,15 @@ export function resetBakeState(): void {
   mathStats.failed = 0;
   mathStats.firstFailure = "";
   for (const key of Object.keys(audit) as (keyof typeof audit)[]) audit[key] = 0;
+  for (const key of Object.keys(bakeRemovals) as (keyof typeof bakeRemovals)[]) {
+    bakeRemovals[key] = 0;
+  }
   delimSignatures.clear();
   seenOpeners.clear();
   skippedDelims.clear();
   svgStyleWarnings.clear();
+  cssWarnings.clear();
+  texInput.parseOptions.tags.reset(0);
 }
 
 /**
@@ -893,7 +1244,10 @@ function tex2html(latex: string, display: boolean): string {
     // It must be escaped: expressions routinely contain "<" (e.g. \lambda < 200),
     // which would otherwise be injected into the document as markup.
     const escaped = latex.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    return `<code>${escaped}</code>`;
+    // Marked, so findLeftoverMath sees the failure even when the source holds no TeX command it
+    // would recognise (`x^^2`, `a & b`): it used to see nothing, and a caller who checked only the
+    // guard shipped the raw source.
+    return `<code ${UNRENDERED}>${escaped}</code>`;
   }
 }
 
@@ -1012,11 +1366,15 @@ function stripActiveAttrs(tag: string): string {
       TAG_ATTR,
       (all, name: string, eq?: string, dq?: string, sq?: string, bare?: string) => {
         const n = name.toLowerCase();
-        if (/^on/.test(n)) return "";
+        if (/^on/.test(n)) {
+          bakeRemovals.activeAttributes++;
+          return "";
+        }
         if (eq === undefined) return all;
         const value = dq ?? sq ?? bare ?? "";
         // A browser ignores tabs and newlines inside a URL, and whitespace around it.
         if (URL_ATTRS.has(n) && /^javascript:/i.test(value.replace(/[\t\n\r]/g, "").trim())) {
+          bakeRemovals.activeAttributes++;
           return `${name}${eq}"#"`;
         }
         return all;
@@ -1026,7 +1384,7 @@ function stripActiveAttrs(tag: string): string {
 }
 
 /** Attributes whose value is a URL a browser may navigate to or load. */
-const URL_ATTRS = new Set(["href", "xlink:href", "src", "action", "formaction"]);
+const URL_ATTRS = new Set(["href", "xlink:href", "src", "action", "formaction", "data"]);
 
 /** A start tag's attributes by lower-cased name; the first of a duplicate wins, as HTML parses. */
 function attrsOf(tag: string): Map<string, string> {
@@ -1072,7 +1430,7 @@ function confineToSvg(selector: string, prefix: string): string {
  * an `<svg>` is matched whole first, so a `<style>` inside one is never matched
  * on its own. Groups 1 and 2 (attributes, sheet) are set for a page sheet only.
  */
-const PAGE_STYLE_OR_SVG = /<svg\b[\s\S]*?<\/svg>|<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
+const PAGE_STYLE_OR_SVG = new RegExp(String.raw`<svg\b[\s\S]*?<\/svg>|${STYLE_ELEMENT}`, "gi");
 
 /**
  * Turn one report's `<body>` into a fragment ready to concatenate with others.
@@ -1098,18 +1456,25 @@ export function bakeBody(src: string, prefix: string): string {
   let html = src.replace(/<script[\s\S]*?<\/script>/gi, "");
   html = html.replace(/<!--[\s\S]*?-->/g, "");
 
-  const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-  if (!bodyMatch) audit.bodyTagMissing++;
-  let body = bodyMatch ? bodyMatch[1] : html;
+  // A fresh label table and equation counter for every report, as it has standing alone: MathJax
+  // keeps both across conversions, so report 1's `\label{eq}` failed as "multiply defined" after
+  // report 0's, and its `\eqref` could print report 0's number (2026-11-06).
+  texInput.parseOptions.tags.reset(0);
+
+  const bodyOpen = startTagRe("body", "i").exec(html);
+  if (!bodyOpen) audit.bodyTagMissing++;
+  const body0 = bodyOpen ? browserBody(html, bodyOpen) : html;
 
   // The page's own <style> blocks in the body are not dropped: bakeStyle reads
   // them, as it reads the head's, and scopes them to this report. Left here they
   // applied, unscoped, to every report on the page -- and their #id selectors
   // matched nothing once the ids were renamed. Those inside an <svg> stay; that
   // is portableSvg's job.
-  body = body.replace(PAGE_STYLE_OR_SVG, (m, _attrs, sheet: string | undefined) =>
-    sheet === undefined ? m : "",
-  );
+  let body = body0.replace(PAGE_STYLE_OR_SVG, (m, _attrs, sheet: string | undefined) => {
+    if (sheet === undefined) return m;
+    bakeRemovals.bodySheetsMoved++;
+    return "";
+  });
 
   // The spinner exists only to be hidden by the JS that we removed. It is the
   // one element deliberately dropped, and the count is reported.
@@ -1123,14 +1488,15 @@ export function bakeBody(src: string, prefix: string): string {
   // rewrites below. After this the maths is MathJax's own markup -- whose ids
   // (\label, \eqref) are then namespaced like any other, so two reports'
   // equation numbers cannot collide either.
-  body = body.replace(buildMathRegex(delims), (...args) => {
-    const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
-    const i = groups.findIndex((g) => g !== undefined);
-    const inner = groups[i]; // undefined when i < 0: no pair matched
-    return inner === undefined
-      ? (args[0] as string)
-      : tex2html(texFromMarkup(inner), delims[i].display);
-  });
+  if (delims.length > 0)
+    body = body.replace(buildMathRegex(delims), (...args) => {
+      const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
+      const i = groups.findIndex((g) => g !== undefined);
+      const inner = groups[i]; // undefined when i < 0: no pair matched
+      return inner === undefined
+        ? (args[0] as string)
+        : tex2html(texFromMarkup(inner), delims[i].display);
+    });
 
   // Namespace every id rather than the two this template happens to use, so
   // many documents can share one page without colliding. Attributes are read
@@ -1151,7 +1517,10 @@ export function bakeBody(src: string, prefix: string): string {
   body = inTags(body, stripActiveAttrs);
   // <meta http-equiv> (a refresh navigates away; no policy stops it) and <base> (it re-roots every
   // relative address) have no place in a report's body; neither draws anything.
-  body = body.replace(/<(?:meta|base)\b[^<>]*>/gi, "");
+  body = body.replace(startTagRe("meta|base"), () => {
+    bakeRemovals.metaBaseTags++;
+    return "";
+  });
 
   // Every reference to a renamed id has to follow it, or its target vanishes
   // without an error -- and verification counts text and image paints, not
@@ -1186,17 +1555,45 @@ export function bakeBody(src: string, prefix: string): string {
     return svg.replace(/^<svg\b/i, `<svg data-s3d-scope="${prefix}"`).replace(
       STYLE_BLOCK,
       (_m, attrs: string, sheet: string) =>
-        `<style${attrs}>${scopeRules(sheet, (selector) => {
-          const s = namespaceIds(selector.trim(), prefix);
-          return s ? confineToSvg(s, prefix) : "";
-        })}</style>`,
+        `<style${attrs}>${scopeRules(
+          sheet,
+          (selector) => {
+            const s = namespaceIds(selector.trim(), prefix);
+            return s ? confineToSvg(s, prefix) : "";
+          },
+          (selector) => namespaceIds(selector, prefix),
+          "svg",
+        )}</style>`,
     );
   });
 }
 
+/**
+ * A document's body as a browser builds it, from the `<body>` start tag found in `html`: what lies
+ * between it and the LAST `</body>`, plus any text a report put between `</head>` and `<body>` or
+ * after `</body>` / `</html>` -- the parser moves both into the body, so a reader sees them. Taking
+ * only `<body>…</body>` dropped such text from the bake AND the verification, which shared the
+ * cut, so nothing noticed (2026-11-06). Whitespace alone there is not content and is not added,
+ * so an ordinary document bakes exactly as before.
+ */
+function browserBody(html: string, bodyOpen: RegExpExecArray): string {
+  const after = html.slice(bodyOpen.index + bodyOpen[0].length);
+  const closes = [...after.matchAll(/<\/body\s*>/gi)];
+  const last = closes.at(-1);
+  const inner = last?.index === undefined ? after : after.slice(0, last.index);
+  const trailing =
+    last?.index === undefined ? "" : after.slice(last.index).replace(/<\/(?:body|html)\s*>/gi, "");
+  const headClose = /<\/head\s*>/i.exec(html);
+  const before =
+    headClose && headClose.index < bodyOpen.index
+      ? html.slice(headClose.index + headClose[0].length, bodyOpen.index)
+      : "";
+  return (before.trim() ? before : "") + inner + (trailing.trim() ? trailing : "");
+}
+
 /** Apply `fn` to every start tag (`<name …>`), leaving text, comments and end tags alone. */
 function inTags(html: string, fn: (tag: string) => string): string {
-  return html.replace(/<[a-zA-Z][^<>]*>/g, fn);
+  return html.replace(startTagRe(), (tag: string) => fn(tag));
 }
 
 /**
@@ -1217,15 +1614,19 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   // which portableSvg hoists onto presentation attributes -- pulling it in here
   // as well would leak an SVG-scoped rule into document scope. `<head\b`, so a
   // <header> is not read as the head.
-  const headMatch = /<head\b[^>]*>([\s\S]*?)<\/head>/i.exec(src);
+  // <head>'s start tag read quote-aware; its content runs to the first </head>.
+  const headOpen = startTagRe("head", "i").exec(src);
+  const innerStart = headOpen ? headOpen.index + headOpen[0].length : -1;
+  const headClose = headOpen ? /<\/head\s*>/i.exec(src.slice(innerStart)) : null;
+  const headInner = headClose ? src.slice(innerStart, innerStart + headClose.index) : "";
+  const afterHead = headClose ? innerStart + headClose.index + headClose[0].length : 0;
   // The body as bakeBody sees it: no scripts, no comments.
-  const rest = (headMatch ? src.slice(headMatch.index + headMatch[0].length) : src)
+  const rest = src
+    .slice(afterHead)
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<!--[\s\S]*?-->/g, "");
   const blocks: [string, string][] = [
-    ...[...(headMatch?.[1] ?? "").matchAll(STYLE_BLOCK)].map(
-      (m) => [m[1], m[2]] as [string, string],
-    ),
+    ...[...headInner.matchAll(STYLE_BLOCK)].map((m) => [m[1], m[2]] as [string, string]),
     ...[...rest.matchAll(PAGE_STYLE_OR_SVG)]
       .filter((m) => m[2] !== undefined)
       .map((m) => [m[1], m[2]] as [string, string]),
@@ -1241,7 +1642,10 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
     })
     .join("\n")
     // At-rules with no block would confuse the brace walker.
-    .replace(/@(?:import|charset|namespace)[^;]*;/gi, "")
+    .replace(/@(?:import|charset|namespace)[^;]*;/gi, () => {
+      bakeRemovals.blocklessAtRules++;
+      return "";
+    })
     // Strip comments before counting, or a commented-out rule is audited as
     // though it had been active.
     .replace(/\/\*[\s\S]*?\*\//g, "");
@@ -1253,7 +1657,11 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   // `body.dark p` is settled against this report's own <body> tag: the wrapper
   // standing in for it carries none of its classes.
   const roots = rootTags(src);
-  css = scopeRules(css, (s) => scopeSelector(s, scope, prefix, roots));
+  css = scopeRules(
+    css,
+    (s) => scopeSelector(s, scope, prefix, roots),
+    (s) => namespaceIds(s, prefix),
+  );
 
   // The gate the removed JavaScript would have opened.
   css = css.replace(/visibility:\s*hidden/gi, () => {
@@ -1356,10 +1764,13 @@ ${bodies.map((b, i) => `<div class="report-sheet rs${i}">${b}</div>`).join("\n")
 export function findLeftoverMath(baked: string): string[] {
   const leftovers: string[] = [];
 
-  for (const opener of seenOpeners) {
+  for (const opener of new Set([...seenOpeners, ...ALWAYS_GUARDED])) {
     const n = baked.split(opener).length - 1;
     if (n > 0) leftovers.push(`${n} x "${opener}"`);
   }
+
+  const unrendered = baked.split(UNRENDERED).length - 1;
+  if (unrendered > 0) leftovers.push(`${unrendered} expression(s) that failed to typeset`);
 
   const texCommands = baked.match(/\\[a-zA-Z]{2,}/g);
   if (texCommands) {
@@ -1486,6 +1897,26 @@ export type SourceTokens = {
 };
 
 /**
+ * A tag in a SOURCE report, for the verification: `<` and a letter (or `/` and a letter), then
+ * anything, quoted runs taken whole, up to the `>` that ends it. Written apart from the bake's
+ * reading (design-decisions §9).
+ */
+const SOURCE_TAG = /<\/?[a-zA-Z](?:"[^"]*"|'[^']*'|[^"'>])*>/g;
+
+/** Index just past the `>` that ends the tag starting at `at`, quoted runs skipped. */
+function sourceTagEnd(html: string, at: number): number {
+  let quote = "";
+  for (let i = at + 1; i < html.length; i++) {
+    const ch = html[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === ">") return i + 1;
+  }
+  return html.length;
+}
+
+/**
  * Derive the expected content from the **raw source reports**, independently of
  * anything the bake step did.
  *
@@ -1506,21 +1937,34 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
       .replace(/<!--[\s\S]*?-->/g, " ")
       .replace(/<div id="loading"[\s\S]*?<\/div>/i, " ");
 
-    // Only the body is drawn; <title> would otherwise read as missing.
-    html = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
+    // Only the body is drawn; <title> would otherwise read as missing. The body as a READER sees
+    // it: everything after the <body> start tag, including text past </body> or before <body>
+    // (the parser moves both in). Cut at </body>, as the bake also cut, a dropped tail was
+    // missing from both sides and nothing noticed (2026-11-06). Written apart from the bake's.
+    const bodyAt = html.search(/<body(?=[\s/>])/i);
+    if (bodyAt >= 0) {
+      const headEnd = html.search(/<\/head\s*>/i);
+      const before = headEnd >= 0 && headEnd < bodyAt ? html.slice(headEnd, bodyAt) : "";
+      const after = html.slice(sourceTagEnd(html, bodyAt)).replace(/<\/(?:body|html)\s*>/gi, " ");
+      html = `${before} ${after}`;
+    }
 
     // Only embedded images are counted. Deriving the figure count by subtracting
     // the spinner would mean trusting this function's loader-removal regex to
     // match the baker's, and this check is worthless if it can agree with the
     // baker's mistakes. An external image cannot render hermetically anyway,
-    // and the bake step warns separately if any survives.
-    expectedImages += (html.match(/<img\b[^>]*\bsrc\s*=\s*["']data:/gi) ?? []).length;
+    // and the bake step warns separately if any survives. Tags read quote-aware: a ">" inside
+    // an earlier attribute's value hid the src from `[^>]*`.
+    expectedImages += (html.match(SOURCE_TAG) ?? []).filter((t) =>
+      /^<img\b[\s\S]*?\ssrc\s*=\s*["']data:/i.test(t),
+    ).length;
 
     // "<" is a relational operator inside mathematics -- "30.483<\lambda_{rf}".
     // A <[^>]+> stripper would consume from there to the next ">" and swallow
     // real numbers, making this check falsely lenient. Requiring a letter after
-    // "<" keeps it to genuine tags.
-    const text = decodeEntities(html.replace(/<\/?[a-zA-Z][^>]*>/g, " "));
+    // "<" keeps it to genuine tags; quotes are respected, so a ">" inside an attribute value
+    // does not leave the rest of the tag behind as text.
+    const text = decodeEntities(html.replace(SOURCE_TAG, " "));
 
     for (const c of text.match(/\\([a-zA-Z]{2,})/g) ?? []) {
       texCommands.add(c.slice(1).toLowerCase());
@@ -1588,7 +2032,9 @@ export function compareAgainstPdf(
   // The two bracket delimiters are named explicitly, but the real protection is
   // the backslash-command pattern: it catches unrendered TeX whatever delimiter
   // was wrapped around it, including one this code has never heard of.
-  const leftoverLatex = pdf.text.match(/\\[a-zA-Z]{2,}|\[math\]|\[mathin\]/g) ?? [];
+  // The standard TeX delimiters too: `\(a+b=12.5\)` typeset as prose has no backslash COMMAND.
+  const leftoverLatex =
+    pdf.text.match(/\\[a-zA-Z]{2,}|\[math\]|\[mathin\]|\\\(|\\\)|\\\[|\\\]|\$\$/g) ?? [];
   const splitDiagrams = pdf.diagramTitlePages.filter((p) => !pdf.diagramAxisPages.includes(p));
 
   const failures: string[] = [];
@@ -1729,18 +2175,29 @@ function referenceScan(html: string): { refs: number; unresolved: Set<string> } 
     ]
       .filter((m) => m[2] !== undefined || m[3] !== undefined || m[4] !== undefined)
       .map((m) => [m[1].toLowerCase(), m[2] ?? m[3] ?? m[4] ?? ""]);
-  const all = (text.match(/<[a-zA-Z][^<>]*>/g) ?? []).flatMap(attrs);
+  // Start tags read with their quoted values whole: a ">" inside one ended `<[^<>]*>` early, and
+  // the id or href after it went unseen -- a broken reference read as "0 references".
+  const all = (text.match(/<[a-zA-Z](?:"[^"]*"|'[^']*'|[^"'<>])*>/g) ?? []).flatMap(attrs);
   const named = (...names: string[]) => all.filter(([n]) => names.includes(n)).map(([, v]) => v);
   const ids = new Set(named("id"));
+  // A fragment is percent-decoded before it is matched, as a browser does: MathJax's \eqref
+  // writes href="#mjx-eqn%3At1" for id="mjx-eqn:t1", which read as broken.
+  const fragment = (t: string) => {
+    try {
+      return decodeURIComponent(t);
+    } catch {
+      return t;
+    }
+  };
   const targets = [
     // url(#x) bare, quoted, or entity-quoted as a browser serializes a style -- in a style sheet
     // as well as an attribute, so over the whole text.
-    ...[...text.matchAll(/url\(\s*(?:"|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)/gi)].map(
-      (m) => m[1],
+    ...[...text.matchAll(/url\(\s*(?:"|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)/gi)].map((m) =>
+      fragment(m[1]),
     ),
     ...named("href", "xlink:href")
       .filter((v) => /^#./.test(v))
-      .map((v) => v.slice(1)),
+      .map((v) => fragment(v.slice(1))),
   ];
   return { refs: targets.length, unresolved: new Set(targets.filter((t) => !ids.has(t))) };
 }
