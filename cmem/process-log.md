@@ -341,7 +341,7 @@ Owner: "look for code issues" four times, each followed by "fix" — then "do th
 The owner asked "look for code issues" eight times, answering "yes" / "fix all" each time, and to
 commit after each round (`d92ae0d`, `86e81d6`, `44b60de`, memory `aed68a2`, `e6bba07` with the
 API-surface re-baseline `f2ec880` in its own commit, `0155e62`, `1b1e498`, CI record `204c49d`,
-`547852b`; `main` unpushed). Ledger #31–#60.
+`547852b`; `main` unpushed then, pushed at the end of the day, `39f2f16`). Ledger #31–#60.
 
 - **Review 1, the runtime code (7):** a locked old PDF read back as the new one; a third argument
   ignored; SVG hoisting that lost `@media` and CSS-only properties; body sheets unscoped; `html`/`body`
@@ -417,6 +417,24 @@ recorded as roadmap tasks 16 (SkyCiv's zip as input) and 17 (a client-side web v
 | a fallback `$..$` delimiter is harmless | in prose it pairs two prices; TeX typesets the text between them |
 | an unreadable entry can be skipped | a broken link named `*.html` is a report that is missing; it is refused |
 | a narrowly scoped fix closes the finding | the owner's rule: fix the class, test a member the original did not show |
+
+**Then SkyCiv's zip as input (roadmap task 16), and the first real export through it.** The owner
+asked for the zip to be read, compiled, verified and given its PDF back. A browser version was
+ruled out ("Task 17 is not a goal"). The verified PDF goes "Into the original zip"
+(`2734a34`, surface `c6ffaf5`).
+- **The test zips come from a writer in the test, not from the tool.** A reader checked against
+  its own writer shares its blind spots.
+- **The real 75-report export, on a copy in `local/`, FAILED a correct PDF.**
+  `\color{blue}{…}` in 2 reports made "blue" missing (#66, `a41961f`). It was diagnosed without
+  printing client data: tokens were shown only if they also occur in the public samples. It was
+  fixed as the class of non-printing TeX arguments, and then the export PASSED, 75/75 per report.
+- **Pushed** (`39f2f16`); CI green on all 7 jobs.
+
+| believed | measured |
+|---|---|
+| a new input route only needs its reader tested | the first real input through it found a verification bug no sample could have: the samples have no `\color` |
+| a verification that names a missing word has found a lost word | "blue" was a colour setting; the PDF was right and the check was wrong — loud, so it cost one diagnosis, not a client |
+| `tar` reading a zip on stdin sees the zip | from a Bun `spawnSync`, 73 of 75 entries; by path, 75 |
 
 ## What I would tell the next person
 

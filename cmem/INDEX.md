@@ -30,8 +30,10 @@ reviewed in a diff. If it is worth remembering, it goes in a topic file here and
   machine's layout** (a user profile, `D:\Programs\…`, AppData, a session id). **The test is "is it
   machine-specific?", not "is it absolute?"** (owner, 2026-10-23): a convention path that names
   nothing about one machine is fine. Use repo-relative paths or placeholders (`<repo-root>`).
-- **Client data:** `local/` (the real report set), `CompiledPDF/` and `cmem/transcript/` are
-  gitignored whole; only sanitized samples are committed ([roadmap.md](roadmap.md) task 3).
+- **Client data:** `local/` (the real report set, and since 2026-11-06 a copy of a real 75-report
+  SkyCiv zip in `local/skyciv-zip-test/`), `CompiledPDF/` and `cmem/transcript/` are gitignored
+  whole; only sanitized samples are committed ([roadmap.md](roadmap.md) task 3). Diagnose a real
+  report without printing it: show a token only if the public samples also contain it.
 - **The one exception — the maintainer address** (owner, 2026-10-26): it may appear as the git commit
   author/committer address, in a registry manifest's author field, and in ONE committed `cmem/` note
   naming the maintainer contact. This repo has no such note; the address is not written here.

@@ -452,6 +452,22 @@ The owner's 75-report export: read in memory, counts only, 23 ms; a round trip t
 - **The suite:** 49/49 on Bun and Node 26.12 / 24.21 / 22.18. The new test fails on the
   previous code.
 
+**2026-11-06, CI after the push** (owner: "commit and push"; `57b2e23..39f2f16`, 27 commits):
+run 42327019979, **all 7 jobs green**:
+- types / format / lint / compat / build;
+- the JSR checks (Deno);
+- the runtime matrix;
+- the npm tarball proof;
+- the new `node-suite` on Node 26, 24 and 22.18.
+
+What that run covered for the first time:
+- the reworked `ci.yml` (the node-suite matrix, the concurrency group);
+- the full-review fixes, the zip code and #66 on Linux, including the Linux branch of the
+  redactor test that "Not run here" above left to CI.
+
+Still unexercised: `publish.yml`, until the next release. Read via GitHub's public API
+(`curl`), since `gh` is not installed on this machine.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in
