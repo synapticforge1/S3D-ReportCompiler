@@ -397,6 +397,27 @@ API-surface re-baseline `f2ec880` in its own commit, `0155e62`, `1b1e498`, CI re
 | turning JavaScript off with a Chrome flag is the simple fix | `--blink-settings=scriptEnabled=false` makes `--print-to-pdf` write no file; a CSP in the document works |
 | a font file's signature proves it is a font | a download cut short keeps its signature; the header records the length |
 
+**Then the full-project review (owner: "covers everything in the project, not just specific
+items"; ledger #61–#65).** Four reviewers in parallel, one per area (core, CLI/runtime,
+release/CI, tests/config/docs). Their findings were fixed in five groups, a commit each:
+A `4d44dc4`, B `ca113f8`, C `e683ae2`, D `0769a96`, E `bfa5e32`; A's and C's surface
+re-baselines `c348731` and `319a5bb` each alone; Node 26 in CI `0bbdabb`. The owner's rule for the round,
+given when a narrow fix was refused: **"make sure the fix is for all conditions that could occur
+like this, not just this specific case"**, so every fix names its class:
+- every route by which maths reaches the page as prose;
+- every spelling of a tag or link;
+- every setting that can be mistyped;
+- every path or address the redactor can meet.
+
+Node 26 (LTS) joined the local runs and CI. 44/44 on Bun and on Node 26/24/22.18. Owner questions
+recorded as roadmap tasks 16 (SkyCiv's zip as input) and 17 (a client-side web version).
+
+| believed | measured |
+|---|---|
+| a fallback `$..$` delimiter is harmless | in prose it pairs two prices; TeX typesets the text between them |
+| an unreadable entry can be skipped | a broken link named `*.html` is a report that is missing; it is refused |
+| a narrowly scoped fix closes the finding | the owner's rule: fix the class, test a member the original did not show |
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is

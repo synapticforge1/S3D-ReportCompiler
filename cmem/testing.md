@@ -400,6 +400,23 @@ environment variable the CLI reads": the list is main.ts's own `rt.env("…")` r
 S3D_CHROME_NO_SANDBOX"). 41/41 on `bun test`; `compat` unchanged (the gate reads USAGE and
 OPTIONS only).
 
+**2026-11-06, the full-project review (owner: "All, in order A→E"; ledger #61–#65):** four
+reviewers in parallel (core, CLI/runtime, release/CI, tests/config/docs); every finding re-run or
+reasoned, fixed as its class. **44/44 on `bun test` and `node --test` on Node 26.12.0, 24.21.0 and
+22.18.0** (Node 26 added to every local run and to CI: `ci.yml`'s `node-suite` matrix, 22.18 / 24 /
+26). New tests: group A (maths-as-prose in every route, body boundary, quote-aware tags, CSS
+mapping, labels per report, removal counts; and links — a symlinked report compiled, a broken link
+or folder `*.html` refused, a hard-linked output refused); group C (settings, folder output, the
+`.unverified.pdf` name, `runWithTimeout`); group D (multi-line notes scrubbed whole; POSIX paths,
+entity emails, a looser residue check). Changed to match deliberate behaviour: unknown-delimiter
+87 expressions / 270 TeX commands (no bare `$` in the fallback), `:hover` dropped and `:not(.y)`
+settled. Every new test fails on the previous code. Baked hashes: byte-identical after A–D;
+group E narrowed the CSP font source, so `37792fe3…` (samples) / `ae70d5e0…` (client set), the old
+`7f283563…` / `a19e5ad1…` without that line. Group B's workflow changes: both files parse; the
+pinning steps, run verbatim in bash against the real remote and JSR, 7/7 verdicts right; the 1.2.0
+release gate passes from Git Bash (it failed: `tar: Cannot connect to C:`) and PowerShell. Not run
+here: the workflows themselves (the next release), the Linux branch of the redactor test (CI).
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in

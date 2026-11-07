@@ -371,6 +371,23 @@ ignore rules, the tool configuration:
 | 59 | **#57's font check passed a download cut short** — only the 4-byte signature was read, and a file truncated mid-download still starts `wOFF`. Fixed: the total length the WOFF/WOFF2 header records (bytes 8–11) must equal the file's size; all 22 MathJax fonts record theirs exactly (measured) | **yes** |
 | 60 | **The render could load content from other hosts.** The document is meant to be hermetic, but nothing enforced it: the check counted double-quoted `href`/`src="http…"` only (1 of 7 spellings, measured) and only warned, and the policy (#55) governed scripts alone. Measured with a counting server on 127.0.0.1: under that policy Chrome made 5 requests during the render; whatever came back would sit in a sealed PDF, and verification proves presence, not absence of additions. Fixed: the CSP forbids every outside load (`default-src 'none'`, images and fonts from data only, MathJax's font origin kept for the browser path, `base-uri` / `form-action` closed) → 0 requests; `<meta>` and `<base>` leave report bodies (a refresh is no policy's to stop); the count reads every spelling. The real set loads nothing (its only external host is the SVG namespace, `www.w3.org`): baked HTML differs by the policy line only | **yes** |
 
+### The full-project review (2026-11-06, four reviewers in parallel)
+
+Owner: "a comprehensive look … that covers everything", then "All, in order A→E", and "make
+sure the fix is for all conditions that could occur like this, not just this specific case".
+Four independent reviewers (core, CLI/runtime, release/CI, tests/config/docs) reported ~40
+findings; each was re-run or reasoned before fixing, and fixed as its CLASS. One row per group;
+the commits carry the detail. Baked HTML byte-identical on both sets after A–D; E changed the
+CSP line only.
+
+| # | Class (group) | Silent? |
+|---|---|---|
+| 61 | **Wrong content could pass (A, `4d44dc4`).** Maths left as prose (unread quoted config keys, `\u` escapes, an all-refused config falling back to a bare `$`, a guard blind to undeclared delimiters and to failures without a command); a report that was a SYMLINK dropped with PASS (12 of 13 compiled) and hard links past the overwrite guard; text outside `<body>` dropped by bake AND verification; tags read up to the first `>` even inside quotes (in all 48 client reports); CSS ids renamed in attribute values, `html > X`, `:not` judged on the wrapper, `@scope` unscoped; MathJax labels leaking across reports; uncounted removals. All re-run on the old code | **yes** |
+| 62 | **A release could publish a commit other than its tag's (B, `ca113f8`).** No concurrency per tag, the npm job checking out the tag by NAME, no tag-vs-version or "JSR 404" check before `deno publish`, the dispatch path skipping every gate, `npm-prove` comparing exports with JSR's LATEST, a queued main CI run cancellable, `tar` failing from Git Bash. Pinning steps run verbatim against the real remote and JSR: 7/7 verdicts right | **yes** |
+| 63 | **A build could say something other than what happened (C, `e683ae2`).** Mis-set settings ignored, a folder as output, an unverified PDF under the final name, the HTML of a failed build deleted, no wall-clock bound on Chrome, Ctrl-C leaking the temp profile, test-hook fonts in the real cache | mixed |
+| 64 | **Privacy tools missed the class (D, `0769a96`).** The sanitizer cut notes at the first `<br>` (safe today: all 48 use newlines, counted); the redactor passed `/srv`-style paths, and its email residue check could not fail | **yes** |
+| 65 | **Tests that could not fail, and false docs (E, `bfa5e32`).** Linux-vacuous redactor cases, a silent root `return`, a filter-dependent check, unchecked generator edits, `tests/controls/` never formatted or linted, the CSP allowing all of jsDelivr, stale README/control claims | **yes** |
+
 ⚠️ **#52 and #54 add four exports, so the next release is a MINOR (1.2.0), not 1.1.8:** `compat`
 says 0 removed, 0 changed, 4 added (`BakedReport`, `ReferenceCheck`, `findBrokenReferences`,
 `resetBakeState`). `api-surface.txt` re-baselined to 73 lines in its own commit (Rule 5).
