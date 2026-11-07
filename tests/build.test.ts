@@ -1193,6 +1193,65 @@ test(
   },
 );
 
+test("full review, group C: a build says what happened", { timeout: TIMEOUT }, async () => {
+  const input = control("control-custom-delimiters", join(work, "c-input"));
+  const out = (name: string) => join(work, name, "c.pdf");
+
+  // A setting that is set but cannot be honoured stops the build, named, before anything runs.
+  for (const [env, why] of [
+    [{ CHROME_PATH: join(work, "no-such-chrome.exe") }, /CHROME_PATH names no file/],
+    [{ S3D_CHROME_NO_SANDBOX: "maybe" }, /S3D_CHROME_NO_SANDBOX="maybe" is not/],
+    [{ S3D_CHROME_TIMEOUT_MS: "soon" }, /S3D_CHROME_TIMEOUT_MS="soon" is not a positive/],
+  ] as const) {
+    const r = run([MAIN, input, out("c-settings")], { env: { ...process.env, ...env } });
+    assert.equal(r.code, 1, tail(r.out));
+    has(r.out, why);
+    hasNot(r.out, /Compiling/);
+  }
+
+  // A folder as the output: refused up front, not a Chrome stack trace and a stray .html.
+  const folder = join(work, "c-folder-out");
+  mkdirSync(folder, { recursive: true });
+  const f = run([MAIN, input, folder]);
+  assert.equal(f.code, 1, tail(f.out));
+  has(f.out, /The output is a folder, not a PDF file/);
+  assert.ok(!existsSync(`${folder}.html`), "a stray .html was left beside the folder");
+
+  // A failed verification: the PDF is NOT given its final name, and --no-keep-html keeps the HTML.
+  const hidden = control("control-hidden-content", join(work, "c-hidden"));
+  const pdf = out("c-failed");
+  const v = run([MAIN, hidden, pdf, "--no-keep-html"]);
+  assert.equal(v.code, 1, tail(v.out));
+  has(v.out, /VERIFICATION FAILED/, /NOT given its/);
+  hasNot(v.out, /^Created /m);
+  assert.ok(!existsSync(pdf), "an unverified PDF sat under the final name");
+  assert.ok(
+    existsSync(pdf.replace(/\.pdf$/, ".unverified.pdf")),
+    "the unverified PDF was not kept",
+  );
+  assert.ok(
+    existsSync(pdf.replace(/\.pdf$/, ".html")),
+    "--no-keep-html deleted the HTML of a failed build",
+  );
+
+  // A good build: the final name, and only it.
+  const goodPdf = out("c-good");
+  const g = run([MAIN, input, goodPdf]);
+  assert.equal(g.code, 0, tail(g.out));
+  assert.ok(existsSync(goodPdf) && !existsSync(goodPdf.replace(/\.pdf$/, ".unverified.pdf")));
+
+  // The wall-clock bound kills a process that outlives it (Chrome's budget bounds only the page).
+  const rt = await import(pathToFileURL(join(ROOT, "src", "report_runtime.ts")).href);
+  const t0 = Date.now();
+  const slow = await rt.runWithTimeout(
+    process.execPath,
+    ["-e", "setTimeout(() => {}, 60000)"],
+    500,
+  );
+  assert.equal(slow.timedOut, true, "the process was not stopped");
+  assert.ok(Date.now() - t0 < 20_000, `it took ${Date.now() - t0} ms to stop`);
+});
+
 test("the bake carries no event handlers or javascript: URLs", async () => {
   // A report is user-supplied HTML; the render must not execute anything from it (#55).
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
@@ -1318,6 +1377,11 @@ test(
     const v = versioned(fresh.cwd);
     assert.deepEqual(v.flat, [], "a font was cached flat, without its version");
     assert.ok(v.dirs.length === 1 && /mathjax@3\.2\.2/.test(v.dirs[0]), `cache folders: ${v.dirs}`);
+    //    Bytes from the test hook are kept apart from the real cache (group C).
+    assert.ok(
+      v.dirs[0].startsWith("test-hook_"),
+      `the hook's fonts went into the real cache: ${v.dirs}`,
+    );
 
     // 2. A 200 that is not a font (a captive portal's page): refused, nothing cached.
     const portal: Handler = (_req, res) => {

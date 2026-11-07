@@ -197,14 +197,16 @@ IF YOU WANT TO CHOOSE THE PATHS
   does not exist.
 
 OPTIONS
-  --no-keep-html  delete the intermediate HTML, leaving only the PDF
+  --keep-html     keep the intermediate HTML beside the PDF (the default)
+  --no-keep-html  delete the intermediate HTML after a good build, leaving only
+                  the PDF (a failed build keeps it: it is the first thing to read)
   --no-optimize   skip the recompression pass (the PDF ends up ~2x larger)
   --no-verify     skip the check that nothing was lost. NOT ADVISABLE for a
                   document that will be issued or sealed -- the check is the
                   only thing proving a value was not silently dropped, and a
                   dropped value still looks right on the page.
   -v, --version   print the version and exit
-  -h, --help      print this and exit
+  -h, -?, --help  print this and exit
 
 REQUIREMENTS
   Google Chrome or Microsoft Edge must be installed -- it does the rendering.
@@ -221,10 +223,18 @@ REQUIREMENTS
       Linux     S3D_CHROME_NO_SANDBOX=1 s3d-reportcompiler
 
   The build then prints "sandbox: OFF". The reports' own code stays blocked
-  either way.
+  either way. S3D_CHROME_NO_SANDBOX takes 1, true or yes (or 0, false, no);
+  anything else stops the build, as does a CHROME_PATH that names no file.
 
-  The first run downloads maths fonts once and caches them in .mathjax-fonts,
-  so later runs work offline.
+  Chrome is stopped if it has not finished in 10 minutes. For a very large set
+  allow it longer, in milliseconds: S3D_CHROME_TIMEOUT_MS=1800000
+
+  The first run in a folder downloads maths fonts once and caches them in
+  .mathjax-fonts in the folder you run it FROM, so later runs from there work
+  offline. Run from another folder, it downloads them again.
+
+  Until a build passes its check, its PDF is named <name>.unverified.pdf; only
+  a pass (or --no-verify) gives it the name you asked for.
 
 WHAT "PASS" AT THE END MEANS
   Every distinct word and number in your reports was found in the PDF, no
@@ -262,6 +272,38 @@ if (positional.length > 2) {
   console.error(`\nA path containing spaces must be quoted as ONE argument:`);
   console.error(`  s3d-reportcompiler "C:\\Jobs\\Gate Calcs\\Reports" "C:\\Jobs\\Gate Calcs.pdf"`);
   rt.exit(1);
+}
+
+// Settings that are SET but cannot be honoured stop the build, named -- never a silent fallback.
+// A mistyped CHROME_PATH used to render with whatever other browser was found; any value of
+// S3D_CHROME_NO_SANDBOX but "1" was silently ignored (2026-11-06).
+const settingError = (msg: string): never => {
+  console.error(`${msg}\n`);
+  console.error("Run with --help for what each setting accepts.");
+  return rt.exit(1);
+};
+const sandboxSetting = (rt.env("S3D_CHROME_NO_SANDBOX") ?? "").trim().toLowerCase();
+if (!["", "0", "1", "false", "true", "no", "yes"].includes(sandboxSetting)) {
+  settingError(
+    `S3D_CHROME_NO_SANDBOX=${JSON.stringify(sandboxSetting)} is not 1/true/yes or 0/false/no.`,
+  );
+}
+const sandboxOptOut = ["1", "true", "yes"].includes(sandboxSetting);
+const timeoutSetting = rt.env("S3D_CHROME_TIMEOUT_MS");
+const chromeTimeoutMs =
+  timeoutSetting === undefined || timeoutSetting.trim() === ""
+    ? 10 * 60_000
+    : Number(timeoutSetting);
+if (!Number.isFinite(chromeTimeoutMs) || chromeTimeoutMs <= 0) {
+  settingError(
+    `S3D_CHROME_TIMEOUT_MS=${JSON.stringify(timeoutSetting)} is not a positive number of milliseconds.`,
+  );
+}
+const chromeSetting = rt.env("CHROME_PATH");
+if (chromeSetting && !(await rt.fileExists(chromeSetting))) {
+  settingError(
+    `CHROME_PATH names no file:\n  ${chromeSetting}\n\nFix it, or unset it to use an installed Chrome or Edge.`,
+  );
 }
 
 // Default layout: reports in one folder, output in another, so the input scan
@@ -303,10 +345,22 @@ const outputPdf = await rt.resolvePath(
   positional[1] ?? rt.joinPath(workingDir, OUTPUT_DIR, "combined_report.pdf"),
 );
 
+// The second argument names the PDF FILE. A folder there could not be replaced, so Chrome's write
+// failed ("Access is denied"), the run ended in a stack trace blaming Chrome, and a stray
+// "<folder>.html" was left beside it.
+if (await rt.dirExists(outputPdf)) {
+  console.error(`The output is a folder, not a PDF file:\n  ${outputPdf}\n`);
+  console.error(
+    `The second argument names the PDF itself, e.g. "${rt.joinPath(outputPdf, "combined_report.pdf")}".`,
+  );
+  rt.exit(1);
+}
+
 // ---------------------------------------------------------------------------
 // Font inlining
 //
-// Cached beside the reports so repeat builds work offline; the first build is
+// Cached in the working directory (not beside the reports) so repeat builds from there work
+// offline; the first build is
 // the only one that needs the network.
 // ---------------------------------------------------------------------------
 
@@ -357,11 +411,15 @@ function fontSource(url: string): string {
  */
 async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
   const name = rt.baseName(url).replace(/[^\w.-]/g, "_");
-  const dirKey = url
-    .slice(0, url.length - rt.baseName(url).length)
-    .replace(/^https?:\/\//, "")
-    .replace(/\/+$/, "")
-    .replace(/[^\w.@-]/g, "_");
+  // Bytes from the test hook are kept apart from the real cache: stored under the real key, a
+  // test run in a working folder left the fake server's fonts for every later real build there.
+  const dirKey =
+    (rt.env("S3D_FONT_ORIGIN") ? "test-hook_" : "") +
+    url
+      .slice(0, url.length - rt.baseName(url).length)
+      .replace(/^https?:\/\//, "")
+      .replace(/\/+$/, "")
+      .replace(/[^\w.@-]/g, "_");
   const cacheDir = rt.joinPath(cacheRoot, dirKey);
   const cached = rt.joinPath(cacheDir, name);
 
@@ -657,7 +715,6 @@ if (entries.length === 0) {
 // --print-to-pdf, it just fails and still exits 0. Created under the working
 // directory by default, and only once there is actually something to compile.
 const outputDir = outputPdf.replace(/[\\/][^\\/]*$/, "");
-if (outputDir && outputDir !== outputPdf) await rt.mkdirp(outputDir);
 
 const skipped = allHtml.length - entries.length;
 
@@ -832,10 +889,15 @@ const runningAsRoot =
  * `S3D_CHROME_NO_SANDBOX=1` asks -- for a host where Chrome finds no usable sandbox as an ordinary
  * user (Ubuntu 24.04 restricts the user namespaces it needs). Off by default, and said when on.
  */
-const noSandbox = runningAsRoot || rt.env("S3D_CHROME_NO_SANDBOX") === "1";
+const noSandbox = runningAsRoot || sandboxOptOut;
 if (noSandbox) {
-  console.log(`  sandbox:  OFF (${runningAsRoot ? "running as root" : "S3D_CHROME_NO_SANDBOX=1"})`);
+  console.log(`  sandbox:  OFF (${runningAsRoot ? "running as root" : "S3D_CHROME_NO_SANDBOX"})`);
 }
+
+// Chrome prints to an UNVERIFIED name; only a passed verification (or an explicit --no-verify)
+// gives the file its final one. A failed or crashed run used to leave a finished-looking PDF
+// under the final name, "Created …" already printed (2026-11-06).
+const candidatePdf = `${outputPdf.replace(/\.pdf$/i, "")}.unverified.pdf`;
 
 // Chrome exits 0 even when printing fails, so "no file" is the only reliable
 // failure signal -- but only if there is no file to begin with. A leftover PDF
@@ -843,18 +905,34 @@ if (noSandbox) {
 // output, turning a failed build into a silently stale one. So the old PDF must
 // be GONE, not merely asked to go: removeQuietly swallows a failed delete, and a
 // PDF open in a viewer on Windows cannot be deleted or written -- but can be read.
-await rt.removeQuietly(outputPdf);
-if (await rt.fileExists(outputPdf)) {
-  console.error(`Could not remove the previous PDF:\n  ${outputPdf}\n`);
-  console.error("It is probably open in a PDF viewer. Close it and run again.");
-  console.error("(Left in place, Chrome could not write the new one, and the old one would be");
-  console.error("read back as this run's output.)");
-  rt.exit(1);
+for (const old of [outputPdf, candidatePdf]) {
+  await rt.removeQuietly(old);
+  if (await rt.fileExists(old)) {
+    console.error(`Could not remove the previous PDF:\n  ${old}\n`);
+    console.error("It is probably open in a PDF viewer. Close it and run again.");
+    console.error("(Left in place, Chrome could not write the new one, and the old one would be");
+    console.error("read back as this run's output.)");
+    rt.exit(1);
+  }
 }
+
+// Created only now that there is something to write: a build refused earlier used to leave an
+// empty output folder behind.
+if (outputDir && outputDir !== outputPdf) await rt.mkdirp(outputDir);
 
 // Only the Chrome profile needs to be temporary now. The baked document is a
 // build artifact in its own right and belongs beside the PDF it produced.
 const workDir = await rt.makeTempDir("compiled_reports_");
+
+// Ctrl-C (or a kill) during the render: the temp profile is removed, not left behind -- 66 old
+// profiles had collected in the temp folder. The exit code says it was interrupted.
+if (typeof process !== "undefined" && typeof process.once === "function") {
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      void rt.removeQuietly(workDir, true).finally(() => rt.exit(130));
+    });
+  }
+}
 
 // Set inside the try and acted on after the finally: rt.exit() is process.exit(),
 // which skips finally blocks, so exiting in place left the temp Chrome profile
@@ -874,31 +952,41 @@ try {
   console.log(`  html:     ${(htmlBytes.length / 1e6).toFixed(2)} MB, self-contained`);
 
   // The old PDF was removed, and proved gone, before the bake was written.
-  const result = await rt.run(chrome, [
-    "--headless=new",
-    "--disable-gpu",
-    // No script runs in the render: the bake strips scripts and handlers, and the document itself
-    // forbids scripting (its Content-Security-Policy, assembleDocument). Not by a Chrome flag:
-    // `--blink-settings=scriptEnabled=false` makes --print-to-pdf write NO file (measured
-    // 2026-11-06, Chrome; exit 0, empty stderr).
-    // Chrome's sandbox stays on, except as root (a container), where Chrome cannot start with it.
-    // It used to be off everywhere, justified as "the input is a document this script generated
-    // itself" -- but the bake is made from whatever reports are in the folder (2026-11-06).
-    ...(noSandbox ? ["--no-sandbox"] : []),
-    "--no-first-run",
-    "--disable-extensions",
-    // Chrome refuses to start against a profile already in use.
-    `--user-data-dir=${rt.joinPath(workDir, "profile")}`,
-    `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MS}`,
-    "--run-all-compositor-stages-before-draw",
-    "--no-pdf-header-footer",
-    `--print-to-pdf=${outputPdf}`,
-    await rt.toFileUrl(htmlPath),
-  ]);
+  const result = await rt.runWithTimeout(
+    chrome,
+    [
+      "--headless=new",
+      "--disable-gpu",
+      // No script runs in the render: the bake strips scripts and handlers, and the document itself
+      // forbids scripting (its Content-Security-Policy, assembleDocument). Not by a Chrome flag:
+      // `--blink-settings=scriptEnabled=false` makes --print-to-pdf write NO file (measured
+      // 2026-11-06, Chrome; exit 0, empty stderr).
+      // Chrome's sandbox stays on, except as root (a container), where Chrome cannot start with it.
+      // It used to be off everywhere, justified as "the input is a document this script generated
+      // itself" -- but the bake is made from whatever reports are in the folder (2026-11-06).
+      ...(noSandbox ? ["--no-sandbox"] : []),
+      "--no-first-run",
+      "--disable-extensions",
+      // Chrome refuses to start against a profile already in use.
+      `--user-data-dir=${rt.joinPath(workDir, "profile")}`,
+      `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MS}`,
+      "--run-all-compositor-stages-before-draw",
+      "--no-pdf-header-footer",
+      `--print-to-pdf=${candidatePdf}`,
+      await rt.toFileUrl(htmlPath),
+    ],
+    chromeTimeoutMs,
+  );
+  if (result.timedOut) {
+    throw new Error(
+      `Chrome did not finish within ${Math.round(chromeTimeoutMs / 1000)} s and was stopped. ` +
+        `A larger document may need more: set S3D_CHROME_TIMEOUT_MS (milliseconds).`,
+    );
+  }
 
   let rendered: Uint8Array;
   try {
-    rendered = await rt.readFile(outputPdf);
+    rendered = await rt.readFile(candidatePdf);
   } catch {
     // Said in plain words when the cause is the sandbox: its own message is easy to miss.
     const sandboxHint = /no usable sandbox|sandbox/i.test(result.stderr)
@@ -919,20 +1007,14 @@ try {
   let final = rendered;
   if (optimize) {
     final = await pdf.save({ useObjectStreams: true });
-    await rt.writeFile(outputPdf, final);
+    await rt.writeFile(candidatePdf, final);
     console.log(
       `  packed:   ${(final.length / 1e6).toFixed(2)} MB ` +
         `(${((1 - final.length / rendered.length) * 100).toFixed(0)}% smaller)`,
     );
   }
 
-  // Discarded only on request, and only after the render succeeded -- on a
-  // failed build the baked document is the first thing worth looking at.
-  if (!keepHtml) await rt.removeQuietly(htmlPath);
-
-  console.log(`\nCreated ${outputPdf}`);
-  console.log(`${pageCount} pages, ${(final.length / 1e6).toFixed(2)} MB`);
-  if (keepHtml) console.log(`Kept ${htmlPath}`);
+  console.log(`\n${pageCount} pages, ${(final.length / 1e6).toFixed(2)} MB`);
 
   // Read back from disk rather than trusting anything held in memory: the
   // artifact that ships is the one that gets checked.
@@ -940,7 +1022,7 @@ try {
     console.log("\nVerifying against the source reports...");
 
     const expected = extractSourceTokens(sources);
-    const observed = await readPdf(outputPdf);
+    const observed = await readPdf(candidatePdf);
     const check = compareAgainstPdf(expected, observed, entries.length);
 
     console.log(
@@ -1000,11 +1082,25 @@ try {
       console.error("VERIFICATION FAILED");
       for (const f of check.failures) console.error(`  - ${f}`);
       console.error("");
-      console.error(`${outputPdf} does not faithfully reproduce its sources.`);
+      console.error("The PDF does not faithfully reproduce its sources. It was NOT given its");
+      console.error("final name; it is kept for inspection, with the baked HTML Chrome was given:");
+      console.error(`  ${candidatePdf}`);
+      console.error(`  ${htmlPath}`);
       verificationFailed = true;
     } else {
       console.log("  PASS: every source word and number present, nothing split or unrendered.");
     }
+  }
+
+  // The final name only now: verified, or verification turned off by request. Same folder, so a
+  // rename, never a copy across drives.
+  if (!verificationFailed) {
+    await rt.rename(candidatePdf, outputPdf);
+    // Discarded only on request, and only after a good build -- on a failed one the baked
+    // document is the first thing worth looking at (it used to be deleted before verifying).
+    if (!keepHtml) await rt.removeQuietly(htmlPath);
+    console.log(`\nCreated ${outputPdf}${verify ? "" : "  (NOT verified: --no-verify)"}`);
+    if (keepHtml) console.log(`Kept ${htmlPath}`);
   }
 } finally {
   await rt.removeQuietly(workDir, true);

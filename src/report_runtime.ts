@@ -306,6 +306,47 @@ export async function run(cmd: string, argv: string[]): Promise<RunResult> {
   });
 }
 
+/** {@link RunResult}, and whether the process was killed for outliving its time. */
+export type TimedRunResult = RunResult & { timedOut: boolean };
+
+/**
+ * {@link run}, bounded by wall-clock time: past `timeoutMs` the process is killed and `timedOut`
+ * is true. Chrome's `--virtual-time-budget` bounds the page, not the process -- a Chrome stuck on
+ * a profile, a dialog or a driver never exited, and neither did the build (2026-11-06).
+ */
+export async function runWithTimeout(
+  cmd: string,
+  argv: string[],
+  timeoutMs: number,
+): Promise<TimedRunResult> {
+  requireHost("Launching a browser");
+  const { spawn } = await import("node:child_process");
+
+  return await new Promise<TimedRunResult>((resolve) => {
+    const child = spawn(cmd, argv, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ code: -1, stderr: `${stderr}${e}`, timedOut });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, stderr, timedOut });
+    });
+  });
+}
+
 // --------------------------------------------------------------------------
 // Browser discovery
 // --------------------------------------------------------------------------
