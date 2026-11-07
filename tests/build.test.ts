@@ -1012,41 +1012,30 @@ test("CSS scoping, SVG sheets, attributes and entities, as a browser reads them"
   assert.doesNotMatch(fragment, /#report\{/, "the body sheet stayed, unscoped");
   assert.match(fragment, /<text fill="red">/, "the SVG sheet was not hoisted");
 
-  // 5. What cannot be hoisted is kept, and confined to its own <svg>: a rule under @media is a
-  //    condition (it was hoisted as though unconditional), and `font` has no presentation
-  //    attribute (it became font="…", which the browser ignores, and the sheet was deleted).
-  const svg = (s: string) =>
-    flat(
-      core.bakeBody(
-        `<html><body><svg><style>${s}</style><text id="t">t</text></svg></body></html>`,
-        "r9-",
-      ),
-    );
+  // 5. What cannot be hoisted moves to the REPORT's scoped sheet -- in HTML an inline SVG's
+  //    <style> applies to the whole page (2026-11-07; it was confined to its own <svg>, so
+  //    diagram 1's rules missed diagram 2). A rule under @media is a condition (it was hoisted as
+  //    though unconditional), and `font` has no presentation attribute (it became font="…",
+  //    which the browser ignores, and the sheet was deleted).
+  const svg = (s: string) => {
+    const src = `<html><body><svg><style>${s}</style><text id="t">t</text></svg></body></html>`;
+    return {
+      body: flat(core.bakeBody(src, "r9-")),
+      style: flat(core.bakeStyle(src, ".rs9", "r9-")),
+    };
+  };
   const media = svg("@media screen { text { fill: gray } }");
-  assert.doesNotMatch(media, /fill="gray"/, "a conditional rule was hoisted");
-  assert.match(media, /<svg data-s3d-scope="r9-">/, "the kept sheet's <svg> is not marked");
-  //    Confined inside :where(), which weighs nothing: each rule keeps the specificity it had.
-  //    Prefixed plainly (`svg[data-s3d-scope] text`), a diagram's bare `text` rule began to beat
-  //    the report's own `.rs0 svg text` it used to lose to -- measured in Chrome, 2026-11-06.
-  assert.match(
-    media,
-    /@media screen \{ :where\(svg\[data-s3d-scope="r9-"\]\) text \{ fill: gray \} \}/,
-  );
+  assert.doesNotMatch(media.body, /fill="gray"|<style/, "a conditional rule was hoisted, or kept");
+  assert.match(media.style, /@media screen \{ \.rs9 text \{ fill: gray \} \}/);
   const font = svg("text { font: 12px Arial } svg { opacity: .5 } #t { fill: red }");
-  assert.doesNotMatch(font, /<text[^>]* font=/, "a CSS-only property became an attribute");
-  assert.match(font, /:where\(svg\[data-s3d-scope="r9-"\]\) text \{ font: 12px Arial \}/);
-  //    A rule on `svg` itself is that <svg>, and keeps its type selector's weight.
-  assert.match(
-    font,
-    /svg:where\(\[data-s3d-scope="r9-"\]\) \{ opacity: \.5 \}/,
-    "`svg` is not the root",
+  assert.doesNotMatch(
+    font.body,
+    /<text[^>]* font=|<style/,
+    "a CSS-only property became an attribute",
   );
-  assert.match(
-    font,
-    /:where\(svg\[data-s3d-scope="r9-"\]\) #r9-t \{ fill: red \}/,
-    "an id not renamed",
-  );
-  assert.doesNotMatch(font, /[^(]svg\[data-s3d-scope/, "a selector carries the scope's weight");
+  assert.match(font.style, /\.rs9 text \{ font: 12px Arial \}/);
+  assert.match(font.style, /\.rs9 svg \{ opacity: \.5 \}/, "a rule on `svg` itself");
+  assert.match(font.style, /\.rs9 #r9-t \{ fill: red \}/, "an id not renamed");
 
   // 6. "id=" inside another attribute's value is that attribute's text.
   const attrs: string = core.bakeBody(
@@ -1983,6 +1972,204 @@ const filesOf = (dir: string) =>
   readdirSync(dir)
     .filter((n) => n.endsWith(".html"))
     .map((n) => ({ name: n, data: new Uint8Array(readFileSync(join(dir, n))) }));
+
+test("review 3, group A: nothing is added, hidden or carried between reports", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  const cfg = `<script>MathJax={tex2jax:{inlineMath:[['[mathin]','[mathin]']]}}</script>`;
+  const doc = (body: string, head = "") =>
+    `<html><head>${cfg}${head}</head><body>${body}</body></html>`;
+
+  // 1. An undefined command is a failure, not red text counted as converted (`noundefined`).
+  for (const tex of ["M_u = \\phiM_n", "x = \\foo + 2"]) {
+    core.resetBakeState();
+    const body: string = core.bakeBody(doc(`<p>[mathin]${tex}[mathin]</p>`), "r0-");
+    assert.equal(core.mathStats.failed, 1, `${tex}: typeset as converted`);
+    assert.ok(core.findLeftoverMath(body).length > 0, `${tex}: the guard passed it`);
+  }
+
+  // 2. A report's definitions do not reach the next report: report 1 bakes exactly as it does alone.
+  const later = doc("<p>[mathin]\\phi \\cdot 12.5 \\color{mine}{x}[mathin]</p>");
+  for (const earlier of [
+    "\\renewcommand{\\phi}{0.9}",
+    "\\def\\phi{0.9}",
+    "\\let\\phi\\pi",
+    "\\definecolor{mine}{rgb}{1,0,0}",
+  ]) {
+    core.resetBakeState();
+    const alone: string = core.bakeBody(later, "r1-");
+    const aloneFailed = core.mathStats.failed;
+    core.resetBakeState();
+    core.bakeBody(doc(`<p>[mathin]${earlier} y[mathin]</p>`), "r0-");
+    const failedBefore = core.mathStats.failed;
+    assert.equal(core.bakeBody(later, "r1-"), alone, `${earlier} changed the next report`);
+    assert.equal(core.mathStats.failed - failedBefore, aloneFailed, `${earlier}: failures differ`);
+  }
+  //    ...and resetBakeState() clears them too (a second batch).
+  core.resetBakeState();
+  const fresh: string = core.bakeBody(later, "r1-");
+  core.bakeBody(doc("<p>[mathin]\\renewcommand{\\phi}{0.9} y[mathin]</p>"), "r0-");
+  core.resetBakeState();
+  assert.equal(core.bakeBody(later, "r1-"), fresh, "resetBakeState kept a definition");
+
+  // 3. CSS comments as CSS reads them: one that MENTIONS an at-rule removes nothing, `/*` in a
+  //    string is text, and an unclosed one ends its own sheet.
+  const mention = flat(
+    // The ";" matters: the old at-rule pattern ate from inside the comment to the first one.
+    core.bakeStyle(
+      doc("", "<style>/* @import was here */ .x{a:1;} .hide{display:none}</style>"),
+      ".rs0",
+      "r0-",
+    ),
+  );
+  assert.match(mention, /\.rs0 \.hide \{display:none\}/, "a rule after a comment naming @import");
+  const quoted = flat(
+    core.bakeStyle(
+      doc("", `<style>.a::before{content:"/*"} .hide{display:none} /* c */</style>`),
+      ".rs0",
+      "r0-",
+    ),
+  );
+  assert.match(quoted, /\.rs0 \.hide \{display:none\}/, `a rule after content:"/*"`);
+  const unclosed = flat(
+    core.bakeStyle(
+      doc("", "<style>.a{b:1} /* open</style><style>.hide{display:none}</style>"),
+      ".rs0",
+      "r0-",
+    ),
+  );
+  assert.match(unclosed, /\.rs0 \.hide/, "an unclosed comment swallowed the next sheet");
+  assert.doesNotMatch(unclosed, /\/\*/, "a comment survived into the scoped sheet");
+  //    @import with a ";" in its string is one at-rule, and no more.
+  const imp = flat(
+    core.bakeStyle(doc("", `<style>@import url("a;b.css"); .k{c:2}</style>`), ".rs0", "r0-"),
+  );
+  assert.equal(imp, ".rs0 .k {c:2}");
+
+  // 4. A diagram's sheet applies to the whole report, as in HTML: hoisted only where nothing can
+  //    tell, moved to the report's scoped sheet otherwise.
+  const both = (src: string) => ({
+    body: flat(core.bakeBody(src, "r0-")),
+    style: flat(core.bakeStyle(src, ".rs0", "r0-")),
+  });
+  const two = both(
+    doc(
+      `<svg><style>.lbl{display:none} text{fill:white}</style><text class="lbl">a</text></svg ><p>x</p><svg><text class="lbl">b</text></svg>`,
+    ),
+  );
+  assert.match(two.style, /\.rs0 \.lbl \{display:none\}/, "diagram 1's rule missed diagram 2");
+  assert.doesNotMatch(two.body, /fill="white"|<style/, "hoisted onto diagram 2, or kept");
+  const elsewhere = both(
+    doc(`<svg><style>text{fill:red}</style><text>a</text></svg><svg><text>b</text></svg>`),
+  );
+  assert.match(elsewhere.style, /\.rs0 text \{fill:red\}/, "a <text> in another diagram");
+  assert.doesNotMatch(elsewhere.body, /fill="red"/);
+  const important = both(
+    doc(`<svg><style>text{fill:red !important}</style><text style="fill:blue">t</text></svg>`),
+  );
+  assert.match(important.style, /\.rs0 text \{fill:red !important\}/, "!important lost");
+  const rival = both(
+    doc(`<svg><style>text{fill:red}</style><text>t</text></svg>`, "<style>*{fill:black}</style>"),
+  );
+  assert.match(rival.style, /\.rs0 text \{fill:red\}/, "a `*` rule would beat the attribute");
+  const nested = both(
+    doc(`<svg><svg><text>i</text></svg><style>text{fill:green}</style><text>o</text></svg>`),
+  );
+  assert.equal((nested.body.match(/fill="green"/g) ?? []).length, 2, "the outer diagram cut short");
+  //    The template's own case -- one diagram, nothing competing -- is still hoisted.
+  const one = both(
+    doc(`<svg><style>text{fill:red}</style><text>t</text></svg>`, "<style>.q{fill:black}</style>"),
+  );
+  assert.match(one.body, /<text fill="red">/);
+  assert.doesNotMatch(one.style, /text/);
+
+  // 5. Ids in NESTED rules are renamed with the elements they select.
+  const nest = flat(
+    core.bakeStyle(
+      doc(`<div id="notes"></div>`, "<style>.r{color:red; #notes{display:none}}</style>"),
+      ".rs0",
+      "r0-",
+    ),
+  );
+  assert.match(nest, /#r0-notes \{display:none\}/, "a nested #id kept its old name");
+  assert.match(nest, /color:red;/, "a declaration beside a nested rule was lost");
+
+  // 6. Delimiters come from the scripts that run: not a commented-out config, and the last live
+  //    config wins, as a later MathJax config overrides an earlier one.
+  const live = "<script>MathJax={tex2jax:{inlineMath:[['@@','@@']]}}</script>";
+  const old = "<!-- <script>MathJax={tex2jax:{inlineMath:[['%%','%%']]}}</script> -->";
+  const opens = (head: string) =>
+    core
+      .parseDelimiters(`<html><head>${head}</head><body></body></html>`)
+      .map((d: { open: string }) => d.open);
+  assert.deepEqual(opens(old + live), ["@@"]);
+  assert.deepEqual(opens(live + old), ["@@"]);
+  assert.deepEqual(opens(`<noscript>${live.replace("@@','@@", "%%','%%")}</noscript>${live}`), [
+    "@@",
+  ]);
+  assert.deepEqual(opens(live + live.replace("@@','@@", "##','##")), ["##"]);
+
+  // 7. The reveal gate is opened by a script that runs, never by a commented-out one.
+  core.resetBakeState();
+  const gate = core.bakeStyle(
+    "<html><head><style>.draft{visibility:hidden}</style><!-- <script>$('.draft').css('visibility','visible')</script> --></head><body></body></html>",
+    ".rs0",
+    "r0-",
+  );
+  assert.match(gate, /visibility:hidden/, "a commented-out script opened the gate");
+
+  // 8. The reference guard reads comments as the parser ends them: `<!-->` hides no source id.
+  const source = `<html><body><!--><svg><linearGradient id="g"></linearGradient><!-- c --><rect fill="url(#g)"/></svg></body></html>`;
+  const brokenBody = `<svg><linearGradient id="r0-g"></linearGradient><rect fill="url(#g)"/></svg>`;
+  assert.equal(
+    core.findBrokenReferences([{ source, style: "", body: brokenBody, prefix: "r0-" }]).broken
+      .length,
+    1,
+    "a broken reference excused by `<!-->`",
+  );
+
+  // 9. A report is read as the text a browser shows, or refused: not UTF-8, UTF-16, or another
+  //    declared charset with bytes outside ASCII -- in a folder and in a zip.
+  const enc = new TextEncoder();
+  const latin = new Uint8Array([...enc.encode('<meta charset="windows-1252"><p>10 mm'), 0xb2]);
+  const declaredOnly = enc.encode('<meta charset="windows-1252"><p>10 mm\u00b2</p>');
+  for (const [what, bytes] of [
+    ["a byte that is not UTF-8", latin],
+    ["windows-1252 declared over UTF-8", declaredOnly],
+    ["UTF-16", new Uint8Array([0xff, 0xfe, 0x3c, 0])],
+  ] as const) {
+    assert.throws(() => core.decodeReport(bytes, "m.html"), /m\.html/, `${what} was read`);
+  }
+  assert.equal(core.decodeReport(enc.encode("<p>10 mm\u00b2</p>"), "m.html"), "<p>10 mm\u00b2</p>");
+  const ascii = '<meta charset="iso-8859-1"><p>ok</p>';
+  assert.equal(
+    core.decodeReport(enc.encode(ascii), "m.html"),
+    ascii,
+    "ASCII reads alike in any charset",
+  );
+  await assert.rejects(
+    core.readZipReports(testZip([{ name: "member_1_report.html", data: latin }]), "pack.pdf"),
+    /member_1_report\.html: is not valid UTF-8/,
+  );
+
+  // 10. The verification expects no column spec after `[t]`, and no reference's key.
+  const words = (s: string) => [...core.extractSourceTokens([doc(s)]).words];
+  assert.deepEqual(words("[mathin]\\begin{array}[t]{lcr} a \\end{array}[mathin]"), []);
+  assert.deepEqual(words("[mathin]x \\label{eq:stress}[mathin] see \\eqref{eq:stress}"), ["see"]);
+  assert.deepEqual(words("[mathin]\\newcommand{\\Mn}[1]{Moment}\\Mn{1}[mathin]"), []);
+
+  // 11. A "spinner" that draws an embedded image is content: kept by the bake, expected by the
+  //     verification; the template's outside .gif spinner is still removed.
+  const fig = doc(`<div id="loading"><img src="data:image/png;base64,iVBORw0KGgo="></div><p>t</p>`);
+  core.resetBakeState();
+  assert.match(core.bakeBody(fig, "r0-"), /data:image\/png/, "an embedded figure removed");
+  assert.equal(core.extractSourceTokens([fig]).expectedImages, 1, "the verification cut it");
+  const gif = doc(`<div id="loading"><img src="spinner.gif"></div><p>t</p>`);
+  assert.doesNotMatch(core.bakeBody(gif, "r0-"), /spinner\.gif/, "the real spinner was kept");
+  //     An id written inside another attribute is not the spinner's (the checker's half of #36).
+  const title = doc(`<div title="see id=loading"><p>Kept 12.5</p></div>`);
+  assert.ok(core.extractSourceTokens([title]).numbers.has("12.5"), "title= read as the id");
+});
 
 test(
   "a SkyCiv zip: the verified PDF is added to it, the reports untouched; a re-run replaces it",

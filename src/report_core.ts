@@ -234,13 +234,24 @@ function readPairs(src: string, key: string, display: boolean): Delim[] {
  * {@link skippedDelims}.
  */
 export function parseDelimiters(src: string): Delim[] {
-  const found = [...readPairs(src, "displayMath", true), ...readPairs(src, "inlineMath", false)];
+  // Read from the scripts a browser RUNS: not from a comment or a <noscript>, where an old,
+  // commented-out config ahead of the live one used to win, so the live delimiters were never
+  // applied and their maths printed as prose, with the guard (which looks for the standard ones
+  // and those configured) silent (2026-11-07 review). Each key from the LAST script that sets it,
+  // as a later MathJax config overrides an earlier one.
+  const scripts = liveScripts(src).reverse();
+  const lastWith = (key: string) => scripts.find((s) => sliceArrayLiteral(s, key) !== null) ?? "";
+  const displayCfg = lastWith("displayMath");
+  const inlineCfg = lastWith("inlineMath");
+  const found = [
+    ...readPairs(displayCfg, "displayMath", true),
+    ...readPairs(inlineCfg, "inlineMath", false),
+  ];
   // The fallback is for a report with NO config. A config that was read but whose every pair was
   // refused declared its own delimiters, just unusable ones: falling back then applied delimiters
   // it never declared (a bare `$` once turned prose into maths). No delimiters instead -- the
   // guard, which looks for every standard one, refuses whatever maths the report holds.
-  const declared =
-    sliceArrayLiteral(src, "displayMath") !== null || sliceArrayLiteral(src, "inlineMath") !== null;
+  const declared = displayCfg !== "" || inlineCfg !== "";
   if (found.length === 0) return declared ? [] : FALLBACK_DELIMS;
 
   // Longest opener first, so $$ is tried before $ and [mathin] before any
@@ -357,6 +368,19 @@ const UNDRAWN = new RegExp(
 );
 
 /** `html` without the comments, scripts and `<noscript>` a browser does not draw ({@link UNDRAWN}). */
+/**
+ * The `<script>` elements a browser would run, each whole (start tag to end tag), in document
+ * order: found by the same {@link UNDRAWN} pass, so one inside a comment or a `<noscript>` is not
+ * one, and a `<!--` inside a script does not hide the rest of the page.
+ */
+function liveScripts(html: string): string[] {
+  const out: string[] = [];
+  for (const m of html.matchAll(UNDRAWN)) {
+    if (m[1]?.toLowerCase() === "script") out.push(m[0]);
+  }
+  return out;
+}
+
 function stripUndrawn(html: string, count = false): string {
   return html.replace(UNDRAWN, (m, scriptish: string | undefined, raw: string | undefined) => {
     if (raw !== undefined) return m;
@@ -880,6 +904,92 @@ const DECLARATION_AT_RULES = new Set([
 export const cssWarnings: Set<string> = new Set();
 
 /**
+ * Remove CSS comments as CSS reads them: `/*` inside a quoted string is text (`content: "/*"`),
+ * and a comment never closed runs to the end of the sheet. A plain non-greedy `/\*…*\/` replace
+ * started a "comment" inside such a string and deleted the rules up to the next real `*\/`
+ * (`.hide{display:none}` among them: hidden content printed), and left an unclosed one open to
+ * swallow every later report's sheet in the assembled `<style>` (2026-11-07 review).
+ */
+function stripCssComments(css: string): string {
+  if (!css.includes("/*")) return css;
+  let out = "";
+  let i = 0;
+  while (i < css.length) {
+    const ch = css[i];
+    if (ch === '"' || ch === "'") {
+      let k = i + 1;
+      while (k < css.length && css[k] !== ch && css[k] !== "\n") k += css[k] === "\\" ? 2 : 1;
+      out += css.slice(i, k + 1);
+      i = k + 1;
+    } else if (ch === "/" && css[i + 1] === "*") {
+      const end = css.indexOf("*/", i + 2);
+      i = end < 0 ? css.length : end + 2;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * `@import`, `@charset` and `@namespace` -- the at-rules with no block -- each up to its own `;`,
+ * read past quoted strings and never across a brace. Run on a sheet whose comments are already
+ * gone: the old `@(…)[^;]*;` ran first and, from `/* @import was here *\/`, ate everything to the
+ * next `;` in the sheet, the comment's close included (2026-11-07 review).
+ */
+const BLOCKLESS_AT_RULE =
+  /@(?:import|charset|namespace)\b(?:[^;"'{}]|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*')*;/gi;
+
+/**
+ * A style rule's body with the ids in its NESTED rules' selectors renamed (CSS nesting:
+ * `.report { color: red; #notes { display: none } }`); declarations, and at-rule preludes, as
+ * written. A nested selector is relative to its parent, already scoped, so only its ids change.
+ * Kept verbatim, `#notes` matched nothing once the element became `r0-notes`, and the notes it hid
+ * printed (2026-11-07 review).
+ */
+function nestedIds(block: string, idsOnly: (selector: string) => string): string {
+  if (!block.includes("{")) return block;
+  let out = "";
+  let from = 0; // start of the text not yet copied
+  let boundary = -1; // the last ";", "{" or "}" at this level
+  for (let i = 0; i < block.length; i++) {
+    const ch = block[i];
+    if (ch === '"' || ch === "'") {
+      for (i++; i < block.length && block[i] !== ch; i++) if (block[i] === "\\") i++;
+    } else if (ch === ";" || ch === "}") {
+      boundary = i;
+    } else if (ch === "{") {
+      let depth = 0;
+      let close = block.length;
+      for (let k = i; k < block.length; k++) {
+        const c = block[k];
+        if (c === '"' || c === "'") {
+          for (k++; k < block.length && block[k] !== c; k++) if (block[k] === "\\") k++;
+        } else if (c === "{") depth++;
+        else if (c === "}" && --depth === 0) {
+          close = k;
+          break;
+        }
+      }
+      const prelude = block.slice(boundary + 1, i);
+      const lead = /^\s*/.exec(prelude)?.[0] ?? "";
+      const mapped = prelude.trim().startsWith("@")
+        ? prelude
+        : `${lead}${splitSelectorList(prelude.trim())
+            .map((s) => idsOnly(s.trim()))
+            .join(", ")} `;
+      out += block.slice(from, boundary + 1) + mapped;
+      out += `{${nestedIds(block.slice(i + 1, close), idsOnly)}}`;
+      i = close;
+      from = close + 1;
+      boundary = close;
+    }
+  }
+  return out + block.slice(from);
+}
+
+/**
  * The walk behind {@link scopeCss}, with the per-selector rewrite supplied: each selector of each
  * rule goes through `mapSelector` ("" drops it), at any depth of the {@link NESTING_AT_RULES}.
  * `@scope`'s root selectors go through `mapSelector` too (none: the document, so the wrapper), and
@@ -891,10 +1001,8 @@ function scopeRules(
   css: string,
   mapSelector: (selector: string) => string,
   idsOnly: (selector: string) => string,
-  /** What a root-less `@scope` means here: the document (`"body"`), or an SVG's own `<svg>`. */
-  docRoot = "body",
 ): string {
-  const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const src = stripCssComments(css);
   const out: string[] = [];
   let i = 0;
 
@@ -956,7 +1064,7 @@ function scopeRules(
       // We define page geometry ourselves; a report's own @page would fight it.
       if (name === "page") continue;
       if (NESTING_AT_RULES.has(name)) {
-        out.push(`${prelude} {\n${scopeRules(block, mapSelector, idsOnly, docRoot)}\n}`);
+        out.push(`${prelude} {\n${scopeRules(block, mapSelector, idsOnly)}\n}`);
       } else if (name === "scope") {
         // `@scope (A) to (B)`: A is the root -- mapped like any selector (no prelude: the
         // document, i.e. the wrapper); B and the inner rules are relative to it, so only their
@@ -969,11 +1077,11 @@ function scopeRules(
         }
         const roots = pm[1]
           ? splitSelectorList(pm[1]).map(mapSelector).filter(Boolean)
-          : [mapSelector(docRoot)];
+          : [mapSelector("body")]; // the document: the wrapper
         if (roots.length === 0) continue; // the root matched nothing in the source
         const limit = pm[2] ? ` to (${splitSelectorList(pm[2]).map(idsOnly).join(", ")})` : "";
         out.push(
-          `@scope (${roots.join(", ")})${limit} {\n${scopeRules(block, idsOnly, idsOnly, docRoot)}\n}`,
+          `@scope (${roots.join(", ")})${limit} {\n${scopeRules(block, idsOnly, idsOnly)}\n}`,
         );
       } else if (DECLARATION_AT_RULES.has(name)) {
         out.push(`${prelude} {${block}}`);
@@ -985,7 +1093,7 @@ function scopeRules(
     }
 
     const selectors = [...new Set(splitSelectorList(prelude).map(mapSelector).filter(Boolean))];
-    if (selectors.length > 0) out.push(`${selectors.join(", ")} {${block}}`);
+    if (selectors.length > 0) out.push(`${selectors.join(", ")} {${nestedIds(block, idsOnly)}}`);
   }
 
   return out.join("\n");
@@ -1019,32 +1127,184 @@ function scopeRules(
  * `<text>` elements in its path.
  */
 export function portableSvg(html: string): string {
-  return html.replace(/<svg\b[\s\S]*?<\/svg>/gi, (svg) => {
-    // Every block, with any attributes: `<style type="text/css">` is the same
-    // stylesheet, and matching only a bare `<style>` used to skip it.
-    const blocks = [...svg.matchAll(STYLE_BLOCK)];
-    if (blocks.length === 0) return svg;
-
+  return mapOuterSvgs(html, (svg) => {
+    const plan = hoistPlan(svg);
+    if (plan === null) return svg; // no sheet
+    if (!plan.ok) return svg; // kept as written (bakeBody moves such a sheet to the report's)
     let out = svg;
-    let allHoisted = true;
+    for (const [selector, decls] of plan.rules) {
+      out = out.replace(new RegExp(`<${selector}\\b`, "gi"), `<${selector} ${decls}`);
+    }
+    return out.replace(STYLE_BLOCK, "");
+  });
+}
 
-    for (const [, attrs, sheet] of blocks) {
-      const kind = styleBlockKind(attrs);
-      if (kind === "ignored") continue; // not CSS: the browser ignores it too
-      if (kind !== "all") {
-        // A media-qualified rule is conditional; an attribute is not. Keep it.
-        svgStyleWarnings.add(`<style media="${kind}">`);
-        allHoisted = false;
+/** An `<svg>` start tag (quote-aware, {@link TAG_ATTRS}; group 1 set) or end tag (`</svg >` too). */
+const SVG_TAG = new RegExp(String.raw`<(svg)(?![^\s/>])${TAG_ATTRS}>|<\/svg\s*>`, "gi");
+
+/**
+ * `<svg … />` closes itself: SVG is foreign content, where the HTML parser honours the slash --
+ * unless it ends an unquoted value (`<svg a=b/>` is the value "b/").
+ */
+const selfClosing = (tag: string): boolean => /\/\s*>$/.test(tag) && !/=[^\s"'>]*\/\s*>$/.test(tag);
+
+/**
+ * Each OUTERMOST `<svg>` element of `html`, start tag to end tag, nested ones inside it. Matched by
+ * depth: the lazy `<svg…</svg>` regex this replaces ended an outer diagram at its inner `</svg>`
+ * and missed `</svg >`, so one diagram's sheet was hoisted onto the next (2026-11-07 review). An
+ * unclosed `<svg>` runs to the end, as the parser keeps it open.
+ */
+function outerSvgs(html: string): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let depth = 0;
+  let start = 0;
+  for (const m of html.matchAll(SVG_TAG)) {
+    const at = m.index ?? 0;
+    if (m[1] !== undefined) {
+      if (selfClosing(m[0])) {
+        if (depth === 0) out.push({ start: at, end: at + m[0].length });
         continue;
       }
-      allHoisted =
-        hoistSvgRules(sheet, (selector, decls) => {
-          out = out.replace(new RegExp(`<${selector}\\b`, "gi"), `<${selector} ${decls}`);
-        }) && allHoisted;
+      if (depth++ === 0) start = at;
+    } else if (depth > 0 && --depth === 0) {
+      out.push({ start, end: at + m[0].length });
     }
+  }
+  if (depth > 0) out.push({ start, end: html.length });
+  return out;
+}
 
-    return allHoisted ? out.replace(STYLE_BLOCK, "") : out;
+/** `html` with each outermost `<svg>` element ({@link outerSvgs}) replaced by `fn` of it. */
+function mapOuterSvgs(html: string, fn: (svg: string) => string): string {
+  let out = "";
+  let at = 0;
+  for (const { start, end } of outerSvgs(html)) {
+    out += html.slice(at, start) + fn(html.slice(start, end));
+    at = end;
+  }
+  return out + html.slice(at);
+}
+
+/**
+ * What hoisting one SVG's sheets would write: `null` when it has no CSS sheet, else `ok` (every
+ * rule hoistable, warnings recorded for those that are not) and the (element, attributes) pairs.
+ * A declaration marked `!important` is not hoistable: an attribute carries no importance, so the
+ * rule began to lose to rules it beat in the source (2026-11-07 review).
+ */
+function hoistPlan(svg: string): { ok: boolean; rules: [string, string, string[]][] } | null {
+  // Every block, with any attributes: `<style type="text/css">` is the same
+  // stylesheet, and matching only a bare `<style>` used to skip it.
+  const blocks = [...svg.matchAll(STYLE_BLOCK)];
+  if (blocks.length === 0) return null;
+  const rules: [string, string, string[]][] = [];
+  let ok = true;
+  for (const [, attrs, sheet] of blocks) {
+    const kind = styleBlockKind(attrs);
+    if (kind === "ignored") continue; // not CSS: the browser ignores it too
+    if (kind !== "all") {
+      // A media-qualified rule is conditional; an attribute is not.
+      svgStyleWarnings.add(`<style media="${kind}">`);
+      ok = false;
+      continue;
+    }
+    ok =
+      hoistSvgRules(sheet, (selector, decls, props) => rules.push([selector, decls, props])) && ok;
+  }
+  return { ok, rules };
+}
+
+/**
+ * The SVG sheets of one report that must MOVE to the report's own scoped sheet rather than be
+ * hoisted, keyed by the `<svg>` element's text in `stripUndrawn(src)`. {@link bakeBody} removes
+ * them from their `<svg>`; {@link bakeStyle} adds them to the report's sheet, in document order.
+ *
+ * In HTML an inline SVG's `<style>` applies to the whole page, so the report's whole wrapper is
+ * its meaning here -- as for a body sheet (#34). Hoisting onto the diagram's own elements says the
+ * same only when nothing else could tell the difference, so it is kept for exactly that case (the
+ * SkyCiv template's one diagram) and refused when:
+ * - a rule cannot be an attribute at all ({@link hoistPlan}: a condition, a class or descendant
+ *   selector, a CSS-only property, `!important`);
+ * - an element the rule names occurs elsewhere in the report -- in another diagram, or in the
+ *   page -- where the sheet applied in the source and an attribute on this diagram does not;
+ * - a rule elsewhere in the report sets the same property on that element with no more weight
+ *   than the hoisted rule's (`*`, the bare element, `svg *`): the sheet beat it in the source, but
+ *   a presentation attribute loses to every author rule.
+ *
+ * The confinement this replaces (`:where(svg[data-s3d-scope])`) kept such a sheet to its own
+ * `<svg>`, so diagram 1's `.lbl{display:none}` no longer hid diagram 2's labels (2026-11-07).
+ */
+function svgSheetsToMove(src: string): Set<string> {
+  const page = stripUndrawn(src);
+  const svgs = outerSvgs(page);
+  const outside = (i: number) => page.slice(0, svgs[i].start) + " " + page.slice(svgs[i].end);
+  // The report's own sheets outside every <svg>, comments gone: the rules a hoist competes with.
+  let pageOnly = "";
+  let at = 0;
+  for (const { start, end } of svgs) {
+    pageOnly += page.slice(at, start);
+    at = end;
+  }
+  pageOnly += page.slice(at);
+  const pageCss = [...pageOnly.matchAll(STYLE_BLOCK)]
+    .filter((m) => styleBlockKind(m[1]) !== "ignored")
+    .map((m) => stripCssComments(m[2]))
+    .join("\n");
+
+  const move = new Set<string>();
+  svgs.forEach(({ start, end }, i) => {
+    const svg = page.slice(start, end);
+    const plan = hoistPlan(svg);
+    if (plan === null) return;
+    if (!plan.ok) {
+      move.add(svg);
+      return;
+    }
+    const rest = outside(i);
+    for (const [element, , props] of plan.rules) {
+      if (startTagRe(element, "i").test(rest)) {
+        svgStyleWarnings.add(`${element} (also outside its diagram)`);
+        move.add(svg);
+        return;
+      }
+      const rival = competingRule(pageCss, element, props);
+      if (rival !== null) {
+        svgStyleWarnings.add(`${element} (competes with "${rival}")`);
+        move.add(svg);
+        return;
+      }
+    }
   });
+  return move;
+}
+
+/**
+ * A rule of `css` that could match `element` and sets one of `props` with no more weight than a
+ * bare type selector -- built only of `*`, at most one type selector and combinators, `:where()`
+ * weighing nothing -- or null. Such a rule lost to the diagram's sheet in the source and would beat
+ * the same declaration as a presentation attribute.
+ */
+function competingRule(css: string, element: string, props: string[]): string | null {
+  const wanted = new Set(props.map((p) => p.toLowerCase()));
+  for (const m of css.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+    const declared = m[2]
+      .split(";")
+      .map((d) => d.slice(0, d.indexOf(":")).trim().toLowerCase())
+      .filter((p) => wanted.has(p));
+    if (declared.length === 0) continue;
+    for (const selector of splitSelectorList(m[1].replace(/^[\s\S]*;/, ""))) {
+      const s = selector.trim();
+      if (!s || s.startsWith("@")) continue;
+      const parts = s
+        .replace(/:where\((?:[^()]|\([^()]*\))*\)/gi, "")
+        .split(/[\s>+~]+/)
+        .filter(Boolean);
+      if (parts.some((p) => /[.#[:]/.test(p))) continue; // a class, id, attribute or pseudo: more weight
+      if (parts.filter((p) => p !== "*" && p !== "*|*").length > 1) continue; // two types: more
+      const last = (parts.at(-1) ?? "*").replace(/^\*\|/, "").toLowerCase();
+      if (last === "*" || last === element.toLowerCase()) return s;
+    }
+  }
+  return null;
 }
 
 /** `<style ...>` blocks, capturing the attributes and the sheet. */
@@ -1065,13 +1325,9 @@ function styleBlockKind(attrs: string): string {
   return media === undefined || media === "" || media.toLowerCase() === "all" ? "all" : media;
 }
 
-/** A CSS value as an attribute value: no `!important`, quotes and `&` escaped. */
+/** A CSS value as an attribute value: quotes and `&` escaped (`!important` is never hoisted). */
 function attrValue(v: string): string {
-  return v
-    .replace(/\s*!important\s*$/i, "")
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;");
+  return v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 /**
@@ -1104,9 +1360,12 @@ const SVG_PRESENTATION = new Set(
  * presentation attribute. Rules are read at the TOP LEVEL only: a rule nested in
  * `@media screen` used to be hoisted as though it applied unconditionally.
  */
-function hoistSvgRules(sheet: string, apply: (selector: string, attrs: string) => void): boolean {
+function hoistSvgRules(
+  sheet: string,
+  apply: (selector: string, attrs: string, props: string[]) => void,
+): boolean {
   let allHoisted = true;
-  const src = sheet.replace(/\/\*[\s\S]*?\*\//g, "");
+  const src = stripCssComments(sheet);
   let i = 0;
   while (i < src.length) {
     const open = src.indexOf("{", i);
@@ -1148,6 +1407,14 @@ function hoistSvgRules(sheet: string, apply: (selector: string, attrs: string) =
 
     if (decls.length === 0) continue;
     const foreign = decls.map(([p]) => p).filter((p) => !SVG_PRESENTATION.has(p.toLowerCase()));
+    // An attribute carries no importance: hoisted, `fill: red !important` lost to an inline
+    // style= and to every author rule it beat in the source (2026-11-07 review).
+    const important = decls.filter(([, v]) => /!\s*important\s*$/i.test(v)).map(([p]) => p);
+    if (important.length > 0) {
+      svgStyleWarnings.add(`${prelude.trim()} { ${important.join("; ")} !important }`);
+      allHoisted = false;
+      continue;
+    }
 
     for (const selector of splitSelectorList(prelude)
       .map((s) => s.trim())
@@ -1167,7 +1434,11 @@ function hoistSvgRules(sheet: string, apply: (selector: string, attrs: string) =
       // attribute wins, which preserves "stylesheet beats presentation
       // attribute" -- the precedence the rule had before it was hoisted.
       // Escaped: `font-family: "Arial"` would otherwise end the attribute early.
-      apply(selector, decls.map(([p, v]) => `${p}="${attrValue(v)}"`).join(" "));
+      apply(
+        selector,
+        decls.map(([p, v]) => `${p}="${attrValue(v)}"`).join(" "),
+        decls.map(([p]) => p),
+      );
     }
   }
   return allHoisted;
@@ -1198,6 +1469,24 @@ function removeElementById(html: string, id: string, onlyIfTextless = false): st
       if (onlyIfTextless) {
         const inner = html.slice(m.index + m[0].length, hit.index);
         const text = inner.replace(startTagRe(), " ").replace(/<\/[^>]*>/g, " ");
+        // A drawing is content as text is: an inline <svg>, or an image embedded as data. Only an
+        // outside image (the real spinner's .gif, which the document's policy never loads) is not.
+        const drawing = [
+          ...inner.matchAll(startTagRe("svg|img|image|input|object|embed|video|source")),
+        ].some(
+          (t) =>
+            t[1].toLowerCase() === "svg" ||
+            [...attrsOf(t[0])].some(
+              ([n, v]) =>
+                /^(?:src|href|xlink:href|data|poster|srcset)$/.test(n) && /^\s*data:/i.test(v),
+            ),
+        );
+        if (drawing) {
+          bakeWarnings.add(
+            `the element with id="${id}" holds a drawing, so it was kept, not removed as the spinner`,
+          );
+          return html;
+        }
         if (/[^\s]/.test(text.replace(/&nbsp;|&#160;|&#xa0;/gi, " "))) {
           bakeWarnings.add(
             `the element with id="${id}" holds text, so it was kept, not removed as the spinner`,
@@ -1220,9 +1509,18 @@ const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
 
 const chtml = new CHTML({ fontURL: MATHJAX_FONTS });
-/** The TeX input, named so its label table can be reset per report (`tags.reset`). */
+/**
+ * The TeX packages, less the two that turn an error into typeset text. `noundefined` typesets an
+ * unknown command as its own name in red ("\phiM" for a mistyped `\phi M`) and returns normally,
+ * so `formatError` below never ran: counted as converted, the guard silent, the red name sealed
+ * into the PDF (2026-11-07 review; it caught every undefined command, the commonest TeX error).
+ * `noerrors` typesets the source of a failed expression in place of the error. Without them both,
+ * an unknown command is "Undefined control sequence", thrown and counted as failed.
+ */
+const TEX_PACKAGES = AllPackages.filter((p: string) => p !== "noundefined" && p !== "noerrors");
+/** The TeX input, named so its per-report state can be reset ({@link resetTexDefinitions}). */
 const texInput = new TeX({
-  packages: AllPackages,
+  packages: TEX_PACKAGES,
   // ⚠️ MathJax limitation (re-check on every MathJax update; roadmap task 8): by default a TeX
   // error does NOT throw -- MathJax typesets an inline red error box ("Misplaced &",
   // "Undefined control sequence") and convert() returns normally, so the bake counted it as
@@ -1234,6 +1532,38 @@ const texInput = new TeX({
   },
 });
 const mjDoc = mathjax.document("", { InputJax: texInput, OutputJax: chtml });
+
+/** The maps MathJax's `newcommand` package adds definitions to (its `NEW_*` names). */
+const TEX_DEFINITION_MAPS = ["new-Command", "new-Environment", "new-Delimiter"];
+
+/**
+ * Give the next report the TeX state it has standing alone: no label or equation number, and no
+ * definition from an earlier report. MathJax keeps every `\def`, `\newcommand`, `\renewcommand`,
+ * `\let`, `\DeclareMathOperator`, `\newenvironment`, `\definecolor` and `\newtagform` for the life
+ * of the TeX input, so report 0's `\renewcommand{\phi}{0.9}` printed report 1's `\phi M_n = 12.5`
+ * as `0.9 M_n = 12.5` -- converted, 0 failed, PASS: an added "0.9" is invisible to a check that
+ * proves presence (2026-11-07 review). Within one report they hold, as on the page.
+ *
+ * A map or field that is not where MathJax 3.2.2 keeps it THROWS rather than being skipped: a reset
+ * that silently stopped resetting after an upgrade is the same leak with no sign (roadmap task 8).
+ */
+function resetTexDefinitions(): void {
+  const options = texInput.parseOptions;
+  options.tags.reset(0);
+  for (const name of TEX_DEFINITION_MAPS) {
+    const map = (options.handlers.retrieve(name) as { map?: unknown } | null)?.map;
+    if (!(map instanceof Map)) throw new Error(`MathJax keeps no "${name}" map to reset`);
+    map.clear();
+  }
+  const color = (options.packageData.get("color") as { model?: { userColors?: unknown } })?.model;
+  if (!(color?.userColors instanceof Map))
+    throw new Error("MathJax keeps no colour table to reset");
+  color.userColors.clear();
+  const tags = options.tags as unknown as { mtFormats?: unknown; mtCurrent?: unknown };
+  if (!(tags.mtFormats instanceof Map)) throw new Error("MathJax keeps no tag-form table to reset");
+  tags.mtFormats.clear();
+  tags.mtCurrent = null;
+}
 
 /**
  * Running totals for maths conversion, cumulative across every report baked in
@@ -1276,7 +1606,7 @@ export function resetBakeState(): void {
   svgStyleWarnings.clear();
   cssWarnings.clear();
   bakeWarnings.clear();
-  texInput.parseOptions.tags.reset(0);
+  resetTexDefinitions();
 }
 
 /**
@@ -1472,32 +1802,6 @@ const ID_LIST_ATTRS = new Set([
 ]);
 
 /**
- * Where a kept SVG `<style>` block is confined: an attribute put on its own
- * `<svg>`. In HTML a `<style>` inside an inline SVG applies to the WHOLE
- * document, so one report's unhoisted diagram rules reached every report.
- *
- * Inside `:where()`, which adds NO specificity: a rule keeps exactly the weight
- * it had in the source. Prefixed plainly (`svg[data-s3d-scope] text`, 0-1-2), a
- * diagram's bare `text` rule (0-0-1) began to beat the report's own
- * `.rs0 svg text` (0-1-2, earlier in the page) that it used to lose to --
- * measured in Chrome, 2026-11-06.
- */
-function confineToSvg(selector: string, prefix: string): string {
-  const attr = `[data-s3d-scope="${prefix}"]`;
-  // A rule on `svg` itself means that <svg>, and keeps its type selector's weight.
-  return /^svg(?![\w-])/i.test(selector)
-    ? `svg:where(${attr})${selector.slice(3)}`
-    : `:where(svg${attr}) ${selector}`;
-}
-
-/**
- * The page's own `<style>` blocks, as opposed to those inside an inline `<svg>`:
- * an `<svg>` is matched whole first, so a `<style>` inside one is never matched
- * on its own. Groups 1 and 2 (attributes, sheet) are set for a page sheet only.
- */
-const PAGE_STYLE_OR_SVG = new RegExp(String.raw`<svg\b[\s\S]*?<\/svg>|${STYLE_ELEMENT}`, "gi");
-
-/**
  * Turn one report's `<body>` into a fragment ready to concatenate with others.
  *
  * Pre-renders every expression to CHTML using the report's own delimiters,
@@ -1522,8 +1826,9 @@ export function bakeBody(src: string, prefix: string): string {
 
   // A fresh label table and equation counter for every report, as it has standing alone: MathJax
   // keeps both across conversions, so report 1's `\label{eq}` failed as "multiply defined" after
-  // report 0's, and its `\eqref` could print report 0's number (2026-11-06).
-  texInput.parseOptions.tags.reset(0);
+  // report 0's, and its `\eqref` could print report 0's number (2026-11-06). Its definitions too:
+  // report 0's `\renewcommand{\phi}{0.9}` changed report 1's values (2026-11-07).
+  resetTexDefinitions();
 
   const bodyOpen = startTagRe("body", "i").exec(html);
   if (!bodyOpen) audit.bodyTagMissing++;
@@ -1532,13 +1837,24 @@ export function bakeBody(src: string, prefix: string): string {
   // The page's own <style> blocks in the body are not dropped: bakeStyle reads
   // them, as it reads the head's, and scopes them to this report. Left here they
   // applied, unscoped, to every report on the page -- and their #id selectors
-  // matched nothing once the ids were renamed. Those inside an <svg> stay; that
-  // is portableSvg's job.
-  let body = body0.replace(PAGE_STYLE_OR_SVG, (m, _attrs, sheet: string | undefined) => {
-    if (sheet === undefined) return m;
+  // matched nothing once the ids were renamed. A diagram's sheet stays for portableSvg to hoist
+  // only where that says the same; otherwise it moves too ({@link svgSheetsToMove}).
+  const moving = svgSheetsToMove(src);
+  const moved = () => {
     bakeRemovals.bodySheetsMoved++;
     return "";
-  });
+  };
+  let body = "";
+  {
+    let at = 0;
+    for (const { start, end } of outerSvgs(body0)) {
+      const svg = body0.slice(start, end);
+      body += body0.slice(at, start).replace(STYLE_BLOCK, moved);
+      body += moving.has(svg) ? svg.replace(STYLE_BLOCK, moved) : svg;
+      at = end;
+    }
+    body += body0.slice(at).replace(STYLE_BLOCK, moved);
+  }
 
   // The spinner exists only to be hidden by the JS that we removed. It is the
   // one element deliberately dropped, and the count is reported -- and only while it draws no
@@ -1624,25 +1940,18 @@ export function bakeBody(src: string, prefix: string): string {
   // defines, so a url(#...) in prose is left alone.
   body = namespaceUrlRefs(body, prefix, ids);
 
-  // What portableSvg could not hoist stays a <style> block, which in HTML would
-  // apply to every report on the page: confine it to this report's own <svg>,
-  // with its id selectors renamed like the ids they select ({@link confineToSvg}).
-  return portableSvg(body).replace(/<svg\b[\s\S]*?<\/svg>/gi, (svg) => {
-    if (!/<style\b/i.test(svg)) return svg;
-    return svg.replace(/^<svg\b/i, `<svg data-s3d-scope="${prefix}"`).replace(
-      STYLE_BLOCK,
-      (_m, attrs: string, sheet: string) =>
-        `<style${attrs}>${scopeRules(
-          sheet,
-          (selector) => {
-            const s = namespaceIds(selector.trim(), prefix);
-            return s ? confineToSvg(s, prefix) : "";
-          },
-          (selector) => namespaceIds(selector, prefix),
-          "svg",
-        )}</style>`,
+  // Every diagram sheet left is one svgSheetsToMove judged hoistable, so none may survive: one
+  // that did would apply, unscoped, to every report on the page. Refused, not left (§ practices 2).
+  const out = portableSvg(body);
+  for (const { start, end } of outerSvgs(out)) {
+    const left = [...out.slice(start, end).matchAll(STYLE_BLOCK)].filter(
+      (m) => styleBlockKind(m[1]) !== "ignored",
     );
-  });
+    if (left.length > 0) {
+      throw new Error("internal: a diagram's <style> was neither hoisted nor moved to the report");
+    }
+  }
+  return out;
 }
 
 /**
@@ -1675,9 +1984,9 @@ function browserBody(html: string, bodyOpen: RegExpExecArray): string {
  * in each selector collapsed, so it compares with a sheet's.
  */
 function revealedSelectors(src: string): Set<string> {
-  const scripts = [...src.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)]
-    .map((m) => m[1])
-    .join("\n");
+  // Only scripts that run: a commented-out `$('.draft').css('visibility','visible')` opened the
+  // gate on a rule nothing reveals, and the hidden DRAFT printed (2026-11-07 review).
+  const scripts = liveScripts(src).join("\n");
   const out = new Set<string>();
   const add = (s: string) => out.add(s.replace(/\s+/g, " ").trim());
   // The selector is group 2 in the first, group 3 in the second.
@@ -1777,30 +2086,45 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   const headInner = headClose ? page.slice(innerStart, innerStart + headClose.index) : "";
   const afterHead = headClose ? innerStart + headClose.index + headClose[0].length : 0;
   const rest = page.slice(afterHead);
+  // The rest in document order: sheets outside every <svg>, and the sheets of a diagram whose
+  // rules cannot be hoisted ({@link svgSheetsToMove}), which apply to the whole page in HTML.
+  const moving = svgSheetsToMove(src);
+  const restSheets: string[] = [];
+  {
+    let at = 0;
+    for (const { start, end } of outerSvgs(rest)) {
+      restSheets.push(rest.slice(at, start));
+      const svg = rest.slice(start, end);
+      if (moving.has(svg)) restSheets.push(svg);
+      at = end;
+    }
+    restSheets.push(rest.slice(at));
+  }
   const blocks: [string, string][] = [
     ...[...headInner.matchAll(STYLE_BLOCK)].map((m) => [m[1], m[2]] as [string, string]),
-    ...[...rest.matchAll(PAGE_STYLE_OR_SVG)]
-      .filter((m) => m[2] !== undefined)
-      .map((m) => [m[1], m[2]] as [string, string]),
+    ...restSheets.flatMap((part) =>
+      [...part.matchAll(STYLE_BLOCK)].map((m) => [m[1], m[2]] as [string, string]),
+    ),
   ];
 
   // Any attributes, as a browser reads them: `<style type="text/css">` is the
   // same sheet (a bare `<style>` match used to drop it silently), a non-CSS
   // type is ignored, and a `media` attribute stays a condition.
+  // Comments go first, per sheet (an unclosed one ends its own <style>, not the next one), before
+  // anything is counted: a commented-out rule is not audited as though active, and a comment that
+  // MENTIONS an at-rule is not one.
   let css = blocks
     .map(([attrs, sheet]) => {
       const kind = styleBlockKind(attrs);
-      return kind === "ignored" ? "" : kind === "all" ? sheet : `@media ${kind} {\n${sheet}\n}`;
+      const own = stripCssComments(sheet);
+      return kind === "ignored" ? "" : kind === "all" ? own : `@media ${kind} {\n${own}\n}`;
     })
     .join("\n")
     // At-rules with no block would confuse the brace walker.
-    .replace(/@(?:import|charset|namespace)[^;]*;/gi, () => {
+    .replace(BLOCKLESS_AT_RULE, () => {
       bakeRemovals.blocklessAtRules++;
       return "";
     })
-    // Strip comments before counting, or a commented-out rule is audited as
-    // though it had been active.
-    .replace(/\/\*[\s\S]*?\*\//g, "")
     // `<!--` and `-->` in a sheet are CSS's CDO / CDC tokens, which CSS ignores (old pages wrap
     // their rules in them). Inside a <style> they are text now, not a comment, so the brace walker
     // would read "<!--" as part of the first selector.
@@ -2119,6 +2443,20 @@ const NONPRINTING_TEX: Record<string, string> = {
   hphantom: "{",
   vphantom: "{",
   label: "{",
+  // A reference prints the NUMBER of what it names, never its key: `\eqref{eq:stress}` expected
+  // "stress" in the PDF, a false failure (2026-11-07 review).
+  ref: "{",
+  eqref: "{",
+  // A definition prints nothing where it stands: the name, argument count, default and body.
+  newcommand: "*{[[{",
+  renewcommand: "*{[[{",
+  providecommand: "*{[[{",
+  newenvironment: "*{[[{{",
+  renewenvironment: "*{[[{{",
+  def: "{{",
+  gdef: "{{",
+  let: "{{",
+  DeclareMathOperator: "*{{",
   require: "{",
   style: "{",
   class: "{",
@@ -2193,8 +2531,14 @@ function dropNonPrintingTex(text: string): string {
       }
     }
     if (!unclosed && TEX_SPEC_ENVIRONMENTS.has(environment.replace(/\*$/, ""))) {
-      const j = skipSpace(at);
-      if (text[j] === "{") at = group(j, "{", "}");
+      // `\begin{array}[t]{lcr}`: the optional vertical position comes BEFORE the column spec, and
+      // with it unskipped "lcr" was expected in the PDF, a false failure (2026-11-07 review).
+      let j = skipSpace(at);
+      if (text[j] === "[") {
+        at = group(j, "[", "]");
+        j = at < 0 ? j : skipSpace(at);
+      }
+      if (at >= 0 && text[j] === "{") at = group(j, "{", "}");
       if (at < 0) unclosed = true;
     }
     if (unclosed) continue;
@@ -2271,10 +2615,13 @@ function readerVisible(html: string): string {
 function withoutSpinner(html: string): string {
   for (const m of html.matchAll(SOURCE_TAG)) {
     if (m[0][1] === "/" || m.index === undefined) continue;
-    const id = /\sid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(
-      m[0].replace(/^<[^\s/>]+/, " "),
-    );
-    if ((id?.[1] ?? id?.[2] ?? id?.[3]) !== "loading") continue;
+    // The attributes one after another, each value whole: `title="see id=loading"` is a title.
+    const id = [
+      ...m[0]
+        .replace(/^<[^\s/>]+/, "")
+        .matchAll(/([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g),
+    ].find((a) => a[1].toLowerCase() === "id");
+    if ((id?.[2] ?? id?.[3] ?? id?.[4]) !== "loading") continue;
     const name = /^<([^\s/>]+)/.exec(m[0])?.[1].toLowerCase() ?? "";
     const open = m.index + m[0].length;
     let depth = 1;
@@ -2283,7 +2630,17 @@ function withoutSpinner(html: string): string {
     for (let t = scan.exec(html); t; t = scan.exec(html)) {
       depth += t[1] ? -1 : 1;
       if (depth > 0) continue;
-      const inner = html.slice(open, t.index).replace(SOURCE_TAG, " ");
+      const content = html.slice(open, t.index);
+      // A drawing is content too: an inline <svg>, or an image embedded as data (an outside one
+      // never draws, so the real spinner's .gif is not one). The bake decides the same, apart.
+      if (
+        /<svg[\s/>]|<(?:img|image|input|object|embed|video|source)\b[^>]*?(?:src|href|data|poster|srcset)\s*=\s*["']?\s*data:/i.test(
+          content,
+        )
+      ) {
+        return html;
+      }
+      const inner = content.replace(SOURCE_TAG, " ");
       if (decodeEntities(inner).replace(/ /g, " ").trim() !== "") return html;
       return `${html.slice(0, m.index)} ${html.slice(sourceTagEnd(html, t.index))}`;
     }
@@ -2532,6 +2889,54 @@ export type ReferenceCheck = {
 };
 
 /**
+ * The reference guard's own reading of what a page draws: comments, scripts and `<noscript>`
+ * removed, left to right as the HTML parser meets them. `<!-->` and `<!--->` are whole (empty)
+ * comments and `--!>` ends one; `</script >` ends a script; an unclosed one runs to the end; and
+ * the content of a raw-text element (`style`, `textarea`, `title`, …) is kept as text, so a `<!--`
+ * in a sheet hides nothing. The lazy `<!--…-->` it replaces ran from `<!-->` to the next `-->`,
+ * hiding the source's own ids, so a reference the bake broke read as already unresolved in the
+ * source and was excused (2026-11-07 review). Deliberately not the bake's reader (§9).
+ */
+function drawnText(html: string): string {
+  const lower = html.toLowerCase();
+  let out = "";
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) break;
+    out += html.slice(i, lt);
+    if (html.startsWith("<!--", lt)) {
+      if (html.startsWith("<!-->", lt)) i = lt + 5;
+      else if (html.startsWith("<!--->", lt)) i = lt + 6;
+      else {
+        const a = html.indexOf("-->", lt + 4);
+        const b = html.indexOf("--!>", lt + 4);
+        const end = a < 0 ? b : b < 0 ? a : Math.min(a, b);
+        i = end < 0 ? html.length : end + (end === b ? 4 : 3);
+      }
+      continue;
+    }
+    const name = /^<([a-zA-Z][a-zA-Z0-9]*)(?=[\s/>])/
+      .exec(html.slice(lt, lt + 40))?.[1]
+      ?.toLowerCase();
+    const dropped = name === "script" || name === "noscript";
+    const raw = ["style", "textarea", "title", "xmp", "noembed", "noframes"].includes(name ?? "");
+    if (!dropped && !raw) {
+      out += "<";
+      i = lt + 1;
+      continue;
+    }
+    const close = new RegExp(`</${name}(?=[\\s/>])[^>]*>`, "g");
+    close.lastIndex = lt + 1;
+    const end = close.exec(lower);
+    const stop = end ? end.index + end[0].length : html.length;
+    if (raw) out += html.slice(lt, stop);
+    i = stop;
+  }
+  return out + html.slice(i);
+}
+
+/**
  * id references and their targets in one document: `url(#…)` anywhere (style sheets too), and
  * `href` / `xlink:href` "#…" in start tags. Written apart from the bake's own attribute reading
  * (§9 of design-decisions: a check must not share code with what it checks). Attributes are read
@@ -2539,7 +2944,7 @@ export type ReferenceCheck = {
  * attribute, and neither is "id = 4" inside another attribute's value.
  */
 function referenceScan(html: string): { refs: number; unresolved: Set<string> } {
-  const text = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  const text = drawnText(html);
   const attrs = (tag: string): [string, string][] =>
     [
       ...tag
@@ -2926,12 +3331,62 @@ export async function readZipReports(zip: Uint8Array, ownName: string): Promise<
       `the zip holds more than a flat set of reports:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
     );
   }
-  // ignoreBOM keeps a leading U+FEFF, as the folder build's readFile(…, "utf8") does.
-  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
   const reports: ZipReports["reports"] = [];
-  for (const r of html)
-    reports.push({ name: r.name, html: decoder.decode(await zipEntryBytes(r)) });
+  const unreadable: string[] = [];
+  for (const r of html) {
+    try {
+      reports.push({ name: r.name, html: decodeReport(await zipEntryBytes(r), r.name) });
+    } catch (e) {
+      unreadable.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+  if (unreadable.length > 0) throw new Error(unreadable.join("\n"));
   return { reports, own };
+}
+
+/**
+ * One report's bytes as text, decoded as UTF-8 -- and refused, naming `name`, where that would not
+ * be the text a browser shows: bytes that are not UTF-8, a UTF-16 byte-order mark, or a declared
+ * charset other than UTF-8 (`<meta charset>` or `http-equiv` Content-Type, in the first 1024 bytes
+ * as a browser looks) unless every byte is ASCII, which every such charset reads alike.
+ *
+ * Decoded leniently, a bad byte became U+FFFD on BOTH sides of the verification -- the bake and the
+ * check read the same string -- and U+FFFD is neither a word nor a number, so `10 mm²` from a
+ * Windows-1252 report printed `10 mm�` with PASS (2026-11-07 review). A leading UTF-8 byte-order
+ * mark is kept as U+FEFF, as `readFile(…, "utf8")` keeps it.
+ *
+ * @example
+ * ```ts
+ * import { decodeReport } from "@jrmarcum/s3d-reportcompiler";
+ * declare const bytes: Uint8Array;
+ * const html = decodeReport(bytes, "member_1_report.html");
+ * ```
+ */
+export function decodeReport(bytes: Uint8Array, name: string): string {
+  if ((bytes[0] === 0xfe && bytes[1] === 0xff) || (bytes[0] === 0xff && bytes[1] === 0xfe)) {
+    throw new Error(`${name}: is UTF-16 (a byte-order mark); reports are read as UTF-8`);
+  }
+  const utf8Bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new Error(
+      `${name}: is not valid UTF-8 -- its characters would print as "�"; save it as UTF-8`,
+    );
+  }
+  if (!utf8Bom) {
+    const head = new TextDecoder("latin1").decode(bytes.subarray(0, 1024));
+    const declared =
+      /<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([^\s"'/;>]+)/i.exec(head)?.[1]?.toLowerCase() ?? "";
+    const ascii = !bytes.some((b) => b > 0x7f);
+    if (declared && declared !== "utf-8" && declared !== "utf8" && !ascii) {
+      throw new Error(
+        `${name}: declares charset "${declared}", but is read as UTF-8 -- re-save it as UTF-8`,
+      );
+    }
+  }
+  return text;
 }
 
 /**

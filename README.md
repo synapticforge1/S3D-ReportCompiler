@@ -469,13 +469,14 @@ obscurely.
 | `assembleDocument(bodies, styles, mathCss)` | Many baked reports → one hermetic, printable HTML document |
 | `mathStyleSheet()` | The MathJax CHTML stylesheet the baked maths needs |
 | `scopeCss(css, scope, prefix)` | The scoping primitive behind `bakeStyle` — prefix every selector, namespace every id |
-| `portableSvg(html)` | Hoist an inline SVG's internal `<style>` onto presentation attributes, so it survives being merged into a shared document |
+| `portableSvg(html)` | Hoist an inline SVG's internal `<style>` onto presentation attributes, so it survives being merged into a shared document. A sheet it cannot hoist exactly is left as written; `bakeBody` / `bakeStyle` move such a sheet to the report's scoped stylesheet, because in HTML it applies to the whole page |
+| `decodeReport(bytes, name)` | A report's bytes as text (UTF-8), refused, naming `name`, where that is not the text a browser shows: invalid UTF-8, UTF-16, or another declared charset over non-ASCII bytes. Read every report through it: a lenient decode turns a bad byte into U+FFFD on both sides of the check |
 
 ### Reading a report's own maths configuration
 
 | Export | Description |
 | --- | --- |
-| `parseDelimiters(src)` | Read the report's embedded `tex2jax` config → `Delim[]`, sorted longest-opener-first |
+| `parseDelimiters(src)` | Read the report's embedded `tex2jax` config → `Delim[]`, sorted longest-opener-first. Only from scripts a browser runs (not one in a comment or `<noscript>`); each key from the last script that sets it |
 | `buildMathRegex(delims)` | Compile those delimiters into a single matcher |
 | `FALLBACK_DELIMS` | Used only when a report carries no readable config |
 | `skippedDelims` | Degenerate delimiters that were refused — e.g. a bare `[`, which would treat every bracketed phrase as an equation |
@@ -512,11 +513,11 @@ Node and browsers.
 | `audit` | What the bake step removed or rewrote: `loadersRemoved`, `visibilityNeutralised`, `heightNeutralised`, `atPageDropped`, `strayTokensDropped`, `bodyTagMissing` |
 | `mathStats` | `converted`, `failed`, `firstFailure` |
 | `bakeRemovals` | The rest of what the bake removes or moves: `activeAttributes` (event handlers, `javascript:` URLs), `metaBaseTags`, `blocklessAtRules`, `atRules`, `bodySheetsMoved`, `noscript` |
-| `svgStyleWarnings` | SVG rules that could not be hoisted |
+| `svgStyleWarnings` | SVG rules that could not be hoisted (their sheet moved to the report's stylesheet), with the reason |
 | `cssWarnings` | CSS rules that could not be scoped to their report, and were left out |
 | `bakeWarnings` | What the bake declined to guess: a spinner id on an element that holds text (kept), a hidden rule no script reveals (left hidden) |
 | `seenOpeners` | Every opening delimiter met so far — what the guard looks for |
-| `resetBakeState()` | Zero every counter above and empty every diagnostic set (`seenOpeners` and the delimiter sets too). They are cumulative per process: **call it before each batch** when one page or server bakes more than once, or a later batch inherits an earlier one's failures and delimiters |
+| `resetBakeState()` | Zero every counter above and empty every diagnostic set (`seenOpeners` and the delimiter sets too), and clear MathJax's labels and every TeX definition (`\def`, `\newcommand`, `\definecolor`, …; each report also starts without them). They are cumulative per process: **call it before each batch** when one page or server bakes more than once, or a later batch inherits an earlier one's failures and delimiters |
 | `VERSION`, `MATHJAX_FONTS` | Package version; the CDN base the fonts are inlined from |
 
 ### Host adapter — `/runtime`

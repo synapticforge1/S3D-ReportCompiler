@@ -77,7 +77,7 @@ document.getElementById("bake").addEventListener("click", async () => {
 
   // The warnings the command line prints -- all of them (cssWarnings and bakeWarnings were missing).
   for (const d of skippedDelims) log(`warning: refused degenerate delimiter "${d}"`);
-  for (const s of svgStyleWarnings) log(`warning: SVG rule "${s}" could not be hoisted; kept, confined`);
+  for (const s of svgStyleWarnings) log(`warning: SVG rule "${s}" could not be hoisted; moved to its report's stylesheet`);
   for (const r of cssWarnings) log(`warning: CSS "${r}" cannot be scoped to its report; it was left out`);
   for (const w of bakeWarnings) log(`warning: ${w}`);
 

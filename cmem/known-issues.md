@@ -28,9 +28,10 @@ refused outright. **Keep tooling and examples out of the reports directory.**
 
 ### MathJax's limitations are worked around, not removed
 
-Four MathJax 3.2.2 behaviours the bake depends on (async entity tables, U+00A0 in `\text{}`, TeX
-errors that typeset instead of throwing, CHTML emitting no SVG): the list, the workarounds and the
-test that pins them are in [roadmap.md](roadmap.md) task 8 § "MathJax limitations", M1–M4.
+Six MathJax 3.2.2 behaviours the bake depends on (async entity tables, U+00A0 in `\text{}`, TeX
+errors that typeset instead of throwing, CHTML emitting no SVG, the two packages that turn errors
+into text, definitions that outlive their report): the list, the workarounds and the tests that pin
+them are in [roadmap.md](roadmap.md) task 8 § "MathJax limitations", M1–M6.
 🔒 **Re-check them on every MathJax update** (owner, 2026-11-05).
 
 ### The render runs no report code and loads nothing from outside (since 2026-11-06, ledger #55, #60)
@@ -435,6 +436,19 @@ own idea of the problem. A cold re-read with a measurement (Chrome, a planted te
 ⚠️ **While measuring #39, a session printed three real field values to its terminal** (a `sed`
 mask that did not apply). Nothing reached a file. Count such fields with a script that prints
 only filled/empty — never mask client data after the fact.
+
+## The third full-project review (2026-11-07, four reviewers again; owner: "Fix all in the order you showed from A - E")
+
+38 findings across the core, the CLI and runtime, the release path, and the tests and docs; the
+highest-severity ones re-run by the coordinator before fixing. None occurs in the 13 samples or
+either real set: the baked HTML is byte-identical on all three after every group (samples
+`37792fe3…`, the 48-report set `ae70d5e0…`, the 75-report zip `8c1a8887…`; counts 173/342,
+174/660, 195/1,176). Each new test was run section by section against the previous commit, and
+each section fails there.
+
+| # | Class (group) | Silent? |
+|---|---|---|
+| 72 | **The bake could ADD, hide or carry content where verification proves only presence (A).** An undefined TeX command (`\phiM_n`) typeset as red text and counted converted (`noundefined` in `AllPackages`; M5); one report's `\renewcommand{\phi}{0.9}` printed the next report's `\phi M_n` as `0.9 M_n`, through `resetBakeState()` too (M6); a CSS comment naming `@import` deleted rules to the next `;` and left an open `/*` that swallowed later reports' sheets, and `/*` in a string did the same; an SVG sheet confined to its own `<svg>` though HTML applies it to the page (diagram 2 lost diagram 1's `display:none`), `</svg >` and nested SVGs cut short, `!important` and low-weight rivals lost when hoisted; ids in nested CSS not renamed; delimiters and the reveal gate read from commented-out scripts; the reference guard excused a broken reference after `<!-->`; non-UTF-8 reports decoded to U+FFFD on both sides (`decodeReport`, new export); `\begin{array}[t]{lcr}` and `\eqref{key}` expected in the PDF (false FAIL); a "spinner" drawing an embedded image removed by both bake and check, and the check reading `id=` inside a title | **yes** (all but the two false FAILs) |
 
 ### The pattern
 

@@ -622,7 +622,7 @@ cannot render, or v3 breaking on a future runtime.
 🔒 Owner, 2026-11-05: "We need to note these as what they are, MathJax limitations. These will need
 to be checked whenever MathJax is updated to the next version." Each is a MathJax behaviour (3.2.2,
 measured 2026-11-05), not this repo's logic; the workaround lives in `src/report_core.ts`, and
-**`bun run test`'s "MathJax limitations" test pins all four** — run it first after any MathJax
+**`bun run test`'s "MathJax limitations" test pins M1–M4, and "review 3, group A" M5–M6** — run them first after any MathJax
 change (any version, 3.x patch included, and the v4 migration above). A failure there names the
 limitation; re-measure it, then update the workaround, the test and this list together.
 
@@ -632,6 +632,8 @@ limitation; re-measure it, then update the workaround, the test and this list to
 | M2 | **`\text{}` keeps U+00A0 but collapses ASCII spaces** (maths mode treats them alike). | `&nbsp;` decodes to U+00A0, as the DOM does, never to a space. | `&nbsp;` ≡ `&#160;` ≠ two spaces |
 | M3 | **A TeX error does not throw.** By default MathJax typesets an inline red error box ("Misplaced &", "Undefined control sequence") and returns normally — the bake would count it as converted and seal the box into the PDF. | `formatError` rethrows, so the error is counted as failed and the build refuses. 0 error boxes in the 13 samples and the 48-report client set when added. | an unknown entity (a bare `&`) counts as failed |
 | M4 | **CHTML must emit no `<svg>` or `<style>`.** `portableSvg` rewrites every `<text>` and hoists every SVG `<style>`, safe only while MathJax's own output has neither (see the ordering note on `portableSvg`). | none needed while it holds; switching the output to SVG would break it. | the typeset output holds no `<svg` / `<style` |
+| M5 | **Two packages in `AllPackages` turn errors into text** (added 2026-11-07, known-issues #72): `noundefined` typesets an unknown command as its red name and returns normally, so M3's `formatError` never ran for the commonest TeX error; `noerrors` typesets a failed expression's source. | `TEX_PACKAGES` filters both out. | "review 3, group A" § 1: `\phiM_n` counts as failed |
+| M6 | **Definitions outlive the expression** (2026-11-07, #72): `\def` / `\newcommand` / `\let` / `\DeclareMathOperator` / `\newenvironment` go into the `newcommand` package's `new-Command` / `new-Environment` / `new-Delimiter` maps, `\definecolor` into `packageData.color.model.userColors`, `\newtagform` into the tags' `mtFormats` — for the life of the TeX input, so one report's changed the next. | `resetTexDefinitions()` clears all five per report (and in `resetBakeState`), and THROWS if one is not where 3.2.2 keeps it. | "review 3, group A" § 2 |
 
 Also MathJax-dependent, and covered by the full build rather than this test: the woff-v2 font path
 (`MATHJAX_FONTS`, above) and the page count (the degradation baseline below).

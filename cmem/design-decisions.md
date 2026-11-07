@@ -136,16 +136,33 @@ and after — so they are rules for the next template, each pinned by a test:
 - **Selector lists split at top-level commas only** (`p:not(.a, .b)` is one selector).
 - **SVG `<style>` is hoisted onto presentation attributes only where an attribute says the same**:
   top-level rules, bare element selectors, properties on SVG's presentation-attribute list
-  (`font`, the shorthand, is not one — Chrome ignores `font="…"`, measured). The rest keeps its
-  `<style>`, **confined to its own `<svg>` inside `:where()`** — an inline-SVG `<style>` is
-  document-wide in HTML, and a plain prefix raised specificity enough to beat the report's own
-  rules it used to lose to (Chrome, measured: red where the source was green).
+  (`font`, the shorthand, is not one — Chrome ignores `font="…"`, measured), no `!important`, no
+  element the rule names elsewhere in the report, and no rule elsewhere in the report setting that
+  property with no more weight (`*`, the bare element, `svg *` — it lost to the sheet in the
+  source, and beats any attribute). 🔁 **Otherwise the sheet MOVES to the report's scoped sheet**
+  (2026-11-07, known-issues #72), in document order, exactly like a body sheet: an inline-SVG
+  `<style>` is document-wide in HTML, so the report's wrapper is its meaning. Until then it was
+  confined to its own `<svg>` inside `:where()` (#34, #44), which kept it from other REPORTS but
+  also from the report's other diagrams and page — diagram 1's `.lbl{display:none}` no longer hid
+  diagram 2's labels. Scoped with `.rsN` like every other rule of the report, it keeps its weight
+  relative to them. SVGs are found by depth with a quote-aware tag reader (`</svg >`, nesting,
+  `<svg/>`); the 13 samples and both real sets are still hoisted, byte-identical.
 - **Attributes are read one after another, each value whole**, by the bake and — separately written,
   §9 — by the reference guard, `findBrokenReferences` (in the core since 2026-11-06, so the browser
   path runs it too; the CLI only until then), which requires every id reference that resolved in a
   source to resolve in its bake: verification counts text and image paints, not gradients or clips.
 - **The counters are per process; a batch resets them.** `resetBakeState()` before each batch, for
   any caller that bakes more than once (the browser example does); the CLI bakes once.
+- **Each report's TeX starts empty** (2026-11-07, #72): no label, and no definition from an earlier
+  report (`\def`, `\newcommand`, `\let`, `\DeclareMathOperator`, `\newenvironment`, `\definecolor`,
+  `\newtagform`); MathJax keeps them for the life of the input, so report 0's
+  `\renewcommand{\phi}{0.9}` printed report 1's `\phi M_n` as `0.9 M_n` with PASS. And
+  `noundefined` / `noerrors` are left out of MathJax's packages, so an undefined command is a
+  FAILURE, not red text counted as converted.
+- **Nested CSS rules** keep their declarations; the ids in their selectors are renamed.
+- **Comments are CSS's**: `/*` inside a string is text, an unclosed one ends its own sheet, and
+  they go before the block-less at-rules are removed (a comment that mentions `@import` used to
+  delete rules up to the next `;`).
 
 ---
 

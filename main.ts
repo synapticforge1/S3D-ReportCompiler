@@ -895,8 +895,8 @@ for (const skipped of skippedDelims) {
 }
 for (const selector of svgStyleWarnings) {
   console.warn(
-    `  warning: SVG rule "${selector}" could not be hoisted; its <style> block was kept, ` +
-      `confined to its own diagram`,
+    `  warning: SVG rule "${selector}" could not be hoisted; its <style> block was moved to ` +
+      `its report's stylesheet (in HTML it applies to the whole page)`,
   );
 }
 
