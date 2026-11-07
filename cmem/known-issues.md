@@ -387,6 +387,7 @@ CSP line only.
 | 63 | **A build could say something other than what happened (C, `e683ae2`).** Mis-set settings ignored, a folder as output, an unverified PDF under the final name, the HTML of a failed build deleted, no wall-clock bound on Chrome, Ctrl-C leaking the temp profile, test-hook fonts in the real cache | mixed |
 | 64 | **Privacy tools missed the class (D, `0769a96`).** The sanitizer cut notes at the first `<br>` (safe today: all 48 use newlines, counted); the redactor passed `/srv`-style paths, and its email residue check could not fail | **yes** |
 | 65 | **Tests that could not fail, and false docs (E, `bfa5e32`).** Linux-vacuous redactor cases, a silent root `return`, a filter-dependent check, unchecked generator edits, `tests/controls/` never formatted or linted, the CSP allowing all of jsDelivr, stale README/control claims | **yes** |
+| 66 | **The verification expected TeX settings in the PDF (`a41961f`, found by the first real SkyCiv zip, 2026-11-06).** `\color{blue}{…}` in 2 of 75 reports: "blue" reported missing from a correct PDF, the build FAILED, the zip was left untouched (as designed). Fixed as the class of non-printing arguments (colours, spacing, `\phantom`, labels, environment specs, MathJax extensions); [verification.md](verification.md) § How the tricky parts work | no: a false FAIL, loud |
 
 ⚠️ **#52 and #54 add four exports, so the next release is a MINOR (1.2.0), not 1.1.8:** `compat`
 says 0 removed, 0 changed, 4 added (`BakedReport`, `ReferenceCheck`, `findBrokenReferences`,

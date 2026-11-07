@@ -39,6 +39,23 @@ counts.
 
 ## How the tricky parts work
 
+**TeX settings are not content (2026-11-06, `a41961f`).** Command NAMES were always dropped from
+the expected words ("dfrac" never prints), but their ARGUMENTS were all expected. The first real
+SkyCiv zip (75 reports) failed a correct PDF on that: `\color{blue}{\text{ NONCOMPACT}}` in two
+reports, and "blue" "missing". `dropNonPrintingTex` now removes the arguments that are settings and
+keeps the ones that print. The class covers:
+- colours;
+- spacing, whose numbers never print, `\\[4pt]` included;
+- `\phantom`;
+- `\label`;
+- environment names and column specs;
+- MathJax's `\style`, `\class`, `\cssId`, `\unicode`, `\enclose`, `\bbox`, `\require` and `\href`'s
+  URL.
+
+The table is `NONPRINTING_TEX` in the core. ⚠️ A NEW non-printing command in a future template
+fails the same way: loudly, with the setting named as missing. That is the safe direction. Add it
+to the table, with a test, rather than loosening the check.
+
 **Split detection without rendering.** An image straddling a page break is **painted on both pages**
 (clipped), so a paint count above the expected count means a split. The diagram carries its title at the
 top and its axis caption at the bottom — landing on different pages means it was cut in half.

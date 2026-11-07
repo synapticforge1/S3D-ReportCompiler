@@ -440,6 +440,18 @@ The owner's 75-report export: read in memory, counts only, 23 ms; a round trip t
 `zipWithFile` / `checkZipUpdate` passed. Folder builds' baked HTML is unchanged (`37792fe3…`,
 `ae70d5e0…`).
 
+**2026-11-06, the full build of the 75-report export, on a copy in `local/skyciv-zip-test/`
+(owner: "proceed with the test build"):**
+- **The first run FAILED:** 1 word missing ("blue"), in reports 73 and 74 (#66).
+- **Diagnosed without printing client values:** tokens were shown only if they also occur in
+  the public samples, everything else masked. The cause, `\color{blue}{…}`, is a TeX setting the
+  verification expected to print.
+- **After `a41961f`:** PASS, 75/75 per report, 195 words / 1,176 numbers (the 196th was "blue");
+  `pack.pdf` added, 76 entries read by .NET and `tar`. The 48-report set is unchanged
+  (174 / 660, `ae70d5e0…`).
+- **The suite:** 49/49 on Bun and Node 26.12 / 24.21 / 22.18. The new test fails on the
+  previous code.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in
