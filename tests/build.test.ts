@@ -32,6 +32,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -1502,6 +1503,316 @@ test(
     );
   },
 );
+
+// ── SkyCiv's zip (roadmap task 16) ───────────────────────────────────────────
+//
+// The test zips come from the writer below, NOT from the tool's own: a reader checked only against
+// its own writer shares its blind spots. It writes what the real export is (deflate, flags 2,
+// made-by Unix, no extras; measured 2026-11-06 on a 75-report export) and the other legal shapes a
+// zip tool produces (stored entries, data descriptors, a comment), plus each shape to be refused.
+
+const TEST_CRC = (() => {
+  const t: number[] = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t.push(c >>> 0);
+  }
+  return (b: Uint8Array) => {
+    let c = ~0;
+    for (const x of b) c = t[(c ^ x) & 255] ^ (c >>> 8);
+    return ~c >>> 0;
+  };
+})();
+
+type TestEntry = {
+  name: string | Uint8Array;
+  data: Uint8Array;
+  method?: number;
+  flags?: number;
+  /** sizes and CRC after the data (bit 3), zero in the local header */
+  descriptor?: boolean;
+  crc?: number;
+};
+
+function testZip(
+  entries: TestEntry[],
+  opts: { comment?: string; gap?: boolean; zip64?: boolean } = {},
+): Uint8Array {
+  const parts: Buffer[] = [];
+  const central: Buffer[] = [];
+  let at = 0;
+  for (const e of entries) {
+    const name = typeof e.name === "string" ? Buffer.from(e.name, "utf8") : Buffer.from(e.name);
+    const method = e.method ?? 8;
+    const body = method === 8 ? deflateRawSync(e.data) : Buffer.from(e.data);
+    const crc = e.crc ?? TEST_CRC(e.data);
+    const flags = (e.flags ?? 2) | (e.descriptor ? 8 : 0);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(flags, 6);
+    local.writeUInt16LE(method, 8);
+    local.writeUInt32LE(e.descriptor ? 0 : crc, 14);
+    local.writeUInt32LE(e.descriptor ? 0 : body.length, 18);
+    local.writeUInt32LE(e.descriptor ? 0 : e.data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    const descriptor = Buffer.alloc(e.descriptor ? 16 : 0);
+    if (e.descriptor) {
+      descriptor.writeUInt32LE(0x08074b50, 0);
+      descriptor.writeUInt32LE(crc, 4);
+      descriptor.writeUInt32LE(body.length, 8);
+      descriptor.writeUInt32LE(e.data.length, 12);
+    }
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0);
+    c.writeUInt16LE(0x033f, 4);
+    c.writeUInt16LE(20, 6);
+    c.writeUInt16LE(flags, 8);
+    c.writeUInt16LE(method, 10);
+    c.writeUInt32LE(crc, 16);
+    c.writeUInt32LE(body.length, 20);
+    c.writeUInt32LE(e.data.length, 24);
+    c.writeUInt16LE(name.length, 28);
+    c.writeUInt32LE(0x81a40000, 38);
+    c.writeUInt32LE(at, 42);
+    central.push(c, name);
+    parts.push(local, name, body, descriptor);
+    at += 30 + name.length + body.length + descriptor.length;
+  }
+  if (opts.gap) {
+    parts.push(Buffer.from("stray bytes"));
+    at += 11;
+  }
+  const cd = Buffer.concat(central);
+  const comment = Buffer.from(opts.comment ?? "", "utf8");
+  const locator = Buffer.alloc(opts.zip64 ? 20 : 0);
+  if (opts.zip64) locator.writeUInt32LE(0x07064b50, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cd.length, 12);
+  end.writeUInt32LE(at, 16);
+  end.writeUInt16LE(comment.length, 20);
+  return new Uint8Array(Buffer.concat([...parts, cd, locator, end, comment]));
+}
+
+/** An independent read of a zip's entries: name -> unpacked bytes (zlib, not the tool's reader). */
+function testUnzip(zip: Uint8Array): Map<string, Uint8Array> {
+  const b = Buffer.from(zip);
+  let end = b.length - 22;
+  while (b.readUInt32LE(end) !== 0x06054b50) end--;
+  const out = new Map<string, Uint8Array>();
+  let p = b.readUInt32LE(end + 16);
+  for (let i = 0; i < b.readUInt16LE(end + 10); i++) {
+    const [n, e, c] = [b.readUInt16LE(p + 28), b.readUInt16LE(p + 30), b.readUInt16LE(p + 32)];
+    const local = b.readUInt32LE(p + 42);
+    const start = local + 30 + b.readUInt16LE(local + 26) + b.readUInt16LE(local + 28);
+    const body = b.subarray(start, start + b.readUInt32LE(p + 20));
+    const data = b.readUInt16LE(p + 10) === 8 ? inflateRawSync(body) : body;
+    assert.equal(TEST_CRC(data), b.readUInt32LE(p + 16), "CRC");
+    out.set(b.toString("utf8", p + 46, p + 46 + n), new Uint8Array(data));
+    p += 46 + n + e + c;
+  }
+  return out;
+}
+
+const filesOf = (dir: string) =>
+  readdirSync(dir)
+    .filter((n) => n.endsWith(".html"))
+    .map((n) => ({ name: n, data: new Uint8Array(readFileSync(join(dir, n))) }));
+
+test(
+  "a SkyCiv zip: the verified PDF is added to it, the reports untouched; a re-run replaces it",
+  { timeout: TIMEOUT },
+  () => {
+    const dir = join(work, "zip-pass");
+    mkdirSync(dir, { recursive: true });
+    const zipPath = join(dir, "pack.zip");
+    const samples = filesOf(SAMPLES);
+    // Half the entries with data descriptors and one stored, as other zip tools write them.
+    writeFileSync(
+      zipPath,
+      testZip(
+        samples.map((s, i) => ({ ...s, descriptor: i % 2 === 1, method: i === 0 ? 0 : 8 })),
+        { comment: "kept" },
+      ),
+    );
+    const r = run([MAIN, zipPath]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(
+      r.out,
+      /zip:\s+pack\.zip, 13 report entries/,
+      /per-report: 13\/13 reports/,
+      /PASS: every source word/,
+      /Added pack\.pdf to .*pack\.zip/,
+    );
+    const after = readFileSync(zipPath);
+    const entries = testUnzip(after);
+    assert.equal(entries.size, 14);
+    for (const s of samples) {
+      assert.ok(Buffer.from(entries.get(s.name) ?? []).equals(Buffer.from(s.data)), s.name);
+    }
+    const pdf = entries.get("pack.pdf");
+    assert.ok(pdf && Buffer.from(pdf.subarray(0, 5)).toString() === "%PDF-", "no PDF in the zip");
+    assert.equal(after.subarray(after.length - 4).toString(), "kept", "the comment was lost");
+    // Beside the zip: the baked HTML, and no loose or unverified PDF, and no partial zip.
+    assert.deepEqual(readdirSync(dir).sort(), ["pack.html", "pack.zip"]);
+
+    const again = run([MAIN, zipPath, "--no-keep-html"]);
+    assert.equal(again.code, 0, tail(again.out));
+    has(
+      again.out,
+      /pack\.pdf from an earlier run \(it will be replaced\)/,
+      /replacing the earlier/,
+    );
+    assert.equal(testUnzip(readFileSync(zipPath)).size, 14, "the PDF was added twice");
+    assert.deepEqual(readdirSync(dir), ["pack.zip"]);
+  },
+);
+
+test("a zip whose build FAILS is left byte-identical", { timeout: TIMEOUT }, () => {
+  const src = control("control-hidden-content", join(work, "zip-fail-src"));
+  const dir = join(work, "zip-fail");
+  mkdirSync(dir, { recursive: true });
+  const zipPath = join(dir, "pack.zip");
+  const bytes = testZip(filesOf(src));
+  writeFileSync(zipPath, bytes);
+  const r = run([MAIN, zipPath]);
+  assert.equal(r.code, 1, tail(r.out));
+  has(r.out, /VERIFICATION FAILED/, /The zip is unchanged/);
+  assert.ok(readFileSync(zipPath).equals(Buffer.from(bytes)), "a failed build changed the zip");
+});
+
+test("a zip that is not a flat set of reports is refused, unchanged, naming why", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const page = new TextEncoder().encode("<html><body>MEMBER 1 DESIGN REPORT</body></html>");
+  const ok: TestEntry = { name: "member_1_report.html", data: page };
+  const cases: [string, Uint8Array, RegExp][] = [
+    [
+      "a folder",
+      testZip([ok, { name: "sub/", data: new Uint8Array(0), method: 0 }]),
+      /is a folder/,
+    ],
+    ["a nested report", testZip([ok, { name: "sub/b.html", data: page }]), /inside a folder/],
+    [
+      "a non-report",
+      testZip([ok, { name: "notes.txt", data: page }]),
+      /"notes\.txt" is not a report/,
+    ],
+    ["a case twin", testZip([ok, { name: "MEMBER_1_report.html", data: page }]), /same name/],
+    ["encryption", testZip([{ ...ok, flags: 1 }]), /is encrypted/],
+    ["another method", testZip([{ ...ok, method: 12 }]), /compression method 12/],
+    ["a bad CRC", testZip([{ ...ok, crc: 1 }]), /fails its CRC check/],
+    ["a bad CRC, stored", testZip([{ ...ok, method: 0, crc: 1 }]), /fails its CRC check/],
+    [
+      "a code-page name",
+      testZip([{ ...ok, name: new Uint8Array([0x63, 0xe9, 0x2e, 0x68, 0x74, 0x6d, 0x6c]) }]),
+      /not in UTF-8/,
+    ],
+    ["bytes no entry claims", testZip([ok], { gap: true }), /belong to no entry/],
+    [
+      "a stub before the zip",
+      new Uint8Array([...new TextEncoder().encode("MZ stub"), ...testZip([ok])]),
+      /not where the end record puts it|no local header/,
+    ],
+    [
+      "a descriptor that disagrees",
+      (() => {
+        const z = testZip([{ ...ok, descriptor: true }]);
+        const at = Buffer.from(z).indexOf(Buffer.from([0x50, 0x4b, 0x07, 0x08]));
+        z[at + 8] ^= 1; // its compressed size
+        return z;
+      })(),
+      /data descriptor disagrees/,
+    ],
+    ["zip64", testZip([ok], { zip64: true }), /zip64/],
+    ["a truncated file", testZip([ok]).subarray(0, 60), /no end-of-archive record|damaged/],
+    ["not a zip", new TextEncoder().encode("<html></html>"), /too short|no end-of-archive/],
+  ];
+  for (const [what, zip, reason] of cases) {
+    await assert.rejects(core.readZipReports(zip, "pack.pdf"), reason, what);
+  }
+  // Damaged deflate data under a right size and CRC: refused as damage, not unpacked as garbage.
+  const broken = testZip([ok]);
+  broken[30 + "member_1_report.html".length] ^= 0xff;
+  await assert.rejects(core.readZipReports(broken, "pack.pdf"), /damaged|CRC|size/, "bad deflate");
+  // The real shape reads, its own PDF is not a report, and nothing else is needed.
+  const fine = await core.readZipReports(
+    testZip([ok, { name: "Pack.PDF", data: page, method: 0 }]),
+    "pack.pdf",
+  );
+  assert.equal(fine.reports.length, 1);
+  assert.equal(fine.hasOwn, true);
+
+  // Through the CLI: one refusal end to end, and the argument rules. None may touch the zip.
+  const dir = join(work, "zip-refuse");
+  mkdirSync(dir, { recursive: true });
+  const zipPath = join(dir, "pack.zip");
+  const bad = testZip([ok, { name: "notes.txt", data: page }]);
+  writeFileSync(zipPath, bad);
+  const refusals: [string[], RegExp][] = [
+    [[MAIN, zipPath], /"notes\.txt" is not a report[\s\S]*Nothing was changed/],
+    [[MAIN, zipPath, join(dir, "out.pdf")], /A zip takes no output argument/],
+    [[MAIN, zipPath, "--no-verify"], /--no-verify cannot be used with a zip/],
+    [[MAIN, join(dir, "absent.zip")], /No such zip file/],
+  ];
+  for (const [args, reason] of refusals) {
+    const r = run(args);
+    assert.equal(r.code, 1, tail(r.out));
+    has(r.out, reason);
+  }
+  writeFileSync(zipPath, testZip([ok]));
+  writeFileSync(join(dir, "pack.html"), "<p>the user's own file</p>");
+  const mine = run([MAIN, zipPath]);
+  assert.equal(mine.code, 1, tail(mine.out));
+  has(mine.out, /already beside the zip/);
+  assert.equal(readFileSync(join(dir, "pack.html"), "utf8"), "<p>the user's own file</p>");
+  assert.deepEqual(readdirSync(dir).sort(), ["pack.html", "pack.zip"]);
+});
+
+test("the zip update is checked independently: any change but the PDF is caught", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const samples = filesOf(SAMPLES).slice(0, 3);
+  const original = testZip(samples, { comment: "c" });
+  const pdf = new TextEncoder().encode("%PDF-1.7 test\n");
+  const updated: Uint8Array = core.zipWithFile(original, "pack.pdf", pdf, new Date(2026, 10, 6));
+  assert.deepEqual(await core.checkZipUpdate(original, updated, "pack.pdf", pdf), []);
+  // The independent reader agrees: the same reports, byte for byte, and the PDF.
+  const read = testUnzip(updated);
+  for (const s of samples)
+    assert.ok(Buffer.from(read.get(s.name) ?? []).equals(Buffer.from(s.data)));
+  assert.ok(Buffer.from(read.get("pack.pdf") ?? []).equals(Buffer.from(pdf)));
+
+  // Tampering anywhere is a failure: a report's bytes, the PDF's, the comment, a dropped entry.
+  const flip = (at: number) => {
+    const z = updated.slice();
+    z[at] ^= 0xff;
+    return z;
+  };
+  const firstData = 30 + samples[0].name.length + 5;
+  const pdfAt = Buffer.from(updated).indexOf("%PDF-1.7");
+  for (const [what, z, file] of [
+    ["a report byte", flip(firstData), pdf],
+    ["a PDF byte", flip(pdfAt + 3), pdf],
+    ["another PDF", updated, new TextEncoder().encode("%PDF-1.7 other\n")],
+    ["the comment", flip(updated.length - 1), pdf],
+    [
+      "an entry dropped",
+      core.zipWithFile(testZip(samples.slice(1), { comment: "c" }), "pack.pdf", pdf, new Date()),
+      pdf,
+    ],
+  ] as [string, Uint8Array, Uint8Array][]) {
+    const failures = await core.checkZipUpdate(original, z, "pack.pdf", file);
+    assert.ok(failures.length > 0, `${what} was not caught`);
+  }
+  // Replacing: a second update holds one PDF, the new one.
+  const pdf2 = new TextEncoder().encode("%PDF-1.7 second\n");
+  const twice: Uint8Array = core.zipWithFile(updated, "PACK.pdf", pdf2, new Date());
+  assert.deepEqual(await core.checkZipUpdate(updated, twice, "PACK.pdf", pdf2), []);
+  assert.equal(testUnzip(twice).size, 4);
+});
 
 test("private paths stay ignored by git", () => {
   // Client data, transcripts, build output, and the workspace's private memory folder. cmem/local/

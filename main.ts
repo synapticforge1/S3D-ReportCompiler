@@ -16,6 +16,7 @@
 //   bun         main.ts [htmlDir] [output.pdf] [options]
 //   node        main.ts [htmlDir] [output.pdf] [options]
 //   deno run -A main.ts [htmlDir] [output.pdf] [options]
+//   bun         main.ts <reports.zip> [options]     (the PDF is added to the zip)
 //
 //     --no-keep-html  discard the baked HTML after rendering
 //     --no-optimize   skip the recompression pass
@@ -115,7 +116,10 @@ import {
   svgStyleWarnings,
   bakeRemovals,
   cssWarnings,
+  checkZipUpdate,
+  readZipReports,
   VERSION,
+  zipWithFile,
 } from "./src/report_core.ts";
 
 import * as rt from "./src/report_runtime.ts";
@@ -176,6 +180,7 @@ USAGE
   s3d-reportcompiler                        compile the reports here
   s3d-reportcompiler <reportsFolder>
   s3d-reportcompiler <reportsFolder> <output.pdf>
+  s3d-reportcompiler <reports.zip>
 
 THE SIMPLE WAY
   Open a terminal in the folder holding your member_*.html reports and run the
@@ -186,6 +191,18 @@ THE SIMPLE WAY
       CompiledPDF/combined_report.html    <- exactly what was sent to Chrome
 
   It also works one level up, from a folder containing HTMLFilesToBeCompiled/.
+
+STRAIGHT FROM SKYCIV'S ZIP
+  Give it the zip SkyCiv downloaded. Nothing is unpacked: its .html entries are
+  the reports, and once the PDF has PASSED its check it is added INTO the zip,
+  named after it (pack.zip gets pack.pdf). The reports in the zip are not
+  touched, and a failed build leaves the zip exactly as it was.
+
+      s3d-reportcompiler "C:\\Users\\me\\Downloads\\pack.zip"
+
+  The intermediate HTML is kept beside the zip (pack.html). Run it again and
+  the PDF in the zip is replaced. A zip holding anything but a flat set of
+  .html reports is refused, naming what else is in it.
 
 IF YOU WANT TO CHOOSE THE PATHS
   Quote anything containing spaces.
@@ -337,13 +354,48 @@ const nestedInput = rt.joinPath(workingDir, INPUT_DIR);
 // with "cannot find the path specified" on stderr and still exits 0. The
 // defaults were never exposed to this (they are built from an absolute cwd),
 // which is exactly why it would have gone unnoticed.
-const htmlDir = await rt.resolvePath(
-  positional[0] ?? ((await rt.dirExists(nestedInput)) ? nestedInput : workingDir),
-);
+// A SkyCiv zip (roadmap task 16): the reports are its .html entries, read in memory, and after a
+// PASS the verified PDF is added back into the zip, under the zip's own name. The working files --
+// the baked HTML, the PDF until it is in the zip -- sit beside the zip. Resolved to the REAL path,
+// so a link to a zip updates the zip, not the link.
+let zipPath: string | null = null;
+if (positional[0] !== undefined && /\.zip$/i.test(positional[0].trim())) {
+  const given = await rt.resolvePath(positional[0]);
+  if (!(await rt.fileExists(given))) {
+    console.error(`No such zip file:\n  ${given}\n`);
+    console.error("Check the path; if it contains spaces, wrap the whole path in quotes.");
+    rt.exit(1);
+  }
+  if (positional[1] !== undefined) {
+    console.error("A zip takes no output argument: the verified PDF is added to the zip itself.");
+    console.error(`Run:  s3d-reportcompiler "${given}"`);
+    rt.exit(1);
+  }
+  // The PDF goes into a package that will be issued; an unchecked one must not.
+  if (!verify) {
+    console.error("--no-verify cannot be used with a zip: only a verified PDF is added to it.");
+    rt.exit(1);
+  }
+  zipPath = await rt.realPath(given);
+}
+const zipDir = zipPath === null ? "" : zipPath.replace(/[\\/][^\\/]*$/, "");
+const zipStem = zipPath === null ? "" : rt.baseName(zipPath).replace(/\.zip$/i, "");
+/** The PDF's name inside the zip. */
+const zipPdfName = `${zipStem}.pdf`;
 
-const outputPdf = await rt.resolvePath(
-  positional[1] ?? rt.joinPath(workingDir, OUTPUT_DIR, "combined_report.pdf"),
-);
+const htmlDir =
+  zipPath !== null
+    ? zipDir
+    : await rt.resolvePath(
+        positional[0] ?? ((await rt.dirExists(nestedInput)) ? nestedInput : workingDir),
+      );
+
+const outputPdf =
+  zipPath !== null
+    ? rt.joinPath(zipDir, zipPdfName)
+    : await rt.resolvePath(
+        positional[1] ?? rt.joinPath(workingDir, OUTPUT_DIR, "combined_report.pdf"),
+      );
 
 // The second argument names the PDF FILE. A folder there could not be replaced, so Chrome's write
 // failed ("Access is denied"), the run ended in a stack trace blaming Chrome, and a stray
@@ -612,27 +664,53 @@ const isBakedDocument = (html: string) =>
 // relies on control-flow analysis seeing through a namespaced never-returning
 // call, which is not worth depending on.
 let allHtml: string[] = [];
-try {
-  allHtml = (await rt.listFiles(htmlDir)).filter((n) => n.toLowerCase().endsWith(".html"));
-} catch {
-  console.error(`No such folder:\n  ${htmlDir}\n`);
-  if (positional[0]) {
-    console.error("Check the path given as the first argument.");
-    console.error("If it contains spaces, wrap the whole path in quotes.");
-  } else {
-    console.error(`Nothing to compile here. Either:`);
-    console.error(`  - run this from the folder holding your member_*.html reports, or`);
-    console.error(`  - run it from a folder containing ${INPUT_DIR}/, or`);
-    console.error(`  - give the folder as an argument: s3d-reportcompiler "<path to reports>"`);
+const contents = new Map<string, string>();
+/** The zip's bytes as read: the PDF is added to THESE, and only if the file still holds them. */
+let zipBytes: Uint8Array = new Uint8Array(0);
+let zipHadPdf = false;
+if (zipPath !== null) {
+  try {
+    zipBytes = await rt.readFile(zipPath);
+    const read = await readZipReports(zipBytes, zipPdfName);
+    zipHadPdf = read.hasOwn;
+    for (const r of read.reports) {
+      allHtml.push(r.name);
+      contents.set(r.name, r.html);
+    }
+  } catch (e) {
+    console.error(`Cannot compile this zip:\n  ${zipPath}\n`);
+    console.error((e as Error).message);
+    console.error(`\nA SkyCiv export is a flat set of member_*.html reports. Nothing was changed.`);
+    rt.exit(1);
   }
-  console.error(`\nRun with --help for examples.`);
-  rt.exit(1);
-}
+  // The baked HTML is written beside the zip. A file of that name that is not a previous bake is
+  // the user's, and is not overwritten.
+  if ((await rt.fileExists(outputHtml)) && !isBakedDocument(await rt.readTextFile(outputHtml))) {
+    console.error(`A file the build would overwrite is already beside the zip:\n  ${outputHtml}\n`);
+    console.error("Move or rename it (or the zip), then re-run.");
+    rt.exit(1);
+  }
+} else {
+  try {
+    allHtml = (await rt.listFiles(htmlDir)).filter((n) => n.toLowerCase().endsWith(".html"));
+  } catch {
+    console.error(`No such folder:\n  ${htmlDir}\n`);
+    if (positional[0]) {
+      console.error("Check the path given as the first argument.");
+      console.error("If it contains spaces, wrap the whole path in quotes.");
+    } else {
+      console.error(`Nothing to compile here. Either:`);
+      console.error(`  - run this from the folder holding your member_*.html reports, or`);
+      console.error(`  - run it from a folder containing ${INPUT_DIR}/, or`);
+      console.error(`  - give the folder as an argument: s3d-reportcompiler "<path to reports>"`);
+    }
+    console.error(`\nRun with --help for examples.`);
+    rt.exit(1);
+  }
 
-// Every ".html" entry is accounted for: compiled, or reported as skipped below. One that is not a
-// readable file -- a folder named *.html, a broken link -- is refused here: it is a report the
-// package would otherwise lack without a word (a linked report was missing that way, with PASS).
-{
+  // Every ".html" entry is accounted for: compiled, or reported as skipped below. One that is not a
+  // readable file -- a folder named *.html, a broken link -- is refused here: it is a report the
+  // package would otherwise lack without a word (a linked report was missing that way, with PASS).
   const unreadable = (await rt.listNames(htmlDir)).filter(
     (n) => n.toLowerCase().endsWith(".html") && !allHtml.includes(n),
   );
@@ -642,12 +720,13 @@ try {
     console.error(`\nEvery .html in the input folder is a report. Fix or move these, then re-run.`);
     rt.exit(1);
   }
-}
 
-// Read once, here: every input is needed below to tell reports from previous
-// bakes, and again to compile.
-const contents = new Map<string, string>();
-for (const name of allHtml) contents.set(name, await rt.readTextFile(rt.joinPath(htmlDir, name)));
+  // Read once, here: every input is needed below to tell reports from previous
+  // bakes, and again to compile.
+  for (const name of allHtml) {
+    contents.set(name, await rt.readTextFile(rt.joinPath(htmlDir, name)));
+  }
+}
 
 // A previous run's baked document is never an input, WHATEVER its name: a bake
 // left in the folder by a run named a.pdf would otherwise be compiled into a run
@@ -664,15 +743,17 @@ const bakedLeftovers = new Set(allHtml.filter((n) => isBakedDocument(contents.ge
 // and only by the baked HTML.
 // By file identity too (device + file number): a hard link names the same file under another
 // path, which no real-path comparison can see (2026-11-06).
+// A zip's reports are not files, so nothing on disk can be one of them (the zip itself is never
+// written until the end, and then only by the rename of a checked copy).
 const inputByRealPath = new Map<string, string>();
 const inputByIdentity = new Map<string, string>();
-for (const name of allHtml) {
+for (const name of zipPath === null ? allHtml : []) {
   const path = rt.joinPath(htmlDir, name);
   inputByRealPath.set(pathKey(await rt.realPath(path)), name);
   const id = await rt.fileIdentity(path);
   if (id !== null) inputByIdentity.set(id, name);
 }
-for (const out of new Set([outputPdf, outputHtml])) {
+for (const out of zipPath === null ? new Set([outputPdf, outputHtml]) : []) {
   let real: string;
   try {
     real = pathKey(await rt.realPath(out));
@@ -699,8 +780,10 @@ if (entries.length === 0) {
   // nested input folder AND no reports of its own. Someone who runs the command
   // in the wrong place gets the whole usage text, not a one-line rebuke -- this
   // is the most likely first experience of the tool going wrong.
-  console.error(`No .html reports found in:\n  ${htmlDir}\n`);
-  if (!positional[0]) {
+  console.error(`No .html reports found in:\n  ${zipPath ?? htmlDir}\n`);
+  if (zipPath !== null) {
+    console.error(`The zip holds no .html reports. Nothing was changed.`);
+  } else if (!positional[0]) {
     console.error(`Looked for a ${INPUT_DIR}/ folder here, then for *.html here.\n`);
     console.error(helpText());
   } else {
@@ -732,6 +815,12 @@ if (!chrome) {
 }
 
 console.log(`Compiling ${entries.length} report(s) on ${rt.RUNTIME}`);
+if (zipPath !== null) {
+  console.log(
+    `  zip:      ${rt.baseName(zipPath)}, ${allHtml.length} report entr${allHtml.length === 1 ? "y" : "ies"}` +
+      (zipHadPdf ? `, and ${zipPdfName} from an earlier run (it will be replaced)` : ""),
+  );
+}
 if (skipped > 0) {
   console.log(`  skipped:  ${skipped} tool-owned .html file(s)`);
   for (const name of bakedLeftovers) console.log(`            ${name} (a previous bake)`);
@@ -905,7 +994,9 @@ const candidatePdf = `${outputPdf.replace(/\.pdf$/i, "")}.unverified.pdf`;
 // output, turning a failed build into a silently stale one. So the old PDF must
 // be GONE, not merely asked to go: removeQuietly swallows a failed delete, and a
 // PDF open in a viewer on Windows cannot be deleted or written -- but can be read.
-for (const old of [outputPdf, candidatePdf]) {
+// From a zip the PDF never takes its final name on disk -- it goes into the zip -- so a file of
+// that name beside the zip is the user's, and is left alone.
+for (const old of zipPath === null ? [outputPdf, candidatePdf] : [candidatePdf]) {
   await rt.removeQuietly(old);
   if (await rt.fileExists(old)) {
     console.error(`Could not remove the previous PDF:\n  ${old}\n`);
@@ -923,13 +1014,18 @@ if (outputDir && outputDir !== outputPdf) await rt.mkdirp(outputDir);
 // Only the Chrome profile needs to be temporary now. The baked document is a
 // build artifact in its own right and belongs beside the PDF it produced.
 const workDir = await rt.makeTempDir("compiled_reports_");
+/** The updated zip while it is being written and checked, beside the original. */
+let zipPartial: string | null = null;
 
 // Ctrl-C (or a kill) during the render: the temp profile is removed, not left behind -- 66 old
 // profiles had collected in the temp folder. The exit code says it was interrupted.
 if (typeof process !== "undefined" && typeof process.once === "function") {
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
-      void rt.removeQuietly(workDir, true).finally(() => rt.exit(130));
+      void Promise.all([
+        rt.removeQuietly(workDir, true),
+        zipPartial === null ? undefined : rt.removeQuietly(zipPartial),
+      ]).finally(() => rt.exit(130));
     });
   }
 }
@@ -938,6 +1034,67 @@ if (typeof process !== "undefined" && typeof process.once === "function") {
 // which skips finally blocks, so exiting in place left the temp Chrome profile
 // behind on every failed verification.
 let verificationFailed = false;
+let zipFailed = false;
+
+/**
+ * Add the verified PDF to the zip, or say why not and leave the zip exactly as it was. The zip is
+ * updated only if it still holds the bytes the reports were read from; the new one is written
+ * beside it, read back and checked against the original by the core's independent check
+ * ({@link checkZipUpdate}), and only then renamed over it -- one step, so there is never a
+ * half-written zip under the real name. Returns false if the zip was not updated; the verified PDF
+ * is then kept beside the zip.
+ */
+async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Promise<boolean> {
+  const pdfBytes = await rt.readFile(pdfPath);
+  const same = (a: Uint8Array, b: Uint8Array) =>
+    a.length === b.length && a.every((x, i) => x === b[i]);
+  let problem = "";
+  try {
+    if (!same(await rt.readFile(zip), zipBytes)) {
+      problem = "the zip changed while the build ran (re-run on the zip as it is now)";
+    } else {
+      zipPartial = `${zip}.partial`;
+      await rt.writeFile(zipPartial, zipWithFile(zipBytes, zipPdfName, pdfBytes, new Date()));
+      const written = await rt.readFile(zipPartial);
+      const failures = await checkZipUpdate(zipBytes, written, zipPdfName, pdfBytes);
+      if (failures.length > 0) {
+        problem = `the updated zip failed its check:\n${failures.map((f) => `    - ${f}`).join("\n")}`;
+      } else {
+        try {
+          await rt.rename(zipPartial, zip);
+          zipPartial = null;
+        } catch (e) {
+          problem = `the zip could not be replaced -- is it open in another program? (${(e as Error).message})`;
+        }
+        if (!problem && !same(await rt.readFile(zip), written)) {
+          problem = "the zip on disk is not the one that was checked";
+        }
+      }
+    }
+  } catch (e) {
+    problem = (e as Error).message;
+  }
+  if (problem) {
+    if (zipPartial !== null) await rt.removeQuietly(zipPartial);
+    zipPartial = null;
+    // The PDF passed; keep it under its final name if that is free, so the work is not lost.
+    let kept = pdfPath;
+    if (!(await rt.fileExists(outputPdf))) {
+      await rt.rename(pdfPath, outputPdf);
+      kept = outputPdf;
+    }
+    console.error("");
+    console.error(`The PDF PASSED, but it was NOT added to the zip: ${problem}`);
+    console.error(`The zip is unchanged. The verified PDF is kept at:\n  ${kept}`);
+    return false;
+  }
+  await rt.removeQuietly(pdfPath);
+  if (!keepHtml) await rt.removeQuietly(htmlPath);
+  console.log(`\nAdded ${zipPdfName} to ${zip}${zipHadPdf ? " (replacing the earlier one)" : ""}`);
+  console.log(`  checked:  every report entry unchanged, the PDF entry byte-identical`);
+  if (keepHtml) console.log(`Kept ${htmlPath}`);
+  return true;
+}
 
 try {
   // Both outputs live in the output directory: the baked HTML is the exact
@@ -1086,6 +1243,7 @@ try {
       console.error("final name; it is kept for inspection, with the baked HTML Chrome was given:");
       console.error(`  ${candidatePdf}`);
       console.error(`  ${htmlPath}`);
+      if (zipPath !== null) console.error(`The zip is unchanged.`);
       verificationFailed = true;
     } else {
       console.log("  PASS: every source word and number present, nothing split or unrendered.");
@@ -1094,7 +1252,9 @@ try {
 
   // The final name only now: verified, or verification turned off by request. Same folder, so a
   // rename, never a copy across drives.
-  if (!verificationFailed) {
+  if (!verificationFailed && zipPath !== null) {
+    zipFailed = !(await addPdfToZip(zipPath, candidatePdf, htmlPath));
+  } else if (!verificationFailed) {
     await rt.rename(candidatePdf, outputPdf);
     // Discarded only on request, and only after a good build -- on a failed one the baked
     // document is the first thing worth looking at (it used to be deleted before verifying).
@@ -1104,6 +1264,7 @@ try {
   }
 } finally {
   await rt.removeQuietly(workDir, true);
+  if (zipPartial !== null) await rt.removeQuietly(zipPartial);
 }
 
-if (verificationFailed) rt.exit(1);
+if (verificationFailed || zipFailed) rt.exit(1);

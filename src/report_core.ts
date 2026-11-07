@@ -2249,3 +2249,452 @@ export function findBrokenReferences(reports: BakedReport[]): ReferenceCheck {
 export function sortReportNames(names: string[]): string[] {
   return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
+
+// ---------------------------------------------------------------------------
+// The SkyCiv zip (roadmap task 16, owner 2026-11-06)
+//
+// SkyCiv exports a set of reports as ONE zip, which the browser saves to the user's downloads. The
+// zip is read in memory (nothing is unpacked, so nothing stray can join the set), and after a
+// passed verification the PDF is added back to it. Pure: bytes in, bytes out; inflating uses the
+// platform's `DecompressionStream`, which Bun, Node, Deno and browsers all have.
+//
+// The reader REFUSES rather than guesses. Every shape it does not handle -- zip64, encryption, a
+// method other than stored/deflate, folders, data outside the entries, headers that disagree, a bad
+// CRC -- stops with the entry named, because a report read wrongly is a report missing from a
+// certified package (the folder build refuses an unreadable `.html` for the same reason).
+// ---------------------------------------------------------------------------
+
+const ZIP_LOCAL = 0x04034b50;
+const ZIP_CENTRAL = 0x02014b50;
+const ZIP_END = 0x06054b50;
+const ZIP64_LOCATOR = 0x07064b50;
+/** A report is ~60 KB; anything claiming more than this unpacked is not one. */
+const ZIP_MAX_ENTRY = 256 * 1024 * 1024;
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+/** CRC-32 (ISO-HDLC), as a zip records it. */
+function crc32(bytes: Uint8Array): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** One entry as the central directory records it, checked against its local header. */
+type ZipRecord = {
+  name: string;
+  /** The central-directory header, verbatim (46 bytes + name + extra + comment). */
+  central: Uint8Array;
+  /** The local header's extra field, verbatim. */
+  localExtra: Uint8Array;
+  flags: number;
+  method: number;
+  crc: number;
+  size: number;
+  /** The entry's compressed bytes (a view into the archive). */
+  data: Uint8Array;
+};
+
+/** A zip, parsed and checked. Every refusal names the entry. */
+function parseZip(zip: Uint8Array): { records: ZipRecord[]; comment: Uint8Array } {
+  const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  const u16 = (o: number) => view.getUint16(o, true);
+  const u32 = (o: number) => view.getUint32(o, true);
+  const fail = (msg: string): never => {
+    throw new Error(`not a zip this tool can read: ${msg}`);
+  };
+  if (zip.length < 22) fail("too short to be a zip");
+
+  // The end record: the LAST signature whose comment runs exactly to the end of the file, so a
+  // signature inside the comment cannot be taken for it.
+  let end = -1;
+  for (let p = zip.length - 22; p >= Math.max(0, zip.length - 22 - 0xffff); p--) {
+    if (u32(p) === ZIP_END && p + 22 + u16(p + 20) === zip.length) {
+      end = p;
+      break;
+    }
+  }
+  if (end < 0) fail("no end-of-archive record (damaged, or not a zip)");
+  if (end >= 20 && u32(end - 20) === ZIP64_LOCATOR) fail("a zip64 archive");
+  const total = u16(end + 10);
+  const cdSize = u32(end + 12);
+  const cdOffset = u32(end + 16);
+  if (u16(end + 4) !== 0 || u16(end + 6) !== 0 || u16(end + 8) !== total) {
+    fail("a multi-part (split or spanned) archive");
+  }
+  if (total === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) fail("a zip64 archive");
+  if (cdOffset + cdSize !== end) {
+    fail("the central directory is not where the end record puts it (damaged, or self-extracting)");
+  }
+
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  const records: ZipRecord[] = [];
+  const spans: [number, number, string][] = [];
+  let p = cdOffset;
+  for (let i = 0; i < total; i++) {
+    if (p + 46 > end || u32(p) !== ZIP_CENTRAL) fail(`central directory entry ${i + 1} is damaged`);
+    const flags = u16(p + 8);
+    const method = u16(p + 10);
+    const crc = u32(p + 16);
+    const csize = u32(p + 20);
+    const size = u32(p + 24);
+    const [n, e, c] = [u16(p + 28), u16(p + 30), u16(p + 32)];
+    const local = u32(p + 42);
+    if (p + 46 + n + e + c > end) fail(`central directory entry ${i + 1} is damaged`);
+    const rawName = zip.subarray(p + 46, p + 46 + n);
+    let name = "";
+    try {
+      // Bit 11 says UTF-8. Without it the name is in an old code page, which is read only when it
+      // is plain ASCII (identical in every code page): a guess at the rest could misname a report.
+      if (!(flags & 0x800) && rawName.some((b) => b >= 0x80)) throw new Error();
+      name = utf8.decode(rawName);
+    } catch {
+      fail(`entry ${i + 1}'s name is not in UTF-8 (re-create the zip with a current tool)`);
+    }
+    const what = `"${name}"`;
+    if (u16(p + 34) !== 0) fail(`${what} is on another disk of a split archive`);
+    if (flags & 0x2041) fail(`${what} is encrypted`);
+    if (method !== 0 && method !== 8) fail(`${what} uses compression method ${method}`);
+    if (csize === 0xffffffff || size === 0xffffffff || local === 0xffffffff) {
+      fail(`${what} needs zip64`);
+    }
+    if (method === 0 && csize !== size) fail(`${what}: stored, but its two sizes differ`);
+    if (size > ZIP_MAX_ENTRY) fail(`${what} claims ${size} bytes unpacked`);
+
+    if (local + 30 > cdOffset || u32(local) !== ZIP_LOCAL) fail(`${what}: no local header`);
+    const [ln, le] = [u16(local + 26), u16(local + 28)];
+    const lflags = u16(local + 6);
+    const start = local + 30 + ln + le;
+    if (start + csize > cdOffset) fail(`${what} runs past the end of the entries`);
+    const localName = zip.subarray(local + 30, local + 30 + ln);
+    if (localName.length !== rawName.length || localName.some((b, k) => b !== rawName[k])) {
+      fail(`${what}: its two headers name different files`);
+    }
+    if (u16(local + 8) !== method || (lflags & 0x2041) !== (flags & 0x2041)) {
+      fail(`${what}: its two headers disagree`);
+    }
+    // Bit 3: sizes and CRC follow the data, so the local copies may be zero; otherwise they must
+    // match the central directory's, or two readers could see two different files.
+    if (
+      !(lflags & 8) &&
+      (u32(local + 14) !== crc || u32(local + 18) !== csize || u32(local + 22) !== size)
+    ) {
+      fail(`${what}: its two headers record different sizes or checksums`);
+    }
+    // Bit 3: a data descriptor follows -- 12 bytes, or 16 with its optional signature -- and it
+    // must agree with the central directory too.
+    let next = start + csize;
+    if (lflags & 8) {
+      const sig = next + 16 <= cdOffset && u32(next) === 0x08074b50 ? 4 : 0;
+      if (next + sig + 12 > cdOffset) fail(`${what}: its data descriptor is missing`);
+      if (
+        u32(next + sig) !== crc ||
+        u32(next + sig + 4) !== csize ||
+        u32(next + sig + 8) !== size
+      ) {
+        fail(`${what}: its data descriptor disagrees with the central directory`);
+      }
+      next += sig + 12;
+    }
+    spans.push([local, next, what]);
+    records.push({
+      name,
+      central: zip.subarray(p, p + 46 + n + e + c),
+      localExtra: zip.subarray(local + 30 + ln, start),
+      flags,
+      method,
+      crc,
+      size,
+      data: zip.subarray(start, start + csize),
+    });
+    p += 46 + n + e + c;
+  }
+  if (p !== end) fail("the central directory holds more than its entries");
+  // Every byte before the central directory belongs to exactly one entry. Entries that share bytes
+  // are one file under two names; bytes no entry claims are a file the directory does not list
+  // (another reader, scanning local headers, would see it) -- or a self-extracting stub. Neither is
+  // a SkyCiv export.
+  spans.sort((a, b) => a[0] - b[0]);
+  let covered = 0;
+  for (const [from, to, what] of spans) {
+    if (from < covered) fail(`${what} overlaps the entry before it`);
+    if (from > covered) fail(`${from - covered} byte(s) before ${what} belong to no entry`);
+    covered = to;
+  }
+  if (covered !== cdOffset)
+    fail(`${cdOffset - covered} byte(s) after the last entry belong to no entry`);
+  return { records, comment: zip.subarray(end + 22) };
+}
+
+/** An entry's bytes, inflated and checked against its recorded size and CRC. */
+async function zipEntryBytes(r: ZipRecord): Promise<Uint8Array> {
+  const bad = (why: string): never => {
+    throw new Error(`not a zip this tool can read: "${r.name}" ${why}`);
+  };
+  let out: Uint8Array;
+  if (r.method === 0) {
+    out = r.data;
+  } else {
+    const reader = new Blob([r.data as Uint8Array<ArrayBuffer>])
+      .stream()
+      .pipeThrough(new DecompressionStream("deflate-raw"))
+      .getReader();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.length;
+        // Stopped at the recorded size, not after: a damaged or hostile entry cannot unpack to
+        // more memory than it declared.
+        if (length > r.size) {
+          await reader.cancel();
+          bad("unpacks to more than its recorded size");
+        }
+        chunks.push(value);
+      }
+    } catch (e) {
+      if ((e as Error).message.startsWith("not a zip")) throw e;
+      bad(`is damaged (${(e as Error).message})`);
+    }
+    out = new Uint8Array(length);
+    let at = 0;
+    for (const c of chunks) {
+      out.set(c, at);
+      at += c.length;
+    }
+  }
+  if (out.length !== r.size) bad(`unpacks to ${out.length} bytes, not the ${r.size} recorded`);
+  if (crc32(out) !== r.crc) bad("fails its CRC check (damaged)");
+  return out;
+}
+
+/** The reports in a zip, and what else it held. */
+export type ZipReports = {
+  /** Every `.html` entry, in the zip's order, decoded as UTF-8 exactly as the folder build reads a file. */
+  reports: { name: string; html: string }[];
+  /** True if the zip already holds `ownName` -- the PDF of an earlier run, which a new one replaces. */
+  hasOwn: boolean;
+};
+
+/**
+ * Read the reports from a SkyCiv zip: every `.html` entry, unpacked in memory and checked against
+ * its CRC. Throws -- naming every problem -- on anything else in it: a folder, a nested path, a file
+ * that is not `.html` (except `ownName`, this tool's own PDF from an earlier run), two names that
+ * differ only in case, and every archive shape the reader does not handle (zip64, encryption, a
+ * method other than stored or deflate, damage).
+ *
+ * @param zip     the archive's bytes
+ * @param ownName the name of the PDF this tool adds to the zip (compared without case)
+ *
+ * @example
+ * ```ts
+ * import { readZipReports } from "@jrmarcum/s3d-reportcompiler";
+ * declare const zip: Uint8Array;
+ * const { reports } = await readZipReports(zip, "pack.pdf");
+ * ```
+ */
+export async function readZipReports(zip: Uint8Array, ownName: string): Promise<ZipReports> {
+  const { records } = parseZip(zip);
+  const problems: string[] = [];
+  const seen = new Map<string, string>();
+  let hasOwn = false;
+  const html: ZipRecord[] = [];
+  for (const r of records) {
+    const key = r.name.toLowerCase();
+    const other = seen.get(key);
+    if (other !== undefined) problems.push(`"${r.name}" and "${other}" are the same name`);
+    seen.set(key, r.name);
+    if (r.name.endsWith("/")) problems.push(`"${r.name}" is a folder`);
+    else if (/[/\\]/.test(r.name)) problems.push(`"${r.name}" is inside a folder`);
+    else if (key === ownName.toLowerCase()) hasOwn = true;
+    else if (key.endsWith(".html")) html.push(r);
+    else problems.push(`"${r.name}" is not a report (.html)`);
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `the zip holds more than a flat set of reports:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+    );
+  }
+  // ignoreBOM keeps a leading U+FEFF, as the folder build's readFile(…, "utf8") does.
+  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  const reports: ZipReports["reports"] = [];
+  for (const r of html)
+    reports.push({ name: r.name, html: decoder.decode(await zipEntryBytes(r)) });
+  return { reports, hasOwn };
+}
+
+/**
+ * The zip with `file` added under `name`, replacing an entry of that name (compared without case).
+ * Every other entry is copied byte for byte -- its compressed data is never re-encoded -- in its
+ * original order, and the archive comment is kept; the new file is appended, stored (a PDF is
+ * already compressed). Check the result with {@link checkZipUpdate} before it replaces anything.
+ *
+ * @param date the new entry's timestamp (local time, as zips record it)
+ */
+export function zipWithFile(
+  zip: Uint8Array,
+  name: string,
+  file: Uint8Array,
+  date: Date,
+): Uint8Array {
+  const { records, comment } = parseZip(zip);
+  const kept = records.filter((r) => r.name.toLowerCase() !== name.toLowerCase());
+  const nameBytes = new TextEncoder().encode(name);
+  const year = Math.max(1980, Math.min(2107, date.getFullYear()));
+  const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1);
+  const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+
+  const locals: Uint8Array[] = [];
+  const centrals: Uint8Array[] = [];
+  let offset = 0;
+  const header = (size: number) => {
+    const b = new Uint8Array(size);
+    return { b, v: new DataView(b.buffer) };
+  };
+  for (const r of kept) {
+    const c = new DataView(r.central.buffer, r.central.byteOffset, r.central.byteLength);
+    const flags = r.flags & ~8; // the sizes go in the local header; no data descriptor follows
+    const { b, v } = header(30);
+    v.setUint32(0, ZIP_LOCAL, true);
+    v.setUint16(4, c.getUint16(6, true), true); // version needed
+    v.setUint16(6, flags, true);
+    v.setUint16(8, r.method, true);
+    v.setUint32(10, c.getUint32(12, true), true); // time and date
+    v.setUint32(14, r.crc, true);
+    v.setUint32(18, r.data.length, true);
+    v.setUint32(22, r.size, true);
+    v.setUint16(26, c.getUint16(28, true), true);
+    v.setUint16(28, r.localExtra.length, true);
+    locals.push(b, r.central.subarray(46, 46 + c.getUint16(28, true)), r.localExtra, r.data);
+    const central = r.central.slice();
+    const cv = new DataView(central.buffer);
+    cv.setUint16(8, flags, true);
+    cv.setUint32(42, offset, true);
+    centrals.push(central);
+    offset += 30 + c.getUint16(28, true) + r.localExtra.length + r.data.length;
+  }
+  const utf8Flag = nameBytes.some((b) => b >= 0x80) ? 0x800 : 0;
+  const crc = crc32(file);
+  {
+    const { b, v } = header(30);
+    v.setUint32(0, ZIP_LOCAL, true);
+    v.setUint16(4, 10, true);
+    v.setUint16(6, utf8Flag, true);
+    v.setUint16(8, 0, true);
+    v.setUint16(10, dosTime, true);
+    v.setUint16(12, dosDate, true);
+    v.setUint32(14, crc, true);
+    v.setUint32(18, file.length, true);
+    v.setUint32(22, file.length, true);
+    v.setUint16(26, nameBytes.length, true);
+    locals.push(b, nameBytes, file);
+    const { b: cb, v: cv } = header(46);
+    cv.setUint32(0, ZIP_CENTRAL, true);
+    cv.setUint16(4, 20, true); // made by: MS-DOS, 2.0
+    cv.setUint16(6, 10, true);
+    cv.setUint16(8, utf8Flag, true);
+    cv.setUint16(12, dosTime, true);
+    cv.setUint16(14, dosDate, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, file.length, true);
+    cv.setUint32(24, file.length, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint32(42, offset, true);
+    centrals.push(cb, nameBytes);
+    offset += 30 + nameBytes.length + file.length;
+  }
+  const cdSize = centrals.reduce((s, c) => s + c.length, 0);
+  if (offset + cdSize + 22 + comment.length >= 0xffffffff || kept.length + 1 >= 0xffff) {
+    throw new Error("the zip would need zip64 (over 4 GB or 65,535 entries)");
+  }
+  const { b: endRecord, v: ev } = header(22);
+  ev.setUint32(0, ZIP_END, true);
+  ev.setUint16(8, kept.length + 1, true);
+  ev.setUint16(10, kept.length + 1, true);
+  ev.setUint32(12, cdSize, true);
+  ev.setUint32(16, offset, true);
+  ev.setUint16(20, comment.length, true);
+  const parts = [...locals, ...centrals, endRecord, comment];
+  const out = new Uint8Array(parts.reduce((s, x) => s + x.length, 0));
+  let at = 0;
+  for (const x of parts) {
+    out.set(x, at);
+    at += x.length;
+  }
+  return out;
+}
+
+/**
+ * Prove that `updated` is `original` with `file` added under `name`, and nothing else changed:
+ * the same entries in the same order with the same names, methods, CRCs, sizes and compressed
+ * bytes; the same comment; the same reports when unpacked; and one more entry, `name`, whose
+ * stored bytes ARE `file`. Returns the failures; an empty list is a pass.
+ *
+ * Written apart from {@link zipWithFile}, reading both archives back from their bytes, so a writer
+ * bug cannot vouch for itself (design-decisions §9).
+ */
+export async function checkZipUpdate(
+  original: Uint8Array,
+  updated: Uint8Array,
+  name: string,
+  file: Uint8Array,
+): Promise<string[]> {
+  const failures: string[] = [];
+  let before: ReturnType<typeof parseZip>;
+  let after: ReturnType<typeof parseZip>;
+  try {
+    before = parseZip(original);
+    after = parseZip(updated);
+  } catch (e) {
+    return [(e as Error).message];
+  }
+  const kept = before.records.filter((r) => r.name.toLowerCase() !== name.toLowerCase());
+  const same = (a: Uint8Array, b: Uint8Array) =>
+    a.length === b.length && a.every((x, i) => x === b[i]);
+  if (after.records.length !== kept.length + 1) {
+    failures.push(`${after.records.length} entries, expected ${kept.length + 1}`);
+  }
+  kept.forEach((r, i) => {
+    const u = after.records[i];
+    if (
+      !u ||
+      u.name !== r.name ||
+      u.method !== r.method ||
+      u.crc !== r.crc ||
+      u.size !== r.size ||
+      !same(u.data, r.data)
+    ) {
+      failures.push(`"${r.name}" is not carried over unchanged`);
+    }
+  });
+  const added = after.records[after.records.length - 1];
+  if (!added || added.name !== name || added.method !== 0 || !same(added.data, file)) {
+    failures.push(`"${name}" is not the file that was added`);
+  } else if (added.crc !== crc32(file)) {
+    failures.push(`"${name}" records the wrong CRC`);
+  }
+  if (!same(after.comment, before.comment)) failures.push("the archive comment changed");
+  try {
+    const [a, b] = [await readZipReports(original, name), await readZipReports(updated, name)];
+    if (
+      a.reports.length !== b.reports.length ||
+      a.reports.some((r, i) => r.name !== b.reports[i].name || r.html !== b.reports[i].html)
+    ) {
+      failures.push("the reports read back differently");
+    }
+    if (!b.hasOwn) failures.push(`"${name}" is not found by name`);
+  } catch (e) {
+    failures.push((e as Error).message);
+  }
+  return failures;
+}

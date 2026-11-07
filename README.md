@@ -252,6 +252,7 @@ Verifying against the source reports...
 
 ```bash
 s3d-reportcompiler [htmlDir] [output.pdf] [options]
+s3d-reportcompiler <reports.zip> [options]     # the verified PDF is added to the zip
 ```
 
 Both paths default to the **current working directory**, so the tool operates on the folder you are
@@ -287,6 +288,39 @@ open in a viewer — close it), and when an output would overwrite one of the re
 > ⚠️ **Every `.html` file in the input folder is treated as a report.** Keep tooling, examples and
 > build output somewhere else. Input and output default to separate folders precisely so the scan
 > cannot ingest a build artifact of its own.
+
+### Straight from SkyCiv's zip (1.2.0)
+
+```bash
+s3d-reportcompiler "C:\Users\me\Downloads\pack.zip"
+```
+
+SkyCiv downloads a report set as one zip. Give the tool the zip itself; nothing is unpacked:
+
+1. Its `.html` entries are the reports. Each is read in memory and checked against its CRC.
+2. They are compiled and verified exactly as a folder would be.
+3. Only after a **PASS** is the PDF added **into the zip**, named after it (`pack.zip` gets
+   `pack.pdf`).
+
+The rest of the zip is copied byte for byte. The updated zip is written beside the original, read
+back and checked: every report entry must be unchanged and the PDF entry identical to the verified
+file. Only then does it replace the original, in one rename. A failed build, or a zip that changed
+during the build, leaves the zip exactly as it was.
+
+- **Run it again** and the PDF in the zip is replaced, not duplicated.
+- **The baked HTML** is kept beside the zip (`pack.html`). `--no-keep-html` removes it. It is never
+  put into the zip: it is a `.html`, so the next run would read it as a report. An existing
+  `pack.html` that is not a previous bake is the user's file, and the build stops rather than
+  overwrite it.
+- **A zip takes no output argument and no `--no-verify`.** Only a verified PDF goes into it.
+- **Anything but a flat set of reports is refused, naming the entry:**
+  - folders, a nested path, or a file that is neither `.html` nor this tool's own PDF;
+  - two names that differ only in case;
+  - encryption, zip64, split archives, or a compression method other than stored or deflate;
+  - headers or data descriptors that disagree, or bytes no entry claims;
+  - a bad CRC.
+
+  A report read wrongly would be a report missing from the package.
 
 ### Try it without your own data
 
@@ -447,6 +481,17 @@ obscurely.
 | `decodeEntities(s)` | The verification's HTML entity decoding (named symbols, decimal and hex references, one pass) for the source side of the comparison. The bake decodes with its own, separately written code, so the check cannot share a decoding mistake with the build |
 | `sortReportNames(names)` | Numeric-aware sort, so `member_2` precedes `member_10` |
 
+### SkyCiv's zip (1.2.0)
+
+Pure byte functions. Inflating uses the platform's `DecompressionStream`, so they run in Deno, Bun,
+Node and browsers.
+
+| Export | Description |
+| --- | --- |
+| `readZipReports(zip, ownName)` | The `.html` entries of a zip, unpacked and CRC-checked → `ZipReports` (`reports[]` of `{ name, html }`, and `hasOwn` if `ownName` is in the zip). Throws, naming every problem, on anything else in the zip and on every shape it does not read (see the CLI section) |
+| `zipWithFile(zip, name, file, date)` | The zip with `file` added under `name` (stored), replacing an entry of that name. Every other entry and the comment are copied byte for byte |
+| `checkZipUpdate(original, updated, name, file)` | The failures, an empty array on a pass. It proves `updated` is `original` plus `file`: every entry and the comment unchanged, the reports reading back the same, and the added entry byte-identical. Written apart from the writer, so a writer bug cannot vouch for itself |
+
 ### Counters and diagnostics
 
 | Export | Description |
@@ -535,6 +580,7 @@ and each lands here with its migration.
 | ✅ | Portability | One adapter for Deno, Node and Bun; byte-identical baked HTML on all three |
 | ✅ | Portability | Browser path — bake and print, with the same guard as the CLI |
 | ✅ | CLI | Defaults resolve from the working directory, so a global install is relocatable |
+| ✅ | CLI | **SkyCiv's zip as input**. The reports are read in memory, and the verified PDF is added back into the zip, checked, in one rename (1.2.0) |
 | ✅ | Packaging | Published to JSR and npm from one tag, both with GitHub Actions OIDC provenance; a release is cut only from `main` and confirms both registries before it reports success |
 | ✅ | Verification | **Per-report conservation.** The PDF is segmented at the report headings and each report is compared against its own source, closing the set-union gap |
 | ⏳ | Maths | **MathJax 3 → 4.** Deferred deliberately: v4 replaced the font system, so glyph metrics, line breaking and page count all move. Deprecation is not an advisory. (`npm audit` reports 0 vulnerabilities since 2026-10-28, when `@xmldom/xmldom` — pinned by MathJax's `speech-rule-engine` — was overridden to the fixed 0.9.12; v4 was not the remedy.) Requires a measured no-degradation comparison first |
