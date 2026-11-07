@@ -389,9 +389,27 @@ CSP line only.
 | 65 | **Tests that could not fail, and false docs (E, `bfa5e32`).** Linux-vacuous redactor cases, a silent root `return`, a filter-dependent check, unchecked generator edits, `tests/controls/` never formatted or linted, the CSP allowing all of jsDelivr, stale README/control claims | **yes** |
 | 66 | **The verification expected TeX settings in the PDF (`a41961f`, found by the first real SkyCiv zip, 2026-11-06).** `\color{blue}{…}` in 2 of 75 reports: "blue" reported missing from a correct PDF, the build FAILED, the zip was left untouched (as designed). Fixed as the class of non-printing arguments (colours, spacing, `\phantom`, labels, environment specs, MathJax extensions); [verification.md](verification.md) § How the tricky parts work | no: a false FAIL, loud |
 
-⚠️ **#52 and #54 add four exports, so the next release is a MINOR (1.2.0), not 1.1.8:** `compat`
-says 0 removed, 0 changed, 4 added (`BakedReport`, `ReferenceCheck`, `findBrokenReferences`,
-`resetBakeState`). `api-surface.txt` re-baselined to 73 lines in its own commit (Rule 5).
+## The second full-project review (2026-11-06, four reviewers again; owner: "All, in order A→E")
+
+37 findings, each re-run or reasoned before fixing, fixed as its class. Baked HTML byte-identical
+on ALL THREE real sets after every group: samples `37792fe3…`, the 48-report set `ae70d5e0…`, the
+75-report zip `8c1a8887…`; checked counts unchanged (173/342, 174/660, 195/1,176).
+
+| # | Class (group) | Silent? |
+|---|---|---|
+| 67 | **The bake read markup differently from a browser (A, `dd0e22e`).** Maths paired across element boundaries (two stray delimiters typeset the table cells between them as one expression) and inside attributes (a `title=` broke its tag open into the page); `<br>` in maths typeset as "<"; `<!-->`, `<!--->`, `</script >` cut the text after them from bake AND verification; `<noscript>` kept though not drawn; the spinner removal took any element with `id="loading"` and its subtree; `visibility:hidden` lifted from EVERY rule; `line-height/max-height:100%` rewritten. The verifier skipped text after `\\color` and after an unclosed group | **yes** (the worst two passed a wrong PDF) |
+| 68 | **A user's file could be replaced or deleted (B, `43695fc`).** `reports pack.zip` deleted the zip before building; `reports site/index.pdf` replaced (and with `--no-keep-html` deleted) site/index.html; a stale verified PDF outlived later zip builds under the zip's name; "zip unchanged" printed after it was replaced; a renamed zip could not be rebuilt; a timeout over 2^31-1 ms fired at once; Chrome's exit status never read; a kill waited on a pipe; Ctrl-C ended 1 or 130 by chance | **yes** |
+| 69 | **The privacy tools took the prefix, not the path (C, `0b41eac`).** The redactor replaced `X:\Users\<name>` and left `\OneDrive - <employer>\Jobs\<client>\…` (and a spaced username's surname), with a residue check that could not see it; `//server/share` passed. The sanitizer wrote a file with an unfound field unscrubbed, scrubbed a decoy "Designer:" line instead of the real row, and never saw labels with digits or punctuation. Zip-build output was not git-ignored | **yes** |
+| 70 | **The release path could publish what it did not check (D, `fb76ba1`).** A manual run from an old `release/v*` copy of the workflow; an npm-only run publishing a commit JSR never got; "already on npm" success for any commit; the SemVer gate only on the developer's machine; CI read from any event's run; write access in the job that runs `bun install`; a failed branch push skipping npm; an unpinned install script piped to bash; non-exported types invisible to the compat gate; two unchecked dependency lists | **yes** (latent; nothing published wrongly) |
+| 71 | **Tests that could not fail, and false docs (E, `9be2626`).** The zip-refusal test never compared the zip; the test's zip reader hid duplicate names and never read local headers; a symlink test that needs a Windows privilege; README "byte for byte", missing exports and flags; stale control counts | **yes** |
+
+🔒 **Owner action (#70), open:** the existing `release/v1.0.0` … `release/v1.1.7` branches carry
+copies of `publish.yml` WITHOUT the "run only from main" guard, and npm's trusted publisher names
+only the file. "Run workflow" from one of them would run its old copy. Options: delete those
+branches (the tags keep the commits), or protect them. Not done from here: it changes GitHub.
+
+⚠️ **The next release is a MINOR (1.2.0):** `compat` → 0 removed, 0 changed, **19 added vs
+v1.1.7**; `api-surface.txt` 88 lines (each re-baseline in its own commit, Rule 5).
 
 Also confirmed that pass, not changed: #33's premise (Chrome ignores `font="…"` on SVG `<text>`;
 computed 16px).

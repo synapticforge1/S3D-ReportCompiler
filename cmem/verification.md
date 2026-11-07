@@ -39,6 +39,21 @@ counts.
 
 ## How the tricky parts work
 
+**Read the page as a browser does, on both sides (2026-11-06, review 2, #67).** The bake and the
+verification each strip what is not drawn. They are written apart (§9), so each needs the HTML
+parser's own rules:
+- `<!-->` and `<!--->` are complete, empty comments;
+- a comment ends at `--!>`;
+- `</script >` ends a script;
+- `<noscript>` is not drawn, because scripting is on (the CSP blocks scripts but does not turn
+  scripting off).
+
+The lazy regexes they replaced cut the text after such markup from both sides at once, so nothing
+noticed. The bake now also pairs maths only within one text run, as MathJax does (never across an
+element boundary or inside an attribute). A pair a browser would not see stays as written, and the
+guard refuses it. ⚠️ The shared-cut class is the one to fear: when bake and verification lose the
+same content, every check agrees.
+
 **TeX settings are not content (2026-11-06, `a41961f`).** Command NAMES were always dropped from
 the expected words ("dfrac" never prints), but their ARGUMENTS were all expected. The first real
 SkyCiv zip (75 reports) failed a correct PDF on that: `\color{blue}{\text{ NONCOMPACT}}` in two

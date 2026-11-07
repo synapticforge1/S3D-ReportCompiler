@@ -97,14 +97,15 @@ folder and pointing the build at it.
 Remove the `tex2jax` config and wrap display maths in `@@..@@`.
 
 ```
-math:     97 expressions, 0 failed          ← note: "0 failed"
+math:     87 expressions, 0 failed          ← note: "0 failed"
 ERROR: unrendered mathematics reached the baked document.
-  250 TeX command(s): \lambda, \dfrac, \max, \sqrt, \frac, \rightarrow
+  270 TeX command(s): \lambda, \dfrac, \max, \sqrt, \frac, \rightarrow
 exit=1     pdf produced: False
 ```
 
-⚠️ **The converter reported `0 failed` while 250 TeX commands survived.** That is the whole point: an
-unmatched delimiter never errors.
+⚠️ **The converter reported `0 failed` while 270 TeX commands survived.** That is the whole point: an
+unmatched delimiter never errors. (97 / 250 until 2026-11-06, when the fallback lost its bare `$`;
+the suite asserts 87 / 270.)
 
 ### 2. Custom delimiters declared in the config → must work
 
@@ -197,7 +198,7 @@ reason. It automates the negative controls above and `tests/controls/README.md`:
 | test | asserts |
 |---|---|
 | the 13 samples | exit 0; 2203 expressions, 0 failed; ≥ 1 page per report (never an exact count — below); 0 missing; per-report 13/13; 13 images, 13 diagrams; 0 LaTeX, 0 blank; PASS |
-| unknown delimiter | exit 1; "97 expressions, 0 failed" AND the guard's error, 250 TeX commands; never verifies; no PDF |
+| unknown delimiter | exit 1; "87 expressions, 0 failed" AND the guard's error, 270 TeX commands (97 / 250 before 2026-11-06); never verifies; no PDF |
 | colliding `{{..}}` | exit 1; the guard's error, 205 TeX commands; no PDF |
 | hidden content, one report | exit 1; 171 words / 114 numbers missing; 1 blank page; "content missing from the PDF"; **no new `compiled_reports_*` temp profile left** (2026-11-05) |
 | a row hidden in the 2nd of two copies | exit 1; set-wide **0 missing** (pinned — the union limit), per-report `b_report.html: 5 word(s) … internal, forces, absolute, force, bending`; NOT "missing from the PDF" |
@@ -467,6 +468,21 @@ What that run covered for the first time:
 
 Still unexercised: `publish.yml`, until the next release. Read via GitHub's public API
 (`curl`), since `gh` is not installed on this machine.
+
+**2026-11-06, the second full-project review (owner: "All, in order A→E"; #67–#71):** 52/52 on
+`bun test` and on Node 26.12 / 24.21 / 22.18. Five new tests, one per group, each run against the
+previous code and failing there (A on cells typeset as one expression; B on compiling over the
+user's zip; C on path tails; D on the unexported type; E's reader self-check). The bar was raised
+to THREE real sets, all byte-identical after every group: samples `37792fe3…`, the 48-report set
+`ae70d5e0…`, the 75-report zip `8c1a8887…` (counts 173/342, 174/660, 195/1,176). The sanitizer
+was checked on the real 48 with values stripped (48 accepted), never printing one.
+- The 75-report copy in `local/skyciv-zip-test/` was refreshed from the untouched download: its
+  old `pack.pdf` predates the own-PDF mark and is now (rightly) refused as a user's file.
+- fnm v1.39.0's digest was matched against GitHub's published one before it was pinned in CI.
+- ⚠️ Not run here: `publish.yml`'s new jobs (`record`, `finalize`, the SemVer gate on the runner),
+  first exercised by the next release; the Linux branches of the new tests (CI, on the next push).
+- ⚠️ Probing: a temporary debug copy of the redactor's patterns went stale and misled one run (a
+  residue hit read from an old pattern) — re-read the real script's output, not a copy's.
 
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout

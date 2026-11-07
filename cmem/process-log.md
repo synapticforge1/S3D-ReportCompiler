@@ -436,6 +436,22 @@ ruled out ("Task 17 is not a goal"). The verified PDF goes "Into the original zi
 | a verification that names a missing word has found a lost word | "blue" was a colour setting; the PDF was right and the check was wrong — loud, so it cost one diagnosis, not a client |
 | `tar` reading a zip on stdin sees the zip | from a Bun `spawnSync`, 73 of 75 entries; by path, 75 |
 
+**Then a second full-project review, the same day (#67–#71; `dd0e22e` … `9be2626`).** Four
+reviewers again, on code that had just had one, found 37 more: two of them passed a wrong PDF, and
+two deleted a user's file. The newest code (the zip writer, `dropNonPrintingTex`) was reviewed
+clean or nearly so; the old, well-tested core was where the silent ones were. Each group was
+committed with its test, and every test was run on the previous code first. Three real sets (13,
+48, 75) baked byte-identical after every group.
+
+| believed | measured |
+|---|---|
+| a review just finished leaves little | the second, same day, found the two worst defects of the day |
+| matching maths over the whole body is how MathJax pairs it | MathJax pairs within a text run; across cells, the bake typeset tags and values as one "expression", and nothing objected |
+| the bake and the verification cutting the same text is safe, since they agree | agreeing is the danger: a shared cut is invisible to every check (`<!-->`, `</script >`) |
+| the redactor's home rule removes the home path | it removed the prefix; the employer's and client's folder names after it stood, and the residue check looked only for drive letters |
+| a refusal path inside a loop refuses | `continue` skipped one field and wrote the file |
+| "--output" can be any file the user names | `reports pack.zip` deleted the zip before the build began |
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is
