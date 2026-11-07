@@ -17,8 +17,11 @@ permissions:
 # Superseded runs are cancelled on every branch but main. On main a run may be the one publish.yml's
 # gate is waiting for: a push in the minutes after `bun run release` cancelled the tagged commit's
 # run, and the release was refused as "concluded 'cancelled'".
+# And on main each commit is its own group: GitHub cancels a PENDING run when a newer one joins its
+# group even with cancel-in-progress off, so a release commit queued behind an earlier main run
+# was still cancellable by the next push (2026-11-06 review).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.sha) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:

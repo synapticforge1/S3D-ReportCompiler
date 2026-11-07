@@ -278,46 +278,56 @@ try {
     tc.out.trim().split("\n").slice(0, 4).join(" | "),
   );
 
-  // 6. The export list vs JSR's own npm build of this package.
+  // 6. The export list vs JSR's own npm build of THIS version. It used to be JSR's latest, so a
+  //    release that changed the export list failed its own CI -- and the publish gate waits for
+  //    that CI, so such a release could never go out (2026-11-06 review). Between releases the
+  //    tree's version IS on JSR, and the check is as strong as before; on the release commit
+  //    itself it is not yet, and the check says it did not run rather than passing or failing.
   const jsrMeta = (await (
     await fetch("https://npm.jsr.io/@jsr/jrmarcum__s3d-reportcompiler")
   ).json()) as {
     "dist-tags": { latest: string };
     versions: Record<string, { dist: { tarball: string } }>;
   };
-  const jsrVersion = jsrMeta["dist-tags"].latest;
-  const tgz = new Uint8Array(
-    await (await fetch(jsrMeta.versions[jsrVersion].dist.tarball)).arrayBuffer(),
-  );
-  const tar = gunzipSync(tgz);
-  let jsrExports: string[] = [];
-  for (let pos = 0; pos + 512 <= tar.length;) {
-    const name = tar
-      .subarray(pos, pos + 100)
-      .toString("utf8")
-      .replace(/\0.*$/s, "");
-    if (!name) break;
-    const size = parseInt(
-      tar
-        .subarray(pos + 124, pos + 136)
-        .toString("utf8")
-        .replace(/\0.*$/s, "")
-        .trim() || "0",
-      8,
+  const jsrVersion: string = manifest.version;
+  if (!jsrMeta.versions?.[jsrVersion]) {
+    console.log(
+      `·  export list vs JSR's npm build: NOT checked -- ${jsrVersion} is not on JSR yet (a release commit); it is checked on every commit after the release`,
     );
-    if (name === "package/package.json") {
-      jsrExports = Object.keys(
-        JSON.parse(tar.subarray(pos + 512, pos + 512 + size).toString("utf8")).exports ?? {},
-      ).sort();
+  } else {
+    const tgz = new Uint8Array(
+      await (await fetch(jsrMeta.versions[jsrVersion].dist.tarball)).arrayBuffer(),
+    );
+    const tar = gunzipSync(tgz);
+    let jsrExports: string[] = [];
+    for (let pos = 0; pos + 512 <= tar.length;) {
+      const name = tar
+        .subarray(pos, pos + 100)
+        .toString("utf8")
+        .replace(/\0.*$/s, "");
+      if (!name) break;
+      const size = parseInt(
+        tar
+          .subarray(pos + 124, pos + 136)
+          .toString("utf8")
+          .replace(/\0.*$/s, "")
+          .trim() || "0",
+        8,
+      );
+      if (name === "package/package.json") {
+        jsrExports = Object.keys(
+          JSON.parse(tar.subarray(pos + 512, pos + 512 + size).toString("utf8")).exports ?? {},
+        ).sort();
+      }
+      pos += 512 + Math.ceil(size / 512) * 512;
     }
-    pos += 512 + Math.ceil(size / 512) * 512;
+    const ours = Object.keys(manifest.exports).sort();
+    ok(
+      jsrExports.length > 0 && jsrExports.join() === ours.join(),
+      `the export list equals JSR's npm build (@jsr/jrmarcum__s3d-reportcompiler@${jsrVersion})`,
+      `JSR [${jsrExports.join(" ")}] vs ours [${ours.join(" ")}]`,
+    );
   }
-  const ours = Object.keys(manifest.exports).sort();
-  ok(
-    jsrExports.length > 0 && jsrExports.join() === ours.join(),
-    `the export list equals JSR's npm build (@jsr/jrmarcum__s3d-reportcompiler@${jsrVersion})`,
-    `JSR [${jsrExports.join(" ")}] vs ours [${ours.join(" ")}]`,
-  );
 } catch (e) {
   ok(false, "npm:prove could not finish", (e as Error).message);
 } finally {

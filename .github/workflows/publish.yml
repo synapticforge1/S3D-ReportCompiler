@@ -5,7 +5,10 @@ name: Publish to JSR and npm
 # publisher for @synapticforge1/s3d-reportcompiler names THIS file and no environment (owner,
 # 2026-10-28): renaming the file or adding an environment breaks npm publishing.
 # 🔒 JSR and npm are released together, always (owner, 2026-10-28), and only from a commit CI
-# passed: the `ci-green` job below gates both.
+# passed: the `ci-green` job below gates both, on both entry points. Every job publishes the ONE
+# commit ci-green resolved, and re-checks immediately before each immutable step that the tag
+# still points at it (2026-11-06 review: a moved tag could put different commits on the two
+# registries under one version).
 on:
   push:
     tags:
@@ -16,18 +19,50 @@ on:
         description: "Existing tag to publish to npm only (e.g. v1.1.0)"
         required: true
 
+# One run per tag at a time; a newer run for the same tag cancels the older. Without it, a release
+# retried after moving its tag (publish.ts force-moves an unpublished tag, by design) left the
+# first run alive, and it went on to publish the OLD commit under that version (2026-11-06 review).
+concurrency:
+  group: publish-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   # Nothing is published from a commit CI did not pass. `bun run release` pushes the commit to main
   # BEFORE the tag, so ci.yml runs on exactly this SHA; this waits for that run and requires
   # success. No run, a failed run, a cancelled one, or one still going after 40 minutes: refused.
+  # On "Run workflow" too (it used to skip all of this): there, the commit is the dispatched tag's.
   ci-green:
     name: CI passed on the tagged commit
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read # the compare API, for "the tagged commit is on main"
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+      tag: ${{ steps.target.outputs.tag }}
     steps:
+      # The one commit every later job checks out and publishes. A tag push: the pushed commit, and
+      # the tag must still point at it (a moved tag means a newer run owns this release). "Run
+      # workflow": whatever the named tag points at now.
+      - name: The commit to release
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          PUSHED: ${{ github.sha }}
+        run: |
+          case "$TAG" in v[0-9]*) ;; *) echo "::error::'${TAG}' is not a v* release tag."; exit 1 ;; esac
+          NOW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha)
+          if [ -z "$NOW" ]; then echo "::error::No commit for tag ${TAG}."; exit 1; fi
+          if [ "$EVENT" = "push" ] && [ "$NOW" != "$PUSHED" ]; then
+            echo "::error::${TAG} now points at ${NOW}, not the pushed ${PUSHED} — a newer run owns it; refusing."
+            exit 1
+          fi
+          echo "sha=${NOW}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "✅ releasing ${TAG} = ${NOW}"
+
       # Only main is released (publish.ts refuses any other branch; this is the same rule from the
       # registry side). ci.yml runs on every branch, so "CI passed" alone would let a tag on an
       # unmerged branch publish it. `bun run release` pushes main BEFORE the tag, so the tagged
@@ -35,7 +70,7 @@ jobs:
       - name: The tagged commit is on main
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ steps.target.outputs.sha }}
         run: |
           STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${SHA}" --jq .status)
           if [ "$STATUS" != "identical" ] && [ "$STATUS" != "behind" ]; then
@@ -47,7 +82,7 @@ jobs:
       - name: Wait for ci.yml on this commit, and require success
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ steps.target.outputs.sha }}
         run: |
           for i in $(seq 1 80); do
             RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=1" \
@@ -80,6 +115,8 @@ jobs:
       # warn about — noise that would eventually hide a warning worth reading.
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.ci-green.outputs.sha }} # the exact commit ci-green resolved and checked
 
       # DO NOT pin this to chase a missing JSR provenance attestation. That experiment was already
       # run on the sibling `wasmtk` project on 2026-07-30 and RULED OUT: its provenance history
@@ -130,6 +167,36 @@ jobs:
       # no provenance) and read the tarball — `deno publish` has exited 0 on a corrupted upload.
       - name: The upload is this package, intact
         run: bun scripts/jsr-upload-check.ts
+
+      # Immediately before the immutable step: the tag still points at this commit, it names the
+      # version jsr.json declares, and JSR does not have that version yet. Until 2026-11-06 the
+      # JSR job checked none of these: a tag on a commit whose jsr.json said another version
+      # published THAT version under this tag; and `deno publish` SKIPS an existing version with
+      # exit 0, so a re-run, or a run for a tag moved after JSR published, went on as if it had
+      # published this commit.
+      - name: Pinned — the tag, its commit, its version, and JSR's 404
+        env:
+          TAG: ${{ needs.ci-green.outputs.tag }}
+          SHA: ${{ needs.ci-green.outputs.sha }}
+        run: |
+          NOW=$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)
+          [ -n "$NOW" ] || NOW=$(git ls-remote --tags origin "refs/tags/${TAG}" | cut -f1)
+          if [ "$NOW" != "$SHA" ]; then
+            echo "::error::${TAG} now points at '${NOW}', not ${SHA} — refusing to publish."
+            exit 1
+          fi
+          VERSION=$(bun -p "require('./jsr.json').version")
+          if [ "v${VERSION}" != "${TAG}" ]; then
+            echo "::error::jsr.json says ${VERSION}, the tag is ${TAG} — refusing to publish."
+            exit 1
+          fi
+          PKG=$(bun -p "require('./jsr.json').name"); SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}; NAME=${PKG#*/}
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://api.jsr.io/scopes/${SCOPE}/packages/${NAME}/versions/${VERSION}")
+          if [ "$CODE" != "404" ]; then
+            echo "::error::JSR answered ${CODE} for ${PKG}@${VERSION} (only 404, 'not published', lets this run publish) — refusing."
+            exit 1
+          fi
+          echo "✅ ${TAG} = ${SHA}, jsr.json ${VERSION}, not on JSR yet"
 
       - name: Publish to JSR
         run: deno publish
@@ -203,10 +270,12 @@ jobs:
   # with this run's OIDC token (id-token: write) — no npm token exists anywhere — and npm records
   # provenance itself. CI proves the tarball (`npm:prove`) on every push, the tagged commit's too.
   npm:
-    needs: publish
-    # After a successful JSR publish on a tag push; or alone, on "Run workflow" with a tag.
+    needs: [ci-green, publish]
+    # After a successful JSR publish on a tag push; or alone, on "Run workflow" with a tag -- and
+    # in both cases only after ci-green passed for the commit (the dispatch path used to skip it:
+    # no CI, no main check, no JSR check).
     if: >-
-      !cancelled() && (needs.publish.result == 'success' ||
+      !cancelled() && needs.ci-green.result == 'success' && (needs.publish.result == 'success' ||
       (github.event_name == 'workflow_dispatch' && needs.publish.result == 'skipped'))
     runs-on: ubuntu-latest
     permissions:
@@ -217,7 +286,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          # The exact commit ci-green resolved -- the one JSR got. By tag NAME (as it was), a tag
+          # moved after the JSR job had checked out its commit would have given npm another one.
+          ref: ${{ needs.ci-green.outputs.sha }}
 
       # Node 24 bundles npm 12, past trusted publishing's npm 11.5.1 floor. NO `registry-url`: with
       # it, setup-node writes an .npmrc whose token is NODE_AUTH_TOKEN's placeholder
@@ -243,7 +314,7 @@ jobs:
       # version nobody tagged.
       - name: The package version is the tag's
         env:
-          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          TAG: ${{ needs.ci-green.outputs.tag }}
         run: |
           VERSION=$(node -p 'require("./dist/package.json").version')
           if [ "v${VERSION}" != "${TAG}" ]; then
@@ -269,6 +340,32 @@ jobs:
             echo "::error::npm would change the manifest on publish — refusing (see the dry run above)."
             exit 1
           fi
+
+      # Pinned again right before npm's immutable step: the JSR job takes minutes, and a tag moved
+      # meanwhile must not get its new commit onto npm under the old one's version. On "Run
+      # workflow" (npm only, for a version already on JSR) JSR must have the version: it used to
+      # publish any tag's commit to npm, on JSR or not.
+      - name: Pinned — the tag still points at this commit; on dispatch, JSR has the version
+        env:
+          TAG: ${{ needs.ci-green.outputs.tag }}
+          SHA: ${{ needs.ci-green.outputs.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          NOW=$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)
+          [ -n "$NOW" ] || NOW=$(git ls-remote --tags origin "refs/tags/${TAG}" | cut -f1)
+          if [ "$NOW" != "$SHA" ]; then
+            echo "::error::${TAG} now points at '${NOW}', not ${SHA} — refusing to publish."
+            exit 1
+          fi
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            PKG=$(bun -p "require('./jsr.json').name"); SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}; NAME=${PKG#*/}
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://api.jsr.io/scopes/${SCOPE}/packages/${NAME}/versions/${VERSION}")
+            if [ "$CODE" != "200" ]; then
+              echo "::error::JSR answered ${CODE} for ${PKG}@${VERSION}: npm-only publishing is for a version already on JSR — refusing."
+              exit 1
+            fi
+          fi
+          echo "✅ ${TAG} = ${SHA}"
 
       # npm versions are immutable too. A re-run must stop cleanly, not fail on a duplicate.
       # On failure, npm's own error goes into an ANNOTATION: job logs need a signed-in GitHub

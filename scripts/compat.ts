@@ -255,7 +255,10 @@ function extractTag(tag: string, paths: string[]): string {
   const tar = join(dir, "tag.tar");
   const a = run("git", ["archive", "--format=tar", "-o", tar, tag, ...paths], ROOT);
   if (a.code !== 0) throw new Error(`git archive ${tag}: ${a.err}`);
-  const x = run("tar", ["-xf", tar, "-C", dir], ROOT);
+  // Relative names, run from inside the folder: GNU tar (first on PATH in Git Bash) reads
+  // `C:\…` as a remote host -- "Cannot connect to C: resolve failed" -- and the gate, so bump and
+  // release, refused from that shell (2026-11-06). bsdtar (Windows) reads the same either way.
+  const x = run("tar", ["-xf", "tag.tar"], dir);
   if (x.code !== 0) throw new Error(`tar: ${x.err}`);
   rmSync(tar);
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "junction");
