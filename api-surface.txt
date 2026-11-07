@@ -1,8 +1,10 @@
 cli-flag	--help
+cli-flag	--keep-html
 cli-flag	--no-keep-html
 cli-flag	--no-optimize
 cli-flag	--no-verify
 cli-flag	--version
+cli-flag	-?
 cli-flag	-h
 cli-flag	-v
 cli-usage	s3d-reportcompiler
@@ -51,6 +53,7 @@ symbol	.	textWords	function	export declare function textWords(text: string): Set
 symbol	./runtime	RUNTIME	variable	export declare const RUNTIME: Runtime
 symbol	./runtime	RunResult	typeAlias	export type RunResult = { code: number; stderr: string; }
 symbol	./runtime	Runtime	typeAlias	export type Runtime = "deno" | "bun" | "node" | "browser"
+symbol	./runtime	TimedRunResult	typeAlias	export type TimedRunResult = RunResult & { timedOut: boolean; }
 symbol	./runtime	args	function	export declare function args(): string[]
 symbol	./runtime	baseName	function	export declare function baseName(file: string): string
 symbol	./runtime	cwd	function	export declare function cwd(): string
@@ -73,5 +76,6 @@ symbol	./runtime	removeQuietly	function	export declare function removeQuietly(ta
 symbol	./runtime	rename	function	export declare function rename(from: string, to: string): Promise<void>
 symbol	./runtime	resolvePath	function	export declare function resolvePath(target: string): Promise<string>
 symbol	./runtime	run	function	export declare function run(cmd: string, argv: string[]): Promise<RunResult>
+symbol	./runtime	runWithTimeout	function	export declare function runWithTimeout(cmd: string, argv: string[], timeoutMs: number): Promise<TimedRunResult>
 symbol	./runtime	toFileUrl	function	export declare function toFileUrl(file: string): Promise<string>
 symbol	./runtime	writeFile	function	export declare function writeFile(file: string, data: Uint8Array | string): Promise<void>
