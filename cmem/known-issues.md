@@ -403,10 +403,24 @@ on ALL THREE real sets after every group: samples `37792fe3…`, the 48-report s
 | 70 | **The release path could publish what it did not check (D, `fb76ba1`).** A manual run from an old `release/v*` copy of the workflow; an npm-only run publishing a commit JSR never got; "already on npm" success for any commit; the SemVer gate only on the developer's machine; CI read from any event's run; write access in the job that runs `bun install`; a failed branch push skipping npm; an unpinned install script piped to bash; non-exported types invisible to the compat gate; two unchecked dependency lists | **yes** (latent; nothing published wrongly) |
 | 71 | **Tests that could not fail, and false docs (E, `9be2626`).** The zip-refusal test never compared the zip; the test's zip reader hid duplicate names and never read local headers; a symlink test that needs a Windows privilege; README "byte for byte", missing exports and flags; stale control counts | **yes** |
 
-🔒 **Owner action (#70), open:** the existing `release/v1.0.0` … `release/v1.1.7` branches carry
-copies of `publish.yml` WITHOUT the "run only from main" guard, and npm's trusted publisher names
-only the file. "Run workflow" from one of them would run its old copy. Options: delete those
-branches (the tags keep the commits), or protect them. Not done from here: it changes GitHub.
+✅ **Owner action (#70), closed 2026-11-06** (owner: "if everything is merged into main and
+committed and ready for release 1.2.0 then we can delete the branches", then "All merged
+branches"). Checked first:
+- the tree was clean on main;
+- every branch was fully merged (0 commits outside main);
+- `compat.ts release 1.2.0` allowed a minor (v1.1.7's samples PASS);
+- types, format and lint passed.
+
+Each `release/v*` named exactly its tag's commit. Deleted:
+- on GitHub, the 11 `release/v1.0.0` … `release/v1.1.7` branches and the merged `deps/bun-install`,
+  `npm/publish-job`, `step5/test-suite` and `step7/jsr-json`; all carried old `publish.yml` copies
+  without the main-only guard;
+- locally, the 7 merged work branches (`git branch -d`, which refuses an unmerged one).
+
+Only `main` remains; the 11 version tags keep every released commit. Consequence: an npm-only "Run
+workflow" for a version released BEFORE 1.2.0 is now refused (no `release/<tag>` to match). Every
+such version is already on npm, so none needs one. From 1.2.0 on, the `record` job writes the
+branch, with today's workflow in it.
 
 ⚠️ **The next release is a MINOR (1.2.0):** `compat` → 0 removed, 0 changed, **19 added vs
 v1.1.7**; `api-surface.txt` 88 lines (each re-baseline in its own commit, Rule 5).
