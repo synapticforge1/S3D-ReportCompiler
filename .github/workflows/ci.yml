@@ -168,9 +168,14 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install fnm
+      # A pinned release, checked against its digest -- not an install script piped to bash from a
+      # URL whose content can change under the same name (2026-11-06 review). The digest is
+      # GitHub's own for the asset (releases API), matched by a download the same day.
+      - name: Install fnm (v1.39.0, digest-checked)
         run: |
-          curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell --install-dir "$HOME/.fnm"
+          curl -fsSL -o /tmp/fnm.zip https://github.com/Schniz/fnm/releases/download/v1.39.0/fnm-linux.zip
+          echo "7807664f39d39fc518da1c35ba0181e4b3267603c4b1dedeb4b5fc6ae440a224  /tmp/fnm.zip" | sha256sum -c -
+          mkdir -p "$HOME/.fnm" && unzip -o -q /tmp/fnm.zip -d "$HOME/.fnm" && chmod +x "$HOME/.fnm/fnm"
           echo "$HOME/.fnm" >> "$GITHUB_PATH"
 
       - name: Install dependencies
@@ -202,9 +207,14 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install fnm
+      # A pinned release, checked against its digest -- not an install script piped to bash from a
+      # URL whose content can change under the same name (2026-11-06 review). The digest is
+      # GitHub's own for the asset (releases API), matched by a download the same day.
+      - name: Install fnm (v1.39.0, digest-checked)
         run: |
-          curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell --install-dir "$HOME/.fnm"
+          curl -fsSL -o /tmp/fnm.zip https://github.com/Schniz/fnm/releases/download/v1.39.0/fnm-linux.zip
+          echo "7807664f39d39fc518da1c35ba0181e4b3267603c4b1dedeb4b5fc6ae440a224  /tmp/fnm.zip" | sha256sum -c -
+          mkdir -p "$HOME/.fnm" && unzip -o -q /tmp/fnm.zip -d "$HOME/.fnm" && chmod +x "$HOME/.fnm/fnm"
           echo "$HOME/.fnm" >> "$GITHUB_PATH"
 
       - name: Install dependencies

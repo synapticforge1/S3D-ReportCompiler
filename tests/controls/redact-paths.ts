@@ -106,7 +106,7 @@ const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\/(?:${PSEG}(?: ${PSEG})*\/)+(?:${
  * `<home>\OneDrive - <employer>\Jobs\<client>\…`, a surname after a spaced username -- while the
  * residue check, looking for drive paths only, said "0 drive path(s) after" (2026-11-06 review).
  */
-const HOME_TAIL = String.raw`${SEGMENT}(?: ${SEGMENT})*(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
+const HOME_TAIL = `${SEGMENT}(?: ${SEGMENT})*(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
 
 /**
  * This checkout, and the folder holding it, in any separator and any drive spelling. A

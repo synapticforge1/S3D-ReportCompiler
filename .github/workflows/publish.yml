@@ -52,6 +52,16 @@ jobs:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           PUSHED: ${{ github.sha }}
         run: |
+          # "Run workflow" runs the copy of THIS FILE on the branch picked in "Use workflow from".
+          # Every release leaves a release/v* branch whose copy predates the current gates, and npm's
+          # trusted publisher names only the file, so an old copy could still publish. Only main's
+          # copy may run by hand (2026-11-06 review; the picker was chosen wrongly 3 times of 3).
+          # ⚠️ This guards copies made from now on; older release/v* copies lack it (owner action,
+          # cmem/roadmap.md).
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main (\"Use workflow from: main\"), not ${GITHUB_REF}."
+            exit 1
+          fi
           case "$TAG" in v[0-9]*) ;; *) echo "::error::'${TAG}' is not a v* release tag."; exit 1 ;; esac
           NOW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha)
           if [ -z "$NOW" ]; then echo "::error::No commit for tag ${TAG}."; exit 1; fi
@@ -85,7 +95,9 @@ jobs:
           SHA: ${{ steps.target.outputs.sha }}
         run: |
           for i in $(seq 1 80); do
-            RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=1" \
+            # A PUSH run of this commit: a pull_request run tests a merge commit, not this one, and
+            # the newest run of any kind could be that (2026-11-06 review).
+            RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&event=push&per_page=1" \
               --jq '.workflow_runs[0] | "\(.status) \(.conclusion) \(.html_url)"' || true)
             set -- $RUN
             if [ "${1:-}" = "completed" ]; then
@@ -106,8 +118,11 @@ jobs:
     needs: ci-green
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # No write access to the repository here: this job runs `bun install` (third-party code), and
+    # the only writes a release makes -- its branch and its GitHub release -- are in the `record`
+    # and `finalize` jobs, which install nothing (2026-11-06 review).
     permissions:
-      contents: write
+      contents: read
       id-token: write
 
     steps:
@@ -117,6 +132,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ needs.ci-green.outputs.sha }} # the exact commit ci-green resolved and checked
+          fetch-depth: 0 # the SemVer gate reads the last v* tag
 
       # DO NOT pin this to chase a missing JSR provenance attestation. That experiment was already
       # run on the sibling `wasmtk` project on 2026-07-30 and RULED OUT: its provenance history
@@ -198,22 +214,15 @@ jobs:
           fi
           echo "✅ ${TAG} = ${SHA}, jsr.json ${VERSION}, not on JSR yet"
 
+      # SemVer is a gate result, and the gate ran only on the developer's machine (`bun run
+      # release`): a hand-edited version and a pushed tag published a patch that removed an export,
+      # provided CI was green (2026-11-06 review). The same gate, here, on the tagged commit: the
+      # surface since the last tag, and the last tag's samples on the new code (Chrome renders).
+      - name: The compatibility gate allows this version
+        run: bun scripts/compat.ts release "$(bun -p "require('./jsr.json').version")" --unpublished
+
       - name: Publish to JSR
         run: deno publish
-
-      - name: Create release branch
-        run: |
-          git checkout -b release/${GITHUB_REF_NAME}
-          git push origin release/${GITHUB_REF_NAME}
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create ${GITHUB_REF_NAME} \
-            --title "${GITHUB_REF_NAME}" \
-            --target release/${GITHUB_REF_NAME} \
-            --generate-notes
 
       # Reports whether JSR recorded a provenance attestation. It does NOT fail the job.
       #
@@ -264,6 +273,34 @@ jobs:
           done
           echo "::warning::${PKG}@${VERSION} shows no Sigstore/Rekor entry on JSR. The package IS published and the GitHub release IS created — only the attestation is unreported. This is a known JSR-side issue (see the comment above) and is expected; it is NOT a release failure and needs no action here."
           exit 0
+
+  # The record of exactly which commit JSR got: release/<tag> at that commit. "Run workflow" (npm
+  # only) publishes to npm only the commit this branch names. Its own job, after JSR and beside npm:
+  # a failure here used to skip npm, and "Re-run failed jobs" then stopped at JSR's 404 check
+  # (2026-11-06 review). This job installs nothing; it is the one that may push.
+  record:
+    needs: [ci-green, publish]
+    if: github.event_name == 'push' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.ci-green.outputs.sha }}
+      - name: Create the release branch at the commit JSR got
+        env:
+          TAG: ${{ needs.ci-green.outputs.tag }}
+          SHA: ${{ needs.ci-green.outputs.sha }}
+        run: |
+          EXISTING=$(git ls-remote origin "refs/heads/release/${TAG}" | cut -f1)
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "$SHA" ]; then
+            echo "::error::release/${TAG} already names ${EXISTING}, not ${SHA} -- refusing to move it."
+            exit 1
+          fi
+          git push origin "${SHA}:refs/heads/release/${TAG}"
+          echo "✅ release/${TAG} = ${SHA}"
 
   # npm: @synapticforge1/s3d-reportcompiler, built from the same tag by `bun run npm:build` (compiled
   # JS + .d.ts, a generated manifest with a bin). Trusted publishing: `npm publish` authenticates
@@ -364,6 +401,15 @@ jobs:
               echo "::error::JSR answered ${CODE} for ${PKG}@${VERSION}: npm-only publishing is for a version already on JSR — refusing."
               exit 1
             fi
+            # ...and JSR got THIS commit: the release branch the JSR run recorded must name it. Only
+            # "JSR has the version" and "the tag points here today" were checked, so a tag moved
+            # after JSR published (a cancelled run, a retried release) put another commit on npm
+            # under the same version (2026-11-06 review).
+            REL=$(git ls-remote origin "refs/heads/release/${TAG}" | cut -f1)
+            if [ "$REL" != "$SHA" ]; then
+              echo "::error::release/${TAG} names '${REL}', not ${SHA}: JSR got another commit (or none was recorded) — refusing."
+              exit 1
+            fi
           fi
           echo "✅ ${TAG} = ${SHA}"
 
@@ -378,10 +424,20 @@ jobs:
       - name: Publish to npm
         working-directory: dist
         shell: bash
+        env:
+          SHA: ${{ needs.ci-green.outputs.sha }}
         run: |
           NAME=$(node -p 'require("./package.json").name')
           if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
-            echo "::notice::${NAME}@${VERSION} is already on npm — nothing to publish."
+            # "Already there" is success only if it is THIS commit (npm records the publishing
+            # checkout's HEAD as gitHead); it used to be reported as success whatever npm held.
+            HEAD_ON_NPM=$(npm view "${NAME}@${VERSION}" gitHead 2>/dev/null || true)
+            if [ -n "$HEAD_ON_NPM" ] && [ "$HEAD_ON_NPM" != "$SHA" ]; then
+              echo "::error::${NAME}@${VERSION} is on npm from ${HEAD_ON_NPM}, not ${SHA} — the registries differ."
+              exit 1
+            fi
+            [ -n "$HEAD_ON_NPM" ] || echo "::warning::npm records no gitHead for ${NAME}@${VERSION}; its commit cannot be compared."
+            echo "::notice::${NAME}@${VERSION} is already on npm (${HEAD_ON_NPM:-commit unrecorded}) — nothing to publish."
             exit 0
           fi
           npm --version
@@ -393,3 +449,24 @@ jobs:
             exit 1
           fi
           cat ../npm-publish.log
+
+  # The GitHub release comes LAST, after both registries: it used to be created between JSR and npm,
+  # so a failure there skipped npm. Installs nothing; may write.
+  finalize:
+    needs: [ci-green, record, npm]
+    if: github.event_name == 'push' && needs.record.result == 'success' && needs.npm.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.ci-green.outputs.tag }}
+        run: |
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::notice::the GitHub release ${TAG} already exists"
+            exit 0
+          fi
+          gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --title "${TAG}" --target "release/${TAG}" --generate-notes

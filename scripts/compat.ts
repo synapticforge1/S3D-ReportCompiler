@@ -103,6 +103,19 @@ function declarations(dts: string): Array<[string, string, string]> {
       /^export (?:declare )?(?:async )?(function|const|let|var|type|interface|class|enum|namespace) ([A-Za-z_$][\w$]*)/,
     );
     if (!m) {
+      // A declaration tsc wrote WITHOUT `export` is there because an export uses it (`interface
+      // Opts` beside `export declare function f(o: Opts)`): it is API all the same, and a field
+      // removed from it went through as "patch" (2026-11-06 review). Read under its own kind.
+      const inner = s.match(
+        /^(?:declare )?(?:async )?(function|const|let|var|type|interface|class|enum|namespace) ([A-Za-z_$][\w$]*)/,
+      );
+      if (inner) {
+        const kind = `${{ const: "variable", let: "variable", var: "variable", type: "typeAlias" }[inner[1]] ?? inner[1]} (unexported, used by an export)`;
+        const entry = byName.get(inner[2]) ?? [kind, []];
+        entry[1].push(s);
+        byName.set(inner[2], entry);
+        continue;
+      }
       // `import …` and the empty `export {}` carry no API; anything else exported is unread.
       if (/^export\b/.test(s) && s !== "export {}")
         throw new Error(`unrecognised export: ${s.slice(0, 120)}`);

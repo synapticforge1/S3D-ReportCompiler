@@ -2663,6 +2663,89 @@ test("compat: a tagged version is refused unless the release says it is unpublis
   has(r.out, new RegExp(`${tag.replace(/\./g, "\\.")} already exists`));
 });
 
+test("review 2, group D: the release path checks what it publishes", () => {
+  // The compat gate reads a type tsc wrote WITHOUT `export` because an export uses it: a field
+  // removed from it went through as "patch". A throwaway package, the real compat.ts.
+  const pkg = join(work, "compat-unexported");
+  mkdirSync(join(pkg, "scripts"), { recursive: true });
+  mkdirSync(join(pkg, "src"), { recursive: true });
+  writeFileSync(
+    join(pkg, "scripts", "compat.ts"),
+    readFileSync(join(ROOT, "scripts", "compat.ts")),
+  );
+  symlinkSync(join(ROOT, "node_modules"), join(pkg, "node_modules"), "junction");
+  writeFileSync(
+    join(pkg, "jsr.json"),
+    JSON.stringify({ version: "1.0.0", exports: { ".": "./src/a.ts" } }),
+  );
+  writeFileSync(
+    join(pkg, "src", "a.ts"),
+    "type Opts = { width: number; height: number };\nexport function area(o: Opts): number {\n  return o.width * o.height;\n}\n",
+  );
+  writeFileSync(join(pkg, "main.ts"), 'console.log("x 1\\n\\nUSAGE\\n  x <in>   run it");\n');
+  const s = run([join(pkg, "scripts", "compat.ts"), "surface"], { cwd: pkg });
+  assert.equal(s.code, 0, s.out);
+  assert.match(
+    s.out,
+    /symbol\t\.\tOpts\ttypeAlias \(unexported, used by an export\)\t.*width: number/,
+  );
+
+  // npm and JSR resolve their dependencies from two files: a mismatch fails the build, first.
+  const dep = join(work, "npm-build-deps");
+  mkdirSync(join(dep, "scripts"), { recursive: true });
+  for (const f of ["npm-build.ts", "jsr-api.ts"]) {
+    writeFileSync(join(dep, "scripts", f), readFileSync(join(ROOT, "scripts", f)));
+  }
+  const jsr = JSON.parse(readFileSync(join(ROOT, "jsr.json"), "utf8"));
+  const pj = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  writeFileSync(join(dep, "jsr.json"), JSON.stringify(jsr));
+  writeFileSync(
+    join(dep, "package.json"),
+    JSON.stringify({ ...pj, dependencies: { ...pj.dependencies, "pdf-lib": "1.17.0" } }),
+  );
+  const b = run([join(dep, "scripts", "npm-build.ts")], { cwd: dep });
+  assert.equal(b.code, 1, b.out);
+  has(b.out, /disagree on a dependency/, /pdf-lib: package\.json 1\.17\.0, jsr\.json 1\.17\.1/);
+
+  // The workflows, read for the gates that make a release publish what it checked.
+  const yml = readFileSync(join(ROOT, ".github", "workflows", "publish.yml"), "utf8");
+  const job = (name: string) => {
+    const at = yml.indexOf(`\n  ${name}:\n`);
+    assert.ok(at >= 0, `no ${name} job`);
+    const next = yml.slice(at + 4).search(/\n {2}[a-z-]+:\n/);
+    return next < 0 ? yml.slice(at) : yml.slice(at, at + 4 + next);
+  };
+  const [ciGreen, publish, record, npm, finalize] = [
+    "ci-green",
+    "publish",
+    "record",
+    "npm",
+    "finalize",
+  ].map(job);
+  assert.match(
+    ciGreen,
+    /workflow_dispatch" \] && \[ "\$GITHUB_REF" != "refs\/heads\/main" \]/,
+    "a manual run from any branch",
+  );
+  assert.match(ciGreen, /head_sha=\$\{SHA\}&event=push/, "CI read from a run of any event");
+  assert.match(publish, /contents: read/, "the publish job (bun install) may write");
+  assert.doesNotMatch(publish, /git push|gh release create/, "the publish job writes");
+  const gate = publish.indexOf("compat.ts release");
+  assert.ok(gate > 0 && gate < publish.indexOf("run: deno publish"), "no SemVer gate before JSR");
+  assert.match(record, /needs: \[ci-green, publish\][\s\S]*refs\/heads\/release\/\$\{TAG\}/);
+  assert.match(npm, /needs: \[ci-green, publish\]/, "npm waits on the release branch");
+  assert.match(
+    npm,
+    /REL=\$\(git ls-remote origin "refs\/heads\/release\/\$\{TAG\}"/,
+    "npm-only publishes any commit",
+  );
+  assert.match(npm, /gitHead/, '"already on npm" passes any commit');
+  assert.match(finalize, /needs: \[ci-green, record, npm\][\s\S]*gh release create/);
+  const ci = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+  assert.doesNotMatch(ci, /\|\s*bash/, "an install script piped to bash");
+  assert.match(ci, /sha256sum -c/);
+});
+
 // ── "a run of nothing is not a pass" ─────────────────────────────────────────
 
 test("every control in tests/controls/ is exercised by a test above", () => {

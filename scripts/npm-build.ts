@@ -33,6 +33,33 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
+const jsr = json("jsr.json");
+const pkg = json("package.json");
+
+// 0. One dependency set, two declarations: npm gets package.json's `dependencies`, JSR resolves
+// jsr.json's `imports`. Nothing compared them (2026-11-06 review), so a bump in one would ship the
+// two registries different MathJax / pdf.js / pdf-lib under one version. Both directions, exact;
+// first, before anything is built.
+{
+  const imports = Object.values(jsr.imports as Record<string, string>)
+    .map((spec) => /^npm:((?:@[^/]+\/)?[^@/]+)@([^/]+)\/?$/.exec(spec))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => [m[1], m[2]] as const);
+  const deps = Object.entries((pkg.dependencies ?? {}) as Record<string, string>);
+  const fromJsr = new Map(imports);
+  const mismatch = [
+    ...deps
+      .filter(([n, v]) => fromJsr.get(n) !== v)
+      .map(([n, v]) => `${n}: package.json ${v}, jsr.json ${fromJsr.get(n) ?? "none"}`),
+    ...imports
+      .filter(([n]) => !deps.some(([d]) => d === n))
+      .map(([n, v]) => `${n}: jsr.json ${v}, package.json none`),
+  ];
+  if (mismatch.length > 0) {
+    fail(`jsr.json and package.json disagree on a dependency:\n  ${mismatch.join("\n  ")}`);
+  }
+}
+
 // 1. Compile.
 rmSync(dist, { recursive: true, force: true });
 const tsc = spawnSync(
@@ -51,8 +78,6 @@ const main = readFileSync(mainJs, "utf8");
 writeFileSync(mainJs, `#!/usr/bin/env node\n${main.replace(/^#![^\n]*\n/, "")}`);
 
 // 3. The manifest.
-const jsr = json("jsr.json");
-const pkg = json("package.json");
 const pdfjsEngines = json("node_modules/pdfjs-dist/package.json").engines?.node;
 const floor = /^>=\s*(\d+\.\d+\.\d+)/.exec(String(pdfjsEngines ?? ""))?.[1];
 if (!floor)
