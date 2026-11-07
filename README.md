@@ -272,7 +272,7 @@ looking at.
 | Flag | Effect |
 | --- | --- |
 | `--keep-html` | keep the baked HTML beside the PDF — the default, accepted so it can be said |
-| `--no-keep-html` | discard the baked HTML after a good build, leaving only the PDF (a failed build keeps it) |
+| `--no-keep-html` | discard the baked HTML after a good build, leaving only the PDF (a failed build keeps it). Given with `--keep-html`, refused |
 | `--no-optimize` | skip the object-stream repack (roughly doubles the file size) |
 | `--no-verify` | skip the conservation check — **not advisable** for a document that will be issued |
 | `-v`, `--version` | print the version and exit |
@@ -319,7 +319,8 @@ during the build, leaves the zip exactly as it was.
   and a file of yours that merely has the PDF's name is refused, never replaced.
 - **If the PDF passes but cannot be added** (the zip is open elsewhere, or changed meanwhile), the
   build says so, leaves the zip as it was, keeps the verified PDF as `pack.verified.pdf` and exits 1.
-  The next good run removes that file.
+  The next run removes that file before it renders, and refuses to start if it cannot (open in a
+  viewer), so an earlier "verified" PDF never sits beside a newer zip.
 - **The baked HTML** is kept beside the zip (`pack.html`). `--no-keep-html` removes it. It is never
   put into the zip: it is a `.html`, so the next run would read it as a report. An existing
   `pack.html` that is not a previous bake is the user's file, and the build stops rather than

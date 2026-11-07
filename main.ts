@@ -103,6 +103,7 @@ import {
   bakeStyle,
   compareAgainstPdf,
   compareEachReport,
+  decodeReport,
   delimSignatures,
   extractSourceTokens,
   findBrokenReferences,
@@ -162,6 +163,11 @@ if (unknownFlags.length > 0) {
   console.error(`Unknown option(s): ${unknownFlags.join(", ")}\n`);
   console.error(`Supported: ${KNOWN_FLAGS.join(", ")}`);
   console.error(`Run with --help for what they do.`);
+  rt.exit(1);
+}
+// Two that contradict each other are a mistake, not a choice: --no-keep-html used to win silently.
+if (flags.includes("--keep-html") && flags.includes("--no-keep-html")) {
+  console.error("--keep-html and --no-keep-html contradict each other: give one.");
   rt.exit(1);
 }
 
@@ -497,6 +503,9 @@ function fontSource(url: string): string {
  *
  * @param cacheRoot `.mathjax-fonts` in the working directory
  */
+/** How long one font may take to download (each is under 100 kB). */
+const FONT_FETCH_TIMEOUT_MS = 60_000;
+
 async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
   const name = rt.baseName(url).replace(/[^\w.-]/g, "_");
   // Bytes from the test hook are kept apart from the real cache: stored under the real key, a
@@ -511,11 +520,16 @@ async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
   const cacheDir = rt.joinPath(cacheRoot, dirKey);
   const cached = rt.joinPath(cacheDir, name);
 
+  // A cache that cannot be written is said as such: it used to surface as "check the network".
   const keep = async (bytes: Uint8Array) => {
-    await rt.mkdirp(cacheDir);
-    const partial = `${cached}.partial`;
-    await rt.writeFile(partial, bytes);
-    await rt.rename(partial, cached);
+    try {
+      await rt.mkdirp(cacheDir);
+      const partial = `${cached}.partial`;
+      await rt.writeFile(partial, bytes);
+      await rt.rename(partial, cached);
+    } catch (e) {
+      throw new Error(`the font cache could not be written: ${cacheDir} (${(e as Error).message})`);
+    }
   };
 
   try {
@@ -540,9 +554,20 @@ async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
     }
   }
 
-  const res = await fetch(fontSource(url));
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-  const bytes = new Uint8Array(await res.arrayBuffer());
+  // Bounded, like the render: a stalled download held the build forever, before Chrome's own
+  // timeout could apply (2026-11-07 review).
+  let res: Response;
+  let bytes: Uint8Array;
+  try {
+    res = await fetch(fontSource(url), { signal: AbortSignal.timeout(FONT_FETCH_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+    bytes = new Uint8Array(await res.arrayBuffer());
+  } catch (e) {
+    if ((e as Error).name === "TimeoutError") {
+      throw new Error(`${url} did not download within ${FONT_FETCH_TIMEOUT_MS / 1000} s`);
+    }
+    throw e;
+  }
   if (!isFont(bytes)) {
     throw new Error(
       `${url} did not return a font (${res.headers.get("content-type") ?? "no content type"}, ` +
@@ -715,9 +740,15 @@ if (zipPath !== null) {
       contents.set(r.name, r.html);
     }
   } catch (e) {
+    const why = (e as Error).message;
     console.error(`Cannot compile this zip:\n  ${zipPath}\n`);
-    console.error((e as Error).message);
-    console.error(`\nA SkyCiv export is a flat set of member_*.html reports. Nothing was changed.`);
+    console.error(why);
+    // The layout hint only where the layout is the problem: a zip locked by another program (EBUSY)
+    // or a report in another charset was told "a SkyCiv export is a flat set of reports".
+    if (/more than a flat set of reports/.test(why)) {
+      console.error(`\nA SkyCiv export is a flat set of member_*.html reports.`);
+    }
+    console.error("Nothing was changed.");
     rt.exit(1);
   }
 } else {
@@ -752,9 +783,27 @@ if (zipPath !== null) {
   }
 
   // Read once, here: every input is needed below to tell reports from previous
-  // bakes, and again to compile.
+  // bakes, and again to compile. As bytes, decoded by decodeReport -- as the zip's entries are: a
+  // lenient UTF-8 read turned a Windows-1252 report's "²" into U+FFFD on BOTH sides of the
+  // verification, and it passed (2026-11-07 review). Every unreadable one is named.
+  const undecodable: string[] = [];
   for (const name of allHtml) {
-    contents.set(name, await rt.readTextFile(rt.joinPath(htmlDir, name)));
+    const file = rt.joinPath(htmlDir, name);
+    if (TOOL_OWNED.has(name.toLowerCase())) {
+      contents.set(name, await rt.readTextFile(file)); // skipped below, never compiled
+      continue;
+    }
+    try {
+      contents.set(name, decodeReport(await rt.readFile(file), name));
+    } catch (e) {
+      undecodable.push((e as Error).message);
+    }
+  }
+  if (undecodable.length > 0) {
+    console.error("Cannot read these reports as the text a browser shows:");
+    for (const m of undecodable) console.error(`  ${m}`);
+    console.error("\nNothing was changed. Re-save them as UTF-8 (SkyCiv's own exports are).");
+    rt.exit(1);
   }
 }
 
@@ -867,6 +916,10 @@ if (zipPath !== null) {
 if (skipped > 0) {
   console.log(`  skipped:  ${skipped} tool-owned .html file(s)`);
   for (const name of bakedLeftovers) console.log(`            ${name} (a previous bake)`);
+  // Named too: a real report of that name would otherwise drop out under a count alone.
+  for (const name of allHtml.filter((n) => TOOL_OWNED.has(n.toLowerCase()))) {
+    console.log(`            ${name} (the browser example, skipped by name)`);
+  }
 }
 
 const sources: string[] = [];
@@ -977,7 +1030,8 @@ try {
 } catch (e) {
   console.error(`\nERROR: the maths fonts could not be loaded.\n  ${(e as Error).message}\n`);
   console.error("The first build downloads them once into .mathjax-fonts/ in this folder; later");
-  console.error("builds work offline. Check the network (or a login page on it), then re-run.");
+  console.error("builds work offline. Check the network (or a login page on it) and that this");
+  console.error("folder is writable, then re-run.");
   await noteEarlierPdf();
   rt.exit(1);
 }
@@ -1058,8 +1112,12 @@ const candidatePdf = `${outputPdf.replace(/\.pdf$/i, "")}.unverified.pdf`;
 // be GONE, not merely asked to go: removeQuietly swallows a failed delete, and a
 // PDF open in a viewer on Windows cannot be deleted or written -- but can be read.
 // From a zip the PDF never takes its final name on disk -- it goes into the zip -- so a file of
-// that name beside the zip is the user's, and is left alone.
-for (const old of zipPath === null ? [outputPdf, candidatePdf] : [candidatePdf]) {
+// that name beside the zip is the user's, and is left alone. But `<zip>.verified.pdf` is this
+// tool's, from an earlier run whose zip update failed, and goes now, as the folder build's old PDF
+// does: removed afterwards with removeQuietly, one held open in a viewer survived a later
+// SUCCESSFUL build beside the new zip, still called "verified", without a word -- and a failed
+// build left it unmentioned (2026-11-07 review).
+for (const old of zipPath === null ? [outputPdf, candidatePdf] : [candidatePdf, zipKeptPdf]) {
   await rt.removeQuietly(old);
   if (await rt.fileExists(old)) {
     console.error(`Could not remove the previous PDF:\n  ${old}\n`);
@@ -1100,6 +1158,16 @@ if (typeof process !== "undefined" && typeof process.once === "function") {
   }
 }
 
+/**
+ * Stop here, for good, once interrupted: the signal handler cleans up and exits 130. Called before
+ * each step that gives something its final name -- an interrupt after Chrome finished (during the
+ * verification or the zip write) used to let the build rename the PDF or replace the zip while the
+ * cleanup ran, and then say "nothing was finished" (2026-11-07 review).
+ */
+async function haltIfInterrupted(): Promise<void> {
+  if (interrupt.signal.aborted) await new Promise(() => {});
+}
+
 // Set inside the try and acted on after the finally: rt.exit() is process.exit(),
 // which skips finally blocks, so exiting in place left the temp Chrome profile
 // behind on every failed verification.
@@ -1134,6 +1202,7 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
         problem = `the updated zip failed its check:\n${failures.map((f) => `    - ${f}`).join("\n")}`;
       } else {
         try {
+          await haltIfInterrupted();
           await rt.rename(zipPartial, zip);
           zipPartial = null;
           replaced = true;
@@ -1151,9 +1220,8 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
   if (problem) {
     if (zipPartial !== null) await rt.removeQuietly(zipPartial);
     zipPartial = null;
-    // The PDF passed: kept under ONE fixed name (an earlier one of that name is this tool's, and is
-    // replaced), never under the zip's own name, where a stale copy outlived later builds.
-    await rt.removeQuietly(zipKeptPdf);
+    // The PDF passed: kept under ONE fixed name (an earlier one was removed before the render),
+    // never under the zip's own name, where a stale copy outlived later builds.
     await rt.rename(pdfPath, zipKeptPdf);
     console.error("");
     if (replaced) {
@@ -1169,8 +1237,6 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
     return false;
   }
   await rt.removeQuietly(pdfPath);
-  // A PDF kept by an earlier failed update is superseded by the one now in the zip.
-  await rt.removeQuietly(zipKeptPdf);
   if (!keepHtml) await rt.removeQuietly(htmlPath);
   console.log(
     `\nAdded ${zipPdfName} to ${zip}` +
@@ -1221,7 +1287,7 @@ try {
     interrupt.signal,
   );
   // An interrupt is handled by its signal handler (cleanup, then exit 130); this flow stops here.
-  if (interrupt.signal.aborted) await new Promise(() => {});
+  await haltIfInterrupted();
   if (result.timedOut) {
     const limit =
       chromeTimeoutMs < 1000 ? `${chromeTimeoutMs} ms` : `${Math.round(chromeTimeoutMs / 1000)} s`;
@@ -1351,6 +1417,7 @@ try {
 
   // The final name only now: verified, or verification turned off by request. Same folder, so a
   // rename, never a copy across drives.
+  await haltIfInterrupted();
   if (!verificationFailed && zipPath !== null) {
     zipFailed = !(await addPdfToZip(zipPath, candidatePdf, htmlPath));
   } else if (!verificationFailed) {

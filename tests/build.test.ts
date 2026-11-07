@@ -2459,6 +2459,69 @@ test("the zip update is checked independently: any change but the PDF is caught"
   assert.throws(() => testUnzip(skew), /local header field 14/);
 });
 
+test(
+  "review 3, group B: no stale verified PDF, no lenient read, no hang",
+  { timeout: TIMEOUT },
+  async () => {
+    // 1. A zip build removes an earlier run's <zip>.verified.pdf BEFORE the render, as the folder
+    //    build removes its old PDF: afterwards it survived a later build without a word. Proved on
+    //    a build that fails after that point (a Chrome timeout), so nothing new takes the name.
+    const dir = join(work, "zip-stale");
+    mkdirSync(dir, { recursive: true });
+    const zipPath = join(dir, "pack.zip");
+    writeFileSync(zipPath, testZip(filesOf(SAMPLES).slice(0, 2)));
+    const stale = join(dir, "pack.verified.pdf");
+    writeFileSync(stale, "%PDF-1.7 an earlier run's");
+    const timedOut = run([MAIN, zipPath], { env: { ...process.env, S3D_CHROME_TIMEOUT_MS: "1" } });
+    assert.equal(timedOut.code, 1, tail(timedOut.out));
+    has(timedOut.out, /did not finish within/);
+    assert.ok(!existsSync(stale), "an earlier verified PDF outlived the build");
+
+    // 2. A folder report that is not UTF-8 is refused, named -- not decoded to U+FFFD on both sides.
+    const latin = join(work, "latin1");
+    mkdirSync(latin, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"));
+    const i = sample.indexOf("Member");
+    assert.ok(i > 0, "the sample has no 'Member' to re-encode");
+    writeFileSync(
+      join(latin, "member_0_report.html"),
+      Buffer.concat([sample.subarray(0, i + 1), Buffer.from([0xe9]), sample.subarray(i + 2)]),
+    );
+    const refused = build(latin);
+    assert.equal(refused.code, 1, tail(refused.out));
+    has(refused.out, /member_0_report\.html: is not valid UTF-8/);
+    assert.ok(!existsSync(refused.html), "a refused build baked anything");
+
+    // 3. Contradictory flags are refused, not settled silently.
+    const both = run([MAIN, latin, join(latin, "o.pdf"), "--keep-html", "--no-keep-html"]);
+    assert.equal(both.code, 1);
+    has(both.out, /contradict/);
+
+    // 4. runWithTimeout settles on the process's exit when a helper keeps its stderr open: it used
+    //    to wait as long as the helper lived, and then report a timeout for an exit 0.
+    const rt = await import(pathToFileURL(join(ROOT, "src", "report_runtime.ts")).href);
+    const parent = join(work, "holds-stderr.mjs");
+    const pidFile = join(work, "helper.pid");
+    writeFileSync(
+      parent,
+      `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";\n` +
+        `const c = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], ` +
+        `{ stdio: ["ignore", "ignore", "inherit"], detached: true });\n` +
+        `writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); c.unref(); process.exit(0);\n`,
+    );
+    const t0 = Date.now();
+    const r = await rt.runWithTimeout(process.execPath, [parent], 20_000);
+    const took = Date.now() - t0;
+    try {
+      process.kill(Number(readFileSync(pidFile, "utf8")));
+    } catch {
+      // already gone
+    }
+    assert.deepEqual([r.code, r.timedOut], [0, false], "an exit 0 reported as a timeout");
+    assert.ok(took < 10_000, `waited ${took} ms on a pipe the process no longer held`);
+  },
+);
+
 test("private paths stay ignored by git", () => {
   // Client data, transcripts, build output, and the workspace's private memory folder. cmem/local/
   // was missing: `/local/` covers the top-level folder only, and the workspace rules put machine

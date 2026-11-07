@@ -306,6 +306,9 @@ export async function run(cmd: string, argv: string[]): Promise<RunResult> {
   });
 }
 
+/** How long stderr may stay open after the process exits before {@link runWithTimeout} settles. */
+const EXIT_GRACE_MS = 2_000;
+
 /** {@link RunResult}, and whether the process was killed for outliving its time. */
 export type TimedRunResult = RunResult & { timedOut: boolean };
 
@@ -344,11 +347,17 @@ export async function runWithTimeout(
     let timedOut = false;
     let killed = false;
     let settled = false;
+    /** The exit status once the process itself has exited, before its stderr has closed. */
+    let exited: number | null = null;
+    let grace: ReturnType<typeof setTimeout> | undefined;
     const settle = (r: TimedRunResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(grace);
       signal?.removeEventListener("abort", stop);
+      // Our end of a pipe a helper still holds: let go of it, or the event loop waits on it.
+      child.stderr?.destroy();
       resolve(r);
     };
     function stop() {
@@ -366,6 +375,9 @@ export async function runWithTimeout(
       child.kill("SIGKILL");
     }
     const timer = setTimeout(() => {
+      // It exited in time; only a pipe was still open. Not a timeout (the build would have
+      // called a finished PDF "not finished").
+      if (exited !== null) return settle({ code: exited, stderr, timedOut: false });
       timedOut = true;
       stop();
     }, timeoutMs);
@@ -379,7 +391,17 @@ export async function runWithTimeout(
 
     child.on("error", (e) => settle({ code: -1, stderr: `${stderr}${e}`, timedOut }));
     child.on("exit", (code) => {
-      if (killed) settle({ code: code ?? -1, stderr, timedOut });
+      exited = code ?? -1;
+      if (killed) return settle({ code: exited, stderr, timedOut });
+      // Exited by itself: `close` follows once every holder of stderr lets go. A helper that
+      // inherited the pipe can hold it for as long as it lives, and `exit` never fires again --
+      // so the wait was unbounded, the timeout's kill could not reach a tree whose root was gone,
+      // and the result then said timedOut for a process that exited 0 (2026-11-07 review). The
+      // stderr written so far, and the status, after a short grace.
+      grace = setTimeout(
+        () => settle({ code: exited ?? -1, stderr, timedOut: false }),
+        EXIT_GRACE_MS,
+      );
     });
     child.on("close", (code) => settle({ code: code ?? -1, stderr, timedOut }));
   });
@@ -392,21 +414,28 @@ export async function runWithTimeout(
 /**
  * Path to an installed Chrome or Edge, or `null` if none was found.
  *
- * `CHROME_PATH` is tried first; the rest are standard *system install*
- * locations, not user directories.
+ * `CHROME_PATH` is tried first; the rest are the browsers' standard install locations -- the
+ * system ones, Chrome's per-user Windows install (`%LOCALAPPDATA%`, what a user without admin
+ * rights gets), and the Linux package and snap names (2026-11-07 review: each was "Could not find").
  */
 export async function findChrome(): Promise<string | null> {
   const fromEnv = env("CHROME_PATH");
+  const localAppData = env("LOCALAPPDATA");
   const candidates = [
     ...(fromEnv ? [fromEnv] : []),
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    ...(localAppData ? [`${localAppData}\\Google\\Chrome\\Application\\chrome.exe`] : []),
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
     "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
+    "/snap/bin/chromium",
+    "/usr/bin/microsoft-edge",
   ];
 
   for (const candidate of candidates) {

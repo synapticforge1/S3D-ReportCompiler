@@ -44,13 +44,26 @@
 import {
   bakeBody, bakeStyle, assembleDocument, mathStyleSheet,
   findLeftoverMath, findBrokenReferences, mathStats, audit, delimSignatures, sortReportNames,
-  resetBakeState, skippedDelims, svgStyleWarnings, cssWarnings, bakeWarnings,
+  resetBakeState, skippedDelims, svgStyleWarnings, cssWarnings, bakeWarnings, decodeReport,
 } from "./report_core.browser.js";
 
 const log = (msg) => { document.getElementById("log").textContent += "\n" + msg; };
 let combined = "";
 
-document.getElementById("bake").addEventListener("click", async () => {
+const bakeButton = document.getElementById("bake");
+bakeButton.addEventListener("click", async () => {
+  // One bake at a time: a second click during the fetches reset the core's state under the first
+  // bake, and both wrote the same document -- the one printed was not the one checked.
+  if (bakeButton.disabled) return;
+  bakeButton.disabled = true;
+  try {
+    await bake();
+  } finally {
+    bakeButton.disabled = false;
+  }
+});
+
+async function bake() {
   document.getElementById("log").textContent = "Baking...";
   // The core's counters are cumulative per page: without this, a second Bake inherited the
   // first one's failures (and was refused) and its delimiters.
@@ -68,7 +81,15 @@ document.getElementById("bake").addEventListener("click", async () => {
   for (let i = 0; i < names.length; i++) {
     const res = await fetch(names[i]);
     if (!res.ok) { log(`FAILED to fetch ${names[i]}: ${res.status}`); return; }
-    const src = await res.text();
+    // Not res.text(): it decodes as UTF-8 whatever the report declares, turning a bad byte into
+    // U+FFFD on both sides of the check. decodeReport refuses such a report instead.
+    let src;
+    try {
+      src = decodeReport(new Uint8Array(await res.arrayBuffer()), names[i]);
+    } catch (e) {
+      log(`REFUSING: ${e.message}`);
+      return;
+    }
     sources.push(src);
     styles.push(bakeStyle(src, `.rs${i}`, `r${i}-`));
     bodies.push(bakeBody(src, `r${i}-`));
@@ -116,7 +137,7 @@ document.getElementById("bake").addEventListener("click", async () => {
 
   document.getElementById("print").disabled = false;
   log("Ready to print.");
-});
+}
 
 document.getElementById("print").addEventListener("click", () => {
   const frame = document.getElementById("preview");
