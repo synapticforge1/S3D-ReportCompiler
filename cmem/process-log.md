@@ -452,6 +452,19 @@ committed with its test, and every test was run on the previous code first. Thre
 | a refusal path inside a loop refuses | `continue` skipped one field and wrote the file |
 | "--output" can be any file the user names | `reports pack.zip` deleted the zip before the build began |
 
+**Then the branch clean-up and 1.2.0** (owner: "if everything is merged into main and commited and
+ready for release 1.2.0 then we can delete the branches", "All merged branches", then "release
+1.2.0"):
+- Every old workflow copy is gone: the 11 `release/v*` branches and the 4 merged work branches on
+  GitHub, and the 7 merged local branches, were deleted after a check that nothing was unmerged.
+- Main was pushed and CI ran green BEFORE the bump, so the release tagged a commit already tested
+  on Linux.
+- 1.2.0 went out on the first attempt: JSR attested, npm with provenance, and every job of the
+  reworked workflow green.
+- ⚠️ One slip, no leak: a push went ahead while its message scan reported a hit. The hit was the
+  placeholder `X:\Users\<name>`, so nothing was exposed. A scan must STOP the push, not report
+  beside it.
+
 ## What I would tell the next person
 
 1. **"0 failed" is not "nothing went wrong."** Three separate failure modes here were silent. That is

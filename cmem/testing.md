@@ -479,8 +479,9 @@ was checked on the real 48 with values stripped (48 accepted), never printing on
 - The 75-report copy in `local/skyciv-zip-test/` was refreshed from the untouched download: its
   old `pack.pdf` predates the own-PDF mark and is now (rightly) refused as a user's file.
 - fnm v1.39.0's digest was matched against GitHub's published one before it was pinned in CI.
-- ⚠️ Not run here: `publish.yml`'s new jobs (`record`, `finalize`, the SemVer gate on the runner),
-  first exercised by the next release; the Linux branches of the new tests (CI, on the next push).
+- ✅ Since run: the Linux branches, on the push of `68ef6e0` (CI 42337350760, all 7 jobs); and
+  `publish.yml`'s new jobs, in the 1.2.0 release (run 42337922832: the SemVer gate on the runner,
+  `record`, `finalize`, all green).
 - ⚠️ Probing: a temporary debug copy of the redactor's patterns went stale and misled one run (a
   residue hit read from an old pattern) — re-read the real script's output, not a copy's.
 
