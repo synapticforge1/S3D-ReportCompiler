@@ -312,9 +312,16 @@ const chromeTimeoutMs =
   timeoutSetting === undefined || timeoutSetting.trim() === ""
     ? 10 * 60_000
     : Number(timeoutSetting);
-if (!Number.isFinite(chromeTimeoutMs) || chromeTimeoutMs <= 0) {
+// At most what a timer can hold: past 2^31 - 1 ms a timer fires after 1 ms, so "a very long
+// time" killed Chrome at once (2026-11-06 review).
+if (
+  !Number.isFinite(chromeTimeoutMs) ||
+  chromeTimeoutMs < 1 ||
+  chromeTimeoutMs > rt.MAX_TIMEOUT_MS
+) {
   settingError(
-    `S3D_CHROME_TIMEOUT_MS=${JSON.stringify(timeoutSetting)} is not a positive number of milliseconds.`,
+    `S3D_CHROME_TIMEOUT_MS=${JSON.stringify(timeoutSetting)} is not a number of milliseconds from 1 ` +
+      `to ${rt.MAX_TIMEOUT_MS} (about 24 days).`,
   );
 }
 const chromeSetting = rt.env("CHROME_PATH");
@@ -398,15 +405,41 @@ const outputPdf =
         positional[1] ?? rt.joinPath(workingDir, OUTPUT_DIR, "combined_report.pdf"),
       );
 
-// The second argument names the PDF FILE. A folder there could not be replaced, so Chrome's write
-// failed ("Access is denied"), the run ended in a stack trace blaming Chrome, and a stray
-// "<folder>.html" was left beside it.
-if (await rt.dirExists(outputPdf)) {
-  console.error(`The output is a folder, not a PDF file:\n  ${outputPdf}\n`);
-  console.error(
-    `The second argument names the PDF itself, e.g. "${rt.joinPath(outputPdf, "combined_report.pdf")}".`,
-  );
+/**
+ * Where a zip build keeps its PDF when it PASSED but could not be added to the zip -- one fixed
+ * name, replaced by the next such run and removed by the next successful one, so a stale verified
+ * PDF never sits beside the zip under the zip's own name (2026-11-06 review).
+ */
+const zipKeptPdf = zipPath === null ? "" : rt.joinPath(zipDir, `${zipStem}.verified.pdf`);
+
+// The second argument names the PDF FILE, and only a .pdf: the file at that path is replaced, so
+// `reports pack.zip` ("compile into the zip") deleted the zip, and `reports notes.docx` the
+// document, before the build ran (2026-11-06 review).
+if (zipPath === null && !/\.pdf$/i.test(outputPdf)) {
+  console.error(`The output must be a .pdf file:\n  ${outputPdf}\n`);
+  console.error("The second argument names the PDF to write, and a file of that name is replaced.");
+  if (/\.zip$/i.test(outputPdf)) {
+    console.error(`To add the PDF to a SkyCiv zip, give the zip as the ONLY argument:`);
+    console.error(`  s3d-reportcompiler "${outputPdf}"`);
+  }
   rt.exit(1);
+}
+
+// A folder where the build must write a file could not be replaced: Chrome's write failed
+// ("Access is denied"), the run ended in a stack trace blaming Chrome, and a stray "<folder>.html"
+// was left beside it.
+for (const path of zipPath === null
+  ? [outputPdf]
+  : [`${outputPdf.replace(/\.pdf$/i, "")}.unverified.pdf`, zipKeptPdf]) {
+  if (await rt.dirExists(path)) {
+    console.error(`A folder is where the build must write a file:\n  ${path}\n`);
+    console.error(
+      zipPath === null
+        ? `The second argument names the PDF itself, e.g. "${rt.joinPath(path, "combined_report.pdf")}".`
+        : "Move or rename that folder, then re-run.",
+    );
+    rt.exit(1);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -668,12 +701,13 @@ let allHtml: string[] = [];
 const contents = new Map<string, string>();
 /** The zip's bytes as read: the PDF is added to THESE, and only if the file still holds them. */
 let zipBytes: Uint8Array = new Uint8Array(0);
-let zipHadPdf = false;
+/** The PDF an earlier run added to the zip (found by its mark), or null. */
+let zipOwnPdf: string | null = null;
 if (zipPath !== null) {
   try {
     zipBytes = await rt.readFile(zipPath);
     const read = await readZipReports(zipBytes, zipPdfName);
-    zipHadPdf = read.hasOwn;
+    zipOwnPdf = read.own;
     for (const r of read.reports) {
       allHtml.push(r.name);
       contents.set(r.name, r.html);
@@ -682,13 +716,6 @@ if (zipPath !== null) {
     console.error(`Cannot compile this zip:\n  ${zipPath}\n`);
     console.error((e as Error).message);
     console.error(`\nA SkyCiv export is a flat set of member_*.html reports. Nothing was changed.`);
-    rt.exit(1);
-  }
-  // The baked HTML is written beside the zip. A file of that name that is not a previous bake is
-  // the user's, and is not overwritten.
-  if ((await rt.fileExists(outputHtml)) && !isBakedDocument(await rt.readTextFile(outputHtml))) {
-    console.error(`A file the build would overwrite is already beside the zip:\n  ${outputHtml}\n`);
-    console.error("Move or rename it (or the zip), then re-run.");
     rt.exit(1);
   }
 } else {
@@ -772,6 +799,19 @@ for (const out of zipPath === null ? new Set([outputPdf, outputHtml]) : []) {
   rt.exit(1);
 }
 
+// The baked HTML is written beside the PDF, under its name, and replaced -- or deleted, with
+// --no-keep-html. A file of that name that is not a previous bake is the user's: `reports
+// site/index.pdf` replaced site/index.html, and with --no-keep-html deleted it (2026-11-06 review;
+// only the zip build checked). Both builds refuse now.
+if ((await rt.fileExists(outputHtml)) && !isBakedDocument(await rt.readTextFile(outputHtml))) {
+  console.error(`A file the build would overwrite is already there:\n  ${outputHtml}\n`);
+  console.error(
+    "It is not a document this tool baked. Move or rename it (or choose another output",
+  );
+  console.error("name), then re-run.");
+  rt.exit(1);
+}
+
 const entries = sortReportNames(
   allHtml.filter((n) => !TOOL_OWNED.has(n.toLowerCase()) && !bakedLeftovers.has(n)),
 );
@@ -819,7 +859,7 @@ console.log(`Compiling ${entries.length} report(s) on ${rt.RUNTIME}`);
 if (zipPath !== null) {
   console.log(
     `  zip:      ${rt.baseName(zipPath)}, ${allHtml.length} report entr${allHtml.length === 1 ? "y" : "ies"}` +
-      (zipHadPdf ? `, and ${zipPdfName} from an earlier run (it will be replaced)` : ""),
+      (zipOwnPdf === null ? "" : `, and ${zipOwnPdf} from an earlier run (it will be replaced)`),
   );
 }
 if (skipped > 0) {
@@ -896,6 +936,21 @@ for (const rule of cssWarnings) {
 }
 for (const warning of bakeWarnings) console.warn(`  warning: ${warning}`);
 
+/**
+ * Said with a refusal before the render: a PDF already at the output name is an EARLIER build's.
+ * It is left (a refusal deletes nothing), but it does not reflect these reports, and a reader
+ * finding it beside a failed run could take it for this one (2026-11-06 review).
+ */
+async function noteEarlierPdf(): Promise<void> {
+  const earlier = zipPath === null ? outputPdf : zipKeptPdf;
+  if (await rt.fileExists(earlier)) {
+    console.error(
+      `\nThe PDF already at\n  ${earlier}\nis from an earlier build. It was not replaced,`,
+    );
+    console.error("and it does NOT reflect the reports as they are now.");
+  }
+}
+
 const leftovers = findLeftoverMath(bodies.join(""));
 if (leftovers.length > 0 || mathStats.failed > 0) {
   console.error("");
@@ -905,6 +960,7 @@ if (leftovers.length > 0 || mathStats.failed > 0) {
   console.error("");
   console.error("These are sealed engineering calculations; refusing to emit a PDF");
   console.error("containing raw LaTeX. Check the reports' tex2jax configuration.");
+  await noteEarlierPdf();
   rt.exit(1);
 }
 
@@ -920,6 +976,7 @@ try {
   console.error(`\nERROR: the maths fonts could not be loaded.\n  ${(e as Error).message}\n`);
   console.error("The first build downloads them once into .mathjax-fonts/ in this folder; later");
   console.error("builds work offline. Check the network (or a login page on it), then re-run.");
+  await noteEarlierPdf();
   rt.exit(1);
 }
 
@@ -944,6 +1001,7 @@ const combinedHtml = assembleDocument(bodies, styles, mathCss);
     console.error("");
     console.error("A graphic's gradient, clip path or marker would silently vanish; refusing");
     console.error("to emit a PDF. Every renamed id must carry its references with it.");
+    await noteEarlierPdf();
     rt.exit(1);
   }
 }
@@ -1020,14 +1078,21 @@ const workDir = await rt.makeTempDir("compiled_reports_");
 /** The updated zip while it is being written and checked, beside the original. */
 let zipPartial: string | null = null;
 
-// Ctrl-C (or a kill) during the render: the temp profile is removed, not left behind -- 66 old
-// profiles had collected in the temp folder. The exit code says it was interrupted.
+// Ctrl-C (or a kill) during the build: Chrome is stopped too -- a SIGTERM sent to this process
+// alone left it running, still able to write its PDF afterwards -- and the temp profile, the
+// partial zip and the unverified PDF are removed (66 old profiles had collected in the temp
+// folder). Always exit 130: the build used to carry on while cleanup ran, and end with 1 or 130
+// depending on which finished first (2026-11-06 review).
+const interrupt = new AbortController();
 if (typeof process !== "undefined" && typeof process.once === "function") {
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
+      interrupt.abort();
+      console.error(`\nInterrupted (${signal}): nothing was finished. Cleaning up...`);
       void Promise.all([
         rt.removeQuietly(workDir, true),
         zipPartial === null ? undefined : rt.removeQuietly(zipPartial),
+        rt.removeQuietly(candidatePdf),
       ]).finally(() => rt.exit(130));
     });
   }
@@ -1038,6 +1103,7 @@ if (typeof process !== "undefined" && typeof process.once === "function") {
 // behind on every failed verification.
 let verificationFailed = false;
 let zipFailed = false;
+let buildFailed = false;
 
 /**
  * Add the verified PDF to the zip, or say why not and leave the zip exactly as it was. The zip is
@@ -1052,6 +1118,8 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
   const same = (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((x, i) => x === b[i]);
   let problem = "";
+  /** Past the rename the zip IS the new one: a later failure must not say "unchanged". */
+  let replaced = false;
   try {
     if (!same(await rt.readFile(zip), zipBytes)) {
       problem = "the zip changed while the build ran (re-run on the zip as it is now)";
@@ -1066,10 +1134,11 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
         try {
           await rt.rename(zipPartial, zip);
           zipPartial = null;
+          replaced = true;
         } catch (e) {
           problem = `the zip could not be replaced -- is it open in another program? (${(e as Error).message})`;
         }
-        if (!problem && !same(await rt.readFile(zip), written)) {
+        if (replaced && !same(await rt.readFile(zip), written)) {
           problem = "the zip on disk is not the one that was checked";
         }
       }
@@ -1080,20 +1149,31 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
   if (problem) {
     if (zipPartial !== null) await rt.removeQuietly(zipPartial);
     zipPartial = null;
-    // The PDF passed; keep it under its final name if that is free, so the work is not lost.
-    let kept = pdfPath;
-    if (!(await rt.fileExists(outputPdf))) {
-      await rt.rename(pdfPath, outputPdf);
-      kept = outputPdf;
-    }
+    // The PDF passed: kept under ONE fixed name (an earlier one of that name is this tool's, and is
+    // replaced), never under the zip's own name, where a stale copy outlived later builds.
+    await rt.removeQuietly(zipKeptPdf);
+    await rt.rename(pdfPath, zipKeptPdf);
     console.error("");
-    console.error(`The PDF PASSED, but it was NOT added to the zip: ${problem}`);
-    console.error(`The zip is unchanged. The verified PDF is kept at:\n  ${kept}`);
+    if (replaced) {
+      console.error(
+        `The PDF PASSED and the zip WAS replaced, but reading it back failed: ${problem}`,
+      );
+      console.error("Check the zip before issuing it, or re-run the build on it.");
+    } else {
+      console.error(`The PDF PASSED, but it was NOT added to the zip: ${problem}`);
+      console.error("The zip is unchanged.");
+    }
+    console.error(`The verified PDF is kept at:\n  ${zipKeptPdf}`);
     return false;
   }
   await rt.removeQuietly(pdfPath);
+  // A PDF kept by an earlier failed update is superseded by the one now in the zip.
+  await rt.removeQuietly(zipKeptPdf);
   if (!keepHtml) await rt.removeQuietly(htmlPath);
-  console.log(`\nAdded ${zipPdfName} to ${zip}${zipHadPdf ? " (replacing the earlier one)" : ""}`);
+  console.log(
+    `\nAdded ${zipPdfName} to ${zip}` +
+      (zipOwnPdf === null ? "" : ` (replacing ${zipOwnPdf}, from an earlier run)`),
+  );
   console.log(`  checked:  every report entry unchanged, the PDF entry byte-identical`);
   if (keepHtml) console.log(`Kept ${htmlPath}`);
   return true;
@@ -1136,14 +1216,18 @@ try {
       await rt.toFileUrl(htmlPath),
     ],
     chromeTimeoutMs,
+    interrupt.signal,
   );
+  // An interrupt is handled by its signal handler (cleanup, then exit 130); this flow stops here.
+  if (interrupt.signal.aborted) await new Promise(() => {});
   if (result.timedOut) {
+    const limit =
+      chromeTimeoutMs < 1000 ? `${chromeTimeoutMs} ms` : `${Math.round(chromeTimeoutMs / 1000)} s`;
     throw new Error(
-      `Chrome did not finish within ${Math.round(chromeTimeoutMs / 1000)} s and was stopped. ` +
+      `Chrome did not finish within ${limit} and was stopped. ` +
         `A larger document may need more: set S3D_CHROME_TIMEOUT_MS (milliseconds).`,
     );
   }
-
   let rendered: Uint8Array;
   try {
     rendered = await rt.readFile(candidatePdf);
@@ -1154,7 +1238,17 @@ try {
         "ordinary user, set S3D_CHROME_NO_SANDBOX=1 for this build (the reports' own code is " +
         "still blocked: the bake strips it and the document forbids scripts)."
       : "";
-    throw new Error(`Chrome produced no PDF.\n${result.stderr.trim()}${sandboxHint}`);
+    throw new Error(
+      `Chrome produced no PDF (exit status ${result.code}).\n${result.stderr.trim()}${sandboxHint}`,
+    );
+  }
+  // Chrome's exit status counts too, even with a PDF written: it was never read, so a Chrome that
+  // crashed after writing one still ended in "Created" under --no-verify (2026-11-06 review).
+  if (result.code !== 0) {
+    throw new Error(
+      `Chrome wrote a PDF but exited with status ${result.code}, so the PDF cannot be trusted.\n` +
+        result.stderr.trim(),
+    );
   }
 
   console.log(`  rendered: ${(rendered.length / 1e6).toFixed(2)} MB`);
@@ -1265,9 +1359,15 @@ try {
     console.log(`\nCreated ${outputPdf}${verify ? "" : "  (NOT verified: --no-verify)"}`);
     if (keepHtml) console.log(`Kept ${htmlPath}`);
   }
+} catch (e) {
+  // Said as a message, not a stack trace: the cause (a timeout, a Chrome failure, a full disk) is
+  // what the reader needs. Nothing was given its final name.
+  console.error(`\nERROR: ${(e as Error).message ?? e}`);
+  console.error("Nothing was given its final name.");
+  buildFailed = true;
 } finally {
   await rt.removeQuietly(workDir, true);
   if (zipPartial !== null) await rt.removeQuietly(zipPartial);
 }
 
-if (verificationFailed || zipFailed) rt.exit(1);
+if (verificationFailed || zipFailed || buildFailed) rt.exit(1);

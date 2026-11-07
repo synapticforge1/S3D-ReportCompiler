@@ -309,41 +309,79 @@ export async function run(cmd: string, argv: string[]): Promise<RunResult> {
 /** {@link RunResult}, and whether the process was killed for outliving its time. */
 export type TimedRunResult = RunResult & { timedOut: boolean };
 
+/** The longest delay a timer can hold (2^31 - 1 ms, about 24.8 days); longer ones fire at once. */
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
 /**
- * {@link run}, bounded by wall-clock time: past `timeoutMs` the process is killed and `timedOut`
- * is true. Chrome's `--virtual-time-budget` bounds the page, not the process -- a Chrome stuck on
- * a profile, a dialog or a driver never exited, and neither did the build (2026-11-06).
+ * {@link run}, bounded by wall-clock time: past `timeoutMs`, or when `signal` aborts, the process
+ * AND its children are killed (Chrome runs as a tree), and `timedOut` is true for the timeout.
+ * Chrome's `--virtual-time-budget` bounds the page, not the process -- a Chrome stuck on a
+ * profile, a dialog or a driver never exited, and neither did the build (2026-11-06).
+ *
+ * After a kill it resolves when the process EXITS, not when its stderr closes: a helper that
+ * inherited the pipe could hold it open, and the build waited on it after its own timeout.
+ *
+ * @param timeoutMs 1 to {@link MAX_TIMEOUT_MS}; a longer delay overflowed the timer, which then
+ *                  fired after 1 ms and killed Chrome at once (2026-11-06 review)
  */
 export async function runWithTimeout(
   cmd: string,
   argv: string[],
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<TimedRunResult> {
   requireHost("Launching a browser");
+  if (!(timeoutMs >= 1 && timeoutMs <= MAX_TIMEOUT_MS)) {
+    throw new RangeError(`timeoutMs must be 1 to ${MAX_TIMEOUT_MS}, not ${timeoutMs}`);
+  }
   const { spawn } = await import("node:child_process");
+  const windows = typeof process !== "undefined" && process.platform === "win32";
 
   return await new Promise<TimedRunResult>((resolve) => {
-    const child = spawn(cmd, argv, { stdio: ["ignore", "ignore", "pipe"] });
+    // Its own process group on POSIX, so the group can be killed whole.
+    const child = spawn(cmd, argv, { stdio: ["ignore", "ignore", "pipe"], detached: !windows });
     let stderr = "";
     let timedOut = false;
+    let killed = false;
+    let settled = false;
+    const settle = (r: TimedRunResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
+      resolve(r);
+    };
+    function stop() {
+      if (killed) return;
+      killed = true;
+      try {
+        if (windows && child.pid !== undefined) {
+          spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+        } else if (child.pid !== undefined) {
+          process.kill(-child.pid, "SIGKILL");
+        }
+      } catch {
+        // fall through to the direct kill
+      }
+      child.kill("SIGKILL");
+    }
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      stop();
     }, timeoutMs);
+    if (signal?.aborted) stop();
+    signal?.addEventListener("abort", stop);
 
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
       stderr += chunk;
     });
 
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      resolve({ code: -1, stderr: `${stderr}${e}`, timedOut });
+    child.on("error", (e) => settle({ code: -1, stderr: `${stderr}${e}`, timedOut }));
+    child.on("exit", (code) => {
+      if (killed) settle({ code: code ?? -1, stderr, timedOut });
     });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? -1, stderr, timedOut });
-    });
+    child.on("close", (code) => settle({ code: code ?? -1, stderr, timedOut }));
   });
 }
 

@@ -2671,6 +2671,8 @@ type ZipRecord = {
   size: number;
   /** The entry's compressed bytes (a view into the archive). */
   data: Uint8Array;
+  /** The entry's comment (central directory), as text: {@link ZIP_OWN_MARK} marks this tool's PDF. */
+  comment: string;
 };
 
 /** A zip, parsed and checked. Every refusal names the entry. */
@@ -2799,6 +2801,7 @@ function parseZip(zip: Uint8Array): { records: ZipRecord[]; comment: Uint8Array 
       crc,
       size,
       data: zip.subarray(start, start + csize),
+      comment: new TextDecoder().decode(zip.subarray(p + 46 + n + e, p + 46 + n + e + c)),
     });
     p += 46 + n + e + c;
   }
@@ -2863,23 +2866,32 @@ async function zipEntryBytes(r: ZipRecord): Promise<Uint8Array> {
   return out;
 }
 
+/**
+ * The entry comment that marks the PDF this tool added to a zip. It is how a later run finds its
+ * own PDF -- by mark, not by name, so a zip renamed after its PDF was added can still be rebuilt
+ * (it was refused: "pack.pdf is not a report"), and a user's own file that merely has the name is
+ * never taken for it and replaced (2026-11-06 review).
+ */
+const ZIP_OWN_MARK = "added by s3d-reportcompiler (verified)";
+
 /** The reports in a zip, and what else it held. */
 export type ZipReports = {
   /** Every `.html` entry, in the zip's order, decoded as UTF-8 exactly as the folder build reads a file. */
   reports: { name: string; html: string }[];
-  /** True if the zip already holds `ownName` -- the PDF of an earlier run, which a new one replaces. */
-  hasOwn: boolean;
+  /** The name of the PDF an earlier run added (found by its mark), which a new one replaces; or null. */
+  own: string | null;
 };
 
 /**
  * Read the reports from a SkyCiv zip: every `.html` entry, unpacked in memory and checked against
  * its CRC. Throws -- naming every problem -- on anything else in it: a folder, a nested path, a file
- * that is not `.html` (except `ownName`, this tool's own PDF from an earlier run), two names that
- * differ only in case, and every archive shape the reader does not handle (zip64, encryption, a
- * method other than stored or deflate, damage).
+ * that is not `.html` (except the PDF this tool added, found by its mark), two names that differ
+ * only in case, an unmarked `ownName` (a file of the user's that a build would replace), and every
+ * archive shape the reader does not handle (zip64, encryption, a method other than stored or
+ * deflate, damage).
  *
  * @param zip     the archive's bytes
- * @param ownName the name of the PDF this tool adds to the zip (compared without case)
+ * @param ownName the name this build's PDF will take in the zip (compared without case)
  *
  * @example
  * ```ts
@@ -2892,7 +2904,7 @@ export async function readZipReports(zip: Uint8Array, ownName: string): Promise<
   const { records } = parseZip(zip);
   const problems: string[] = [];
   const seen = new Map<string, string>();
-  let hasOwn = false;
+  let own: string | null = null;
   const html: ZipRecord[] = [];
   for (const r of records) {
     const key = r.name.toLowerCase();
@@ -2901,8 +2913,12 @@ export async function readZipReports(zip: Uint8Array, ownName: string): Promise<
     seen.set(key, r.name);
     if (r.name.endsWith("/")) problems.push(`"${r.name}" is a folder`);
     else if (/[/\\]/.test(r.name)) problems.push(`"${r.name}" is inside a folder`);
-    else if (key === ownName.toLowerCase()) hasOwn = true;
-    else if (key.endsWith(".html")) html.push(r);
+    else if (r.comment === ZIP_OWN_MARK) own = r.name;
+    else if (key === ownName.toLowerCase()) {
+      problems.push(
+        `"${r.name}" is not a report, and not a PDF this tool added -- a build would replace it`,
+      );
+    } else if (key.endsWith(".html")) html.push(r);
     else problems.push(`"${r.name}" is not a report (.html)`);
   }
   if (problems.length > 0) {
@@ -2915,14 +2931,17 @@ export async function readZipReports(zip: Uint8Array, ownName: string): Promise<
   const reports: ZipReports["reports"] = [];
   for (const r of html)
     reports.push({ name: r.name, html: decoder.decode(await zipEntryBytes(r)) });
-  return { reports, hasOwn };
+  return { reports, own };
 }
 
 /**
- * The zip with `file` added under `name`, replacing an entry of that name (compared without case).
- * Every other entry is copied byte for byte -- its compressed data is never re-encoded -- in its
- * original order, and the archive comment is kept; the new file is appended, stored (a PDF is
- * already compressed). Check the result with {@link checkZipUpdate} before it replaces anything.
+ * The zip with `file` added under `name`, marked as this tool's, replacing the PDF an earlier run
+ * added (found by its mark, whatever its name). Every other entry's compressed data, name, CRC,
+ * sizes and central-directory record are kept -- the data is never re-encoded -- in the original
+ * order, as is the archive comment; each local header is rewritten (sizes in place of a data
+ * descriptor) and its offset updated. The new file is appended, stored (a PDF is already
+ * compressed). Throws if an unmarked entry already has `name`. Check the result with
+ * {@link checkZipUpdate} before it replaces anything.
  *
  * @param date the new entry's timestamp (local time, as zips record it)
  */
@@ -2933,8 +2952,12 @@ export function zipWithFile(
   date: Date,
 ): Uint8Array {
   const { records, comment } = parseZip(zip);
-  const kept = records.filter((r) => r.name.toLowerCase() !== name.toLowerCase());
+  const kept = records.filter((r) => r.comment !== ZIP_OWN_MARK);
+  if (kept.some((r) => r.name.toLowerCase() === name.toLowerCase())) {
+    throw new Error(`the zip already holds "${name}", which this tool did not add`);
+  }
   const nameBytes = new TextEncoder().encode(name);
+  const markBytes = new TextEncoder().encode(ZIP_OWN_MARK);
   const year = Math.max(1980, Math.min(2107, date.getFullYear()));
   const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1);
   const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
@@ -2994,8 +3017,9 @@ export function zipWithFile(
     cv.setUint32(20, file.length, true);
     cv.setUint32(24, file.length, true);
     cv.setUint16(28, nameBytes.length, true);
+    cv.setUint16(32, markBytes.length, true); // the entry comment: this tool's mark
     cv.setUint32(42, offset, true);
-    centrals.push(cb, nameBytes);
+    centrals.push(cb, nameBytes, markBytes);
     offset += 30 + nameBytes.length + file.length;
   }
   const cdSize = centrals.reduce((s, c) => s + c.length, 0);
@@ -3043,7 +3067,7 @@ export async function checkZipUpdate(
   } catch (e) {
     return [(e as Error).message];
   }
-  const kept = before.records.filter((r) => r.name.toLowerCase() !== name.toLowerCase());
+  const kept = before.records.filter((r) => r.comment !== ZIP_OWN_MARK);
   const same = (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((x, i) => x === b[i]);
   if (after.records.length !== kept.length + 1) {
@@ -3057,13 +3081,20 @@ export async function checkZipUpdate(
       u.method !== r.method ||
       u.crc !== r.crc ||
       u.size !== r.size ||
+      u.comment !== r.comment ||
       !same(u.data, r.data)
     ) {
       failures.push(`"${r.name}" is not carried over unchanged`);
     }
   });
   const added = after.records[after.records.length - 1];
-  if (!added || added.name !== name || added.method !== 0 || !same(added.data, file)) {
+  if (
+    !added ||
+    added.name !== name ||
+    added.method !== 0 ||
+    added.comment !== ZIP_OWN_MARK ||
+    !same(added.data, file)
+  ) {
     failures.push(`"${name}" is not the file that was added`);
   } else if (added.crc !== crc32(file)) {
     failures.push(`"${name}" records the wrong CRC`);
@@ -3077,7 +3108,7 @@ export async function checkZipUpdate(
     ) {
       failures.push("the reports read back differently");
     }
-    if (!b.hasOwn) failures.push(`"${name}" is not found by name`);
+    if (b.own !== name) failures.push(`"${name}" is not found by its mark`);
   } catch (e) {
     failures.push((e as Error).message);
   }

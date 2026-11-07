@@ -309,7 +309,13 @@ test("an output that would overwrite a source report is refused", { timeout: TIM
   for (const out of outs) {
     const r = run([MAIN, input, join(input, out)]);
     assert.equal(r.code, 1, `${out}:\n${tail(r.out)}`);
-    has(r.out, /The output would overwrite a source report/);
+    // A .html output is refused before anything else since 2026-11-06: only a .pdf is an output.
+    has(
+      r.out,
+      out.endsWith(".html")
+        ? /The output must be a \.pdf file/
+        : /The output would overwrite a source report/,
+    );
     hasNot(r.out, /Compiling/);
     assert.equal(readFileSync(report, "utf8"), original, `${out} changed the source report`);
   }
@@ -1274,7 +1280,9 @@ test("full review, group C: a build says what happened", { timeout: TIMEOUT }, a
   for (const [env, why] of [
     [{ CHROME_PATH: join(work, "no-such-chrome.exe") }, /CHROME_PATH names no file/],
     [{ S3D_CHROME_NO_SANDBOX: "maybe" }, /S3D_CHROME_NO_SANDBOX="maybe" is not/],
-    [{ S3D_CHROME_TIMEOUT_MS: "soon" }, /S3D_CHROME_TIMEOUT_MS="soon" is not a positive/],
+    [{ S3D_CHROME_TIMEOUT_MS: "soon" }, /S3D_CHROME_TIMEOUT_MS="soon" is not a number of milli/],
+    // Past what a timer holds it fired after 1 ms and killed Chrome at once (2026-11-06 review).
+    [{ S3D_CHROME_TIMEOUT_MS: "2147483648" }, /="2147483648" is not a number of milliseconds/],
   ] as const) {
     const r = run([MAIN, input, out("c-settings")], { env: { ...process.env, ...env } });
     assert.equal(r.code, 1, tail(r.out));
@@ -1282,13 +1290,14 @@ test("full review, group C: a build says what happened", { timeout: TIMEOUT }, a
     hasNot(r.out, /Compiling/);
   }
 
-  // A folder as the output: refused up front, not a Chrome stack trace and a stray .html.
-  const folder = join(work, "c-folder-out");
+  // A folder as the output: refused up front, not a Chrome stack trace and a stray .html. Named
+  // `.pdf`, or the .pdf rule (2026-11-06, review 2) refuses it first.
+  const folder = join(work, "c-folder-out.pdf");
   mkdirSync(folder, { recursive: true });
   const f = run([MAIN, input, folder]);
   assert.equal(f.code, 1, tail(f.out));
-  has(f.out, /The output is a folder, not a PDF file/);
-  assert.ok(!existsSync(`${folder}.html`), "a stray .html was left beside the folder");
+  has(f.out, /A folder is where the build must write a file/);
+  assert.ok(!existsSync(folder.replace(/\.pdf$/, ".html")), "a stray .html was left beside it");
 
   // A failed verification: the PDF is NOT given its final name, and --no-keep-html keeps the HTML.
   const hidden = control("control-hidden-content", join(work, "c-hidden"));
@@ -1731,6 +1740,8 @@ type TestEntry = {
   crc?: number;
   /** an extra field, written into both headers */
   extra?: Uint8Array;
+  /** the entry comment (central directory) */
+  comment?: string;
 };
 
 function testZip(
@@ -1775,9 +1786,11 @@ function testZip(
     c.writeUInt32LE(e.data.length, 24);
     c.writeUInt16LE(name.length, 28);
     c.writeUInt16LE(extra.length, 30);
+    const entryComment = Buffer.from(e.comment ?? "", "utf8");
+    c.writeUInt16LE(entryComment.length, 32);
     c.writeUInt32LE(0x81a40000, 38);
     c.writeUInt32LE(at, 42);
-    central.push(c, name, extra);
+    central.push(c, name, extra, entryComment);
     parts.push(local, name, extra, body, descriptor);
     at += 30 + name.length + extra.length + body.length + descriptor.length;
   }
@@ -1866,7 +1879,7 @@ test(
     has(
       again.out,
       /pack\.pdf from an earlier run \(it will be replaced\)/,
-      /replacing the earlier/,
+      /replacing pack\.pdf, from an earlier run/,
     );
     assert.equal(testUnzip(readFileSync(zipPath)).size, 14, "the PDF was added twice");
     assert.deepEqual(readdirSync(dir), ["pack.zip"]);
@@ -1939,13 +1952,25 @@ test("a zip that is not a flat set of reports is refused, unchanged, naming why"
   const broken = testZip([ok]);
   broken[30 + "member_1_report.html".length] ^= 0xff;
   await assert.rejects(core.readZipReports(broken, "pack.pdf"), /damaged|CRC|size/, "bad deflate");
-  // The real shape reads, its own PDF is not a report, and nothing else is needed.
+  // The real shape reads, and the PDF an earlier run added is found by its MARK (the entry
+  // comment), not its name: in a zip renamed since, too. An unmarked file of the PDF's name is
+  // the user's, and refused rather than replaced.
+  const mark = "added by s3d-reportcompiler (verified)";
   const fine = await core.readZipReports(
-    testZip([ok, { name: "Pack.PDF", data: page, method: 0 }]),
+    testZip([ok, { name: "Pack.PDF", data: page, method: 0, comment: mark }]),
     "pack.pdf",
   );
   assert.equal(fine.reports.length, 1);
-  assert.equal(fine.hasOwn, true);
+  assert.equal(fine.own, "Pack.PDF");
+  const renamed = await core.readZipReports(
+    testZip([ok, { name: "pack.pdf", data: page, method: 0, comment: mark }]),
+    "job.pdf",
+  );
+  assert.equal(renamed.own, "pack.pdf", "a renamed zip's own PDF was not recognised");
+  await assert.rejects(
+    core.readZipReports(testZip([ok, { name: "pack.pdf", data: page, method: 0 }]), "pack.pdf"),
+    /not a PDF this tool added/,
+  );
 
   // Through the CLI: one refusal end to end, and the argument rules. None may touch the zip.
   const dir = join(work, "zip-refuse");
@@ -1968,10 +1993,84 @@ test("a zip that is not a flat set of reports is refused, unchanged, naming why"
   writeFileSync(join(dir, "pack.html"), "<p>the user's own file</p>");
   const mine = run([MAIN, zipPath]);
   assert.equal(mine.code, 1, tail(mine.out));
-  has(mine.out, /already beside the zip/);
+  has(mine.out, /A file the build would overwrite is already there/);
   assert.equal(readFileSync(join(dir, "pack.html"), "utf8"), "<p>the user's own file</p>");
   assert.deepEqual(readdirSync(dir).sort(), ["pack.html", "pack.zip"]);
 });
+
+test(
+  "review 2, group B: no user file is replaced, and every outcome is said as it is",
+  { timeout: TIMEOUT },
+  () => {
+    const dir = join(work, "group-b");
+    mkdirSync(join(dir, "site"), { recursive: true });
+
+    // A folder build's output must be a .pdf: `reports pack.zip` deleted the zip before the build.
+    writeFileSync(join(dir, "pack.zip"), "a user's zip");
+    const intoZip = run([MAIN, SAMPLES, join(dir, "pack.zip")]);
+    assert.equal(intoZip.code, 1, tail(intoZip.out));
+    has(intoZip.out, /The output must be a \.pdf file/, /give the zip as the ONLY argument/);
+    assert.equal(
+      readFileSync(join(dir, "pack.zip"), "utf8"),
+      "a user's zip",
+      "the zip was touched",
+    );
+
+    // A user's HTML file under the baked HTML's name is not replaced (nor deleted with
+    // --no-keep-html): `reports site/index.pdf` overwrote site/index.html.
+    writeFileSync(join(dir, "site", "index.html"), "<p>the user's page</p>");
+    for (const extra of [[], ["--no-keep-html"]]) {
+      const r = run([MAIN, SAMPLES, join(dir, "site", "index.pdf"), ...extra]);
+      assert.equal(r.code, 1, tail(r.out));
+      has(r.out, /A file the build would overwrite is already there/);
+      hasNot(r.out, /Compiling/);
+      assert.equal(readFileSync(join(dir, "site", "index.html"), "utf8"), "<p>the user's page</p>");
+    }
+
+    // A zip update that fails after a PASS: the zip is unchanged, the verified PDF is kept under ONE
+    // fixed name (not the zip's own, where a stale copy outlived later builds), and the next good
+    // run removes it. The failure here: a folder where the partial zip must be written.
+    const zdir = join(dir, "zip");
+    mkdirSync(join(zdir, "pack.zip.partial"), { recursive: true });
+    const zipPath = join(zdir, "pack.zip");
+    const original = testZip(filesOf(SAMPLES));
+    writeFileSync(zipPath, original);
+    const failed = run([MAIN, zipPath]);
+    assert.equal(failed.code, 1, tail(failed.out));
+    has(failed.out, /The PDF PASSED, but it was NOT added to the zip/, /The zip is unchanged/);
+    hasNot(failed.out, /WAS replaced/);
+    assert.ok(
+      readFileSync(zipPath).equals(Buffer.from(original)),
+      "a failed update changed the zip",
+    );
+    assert.ok(existsSync(join(zdir, "pack.verified.pdf")), "the verified PDF was not kept");
+    assert.ok(!existsSync(join(zdir, "pack.pdf")), "kept under the zip's own name");
+    rmSync(join(zdir, "pack.zip.partial"), { recursive: true });
+    const good = run([MAIN, zipPath]);
+    assert.equal(good.code, 0, tail(good.out));
+    assert.ok(!existsSync(join(zdir, "pack.verified.pdf")), "a superseded verified PDF was left");
+
+    // A zip renamed after its PDF was added can be rebuilt: its PDF is found by its mark.
+    const jobZip = join(zdir, "job.zip");
+    writeFileSync(jobZip, readFileSync(zipPath));
+    const rebuilt = run([MAIN, jobZip, "--no-keep-html"]);
+    assert.equal(rebuilt.code, 0, tail(rebuilt.out));
+    has(rebuilt.out, /pack\.pdf from an earlier run/, /Added job\.pdf .*replacing pack\.pdf/);
+    const names = [...testUnzip(readFileSync(jobZip)).keys()];
+    assert.equal(names.length, 14);
+    assert.ok(names.includes("job.pdf") && !names.includes("pack.pdf"), names.join(", "));
+
+    // A refusal before the render says that a PDF already at the output name is an earlier build's.
+    const ctl = control("control-unknown-delimiter", join(dir, "ctl"));
+    const pdf = join(ctl, "out", "c.pdf");
+    mkdirSync(join(ctl, "out"), { recursive: true });
+    writeFileSync(pdf, "%PDF- an earlier build");
+    const refused = run([MAIN, ctl, pdf]);
+    assert.equal(refused.code, 1, tail(refused.out));
+    has(refused.out, /is from an earlier build\. It was not replaced/, /does NOT reflect/);
+    assert.equal(readFileSync(pdf, "utf8"), "%PDF- an earlier build");
+  },
+);
 
 test("the zip update is checked independently: any change but the PDF is caught", async () => {
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
