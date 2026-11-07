@@ -25,7 +25,7 @@ symbol	.	ReportConservation	typeAlias	export type ReportConservation = { report:
 symbol	.	SourceTokens	typeAlias	export type SourceTokens = { words: Set<string>; numbers: Set<string>; expectedImages: number; }
 symbol	.	VERSION	variable	export declare const VERSION = "<VERSION>"
 symbol	.	VerificationResult	typeAlias	export type VerificationResult = { missingWords: string[]; missingNumbers: string[]; leftoverLatex: string[]; splitDiagrams: number[]; failures: string[]; }
-symbol	.	ZipReports	typeAlias	export type ZipReports = { reports: { name: string; html: string; }[]; hasOwn: boolean; }
+symbol	.	ZipReports	typeAlias	export type ZipReports = { reports: { name: string; html: string; }[]; own: string | null; }
 symbol	.	assembleDocument	function	export declare function assembleDocument(bodies: string[], styles: string[], mathCss: string): string
 symbol	.	audit	variable	export declare const audit: { loadersRemoved: number; bodyTagMissing: number; visibilityNeutralised: number; heightNeutralised: number; atPageDropped: number; strayTokensDropped: number; }
 symbol	.	bakeBody	function	export declare function bakeBody(src: string, prefix: string): string
@@ -56,6 +56,7 @@ symbol	.	svgStyleWarnings	variable	export declare const svgStyleWarnings: Set<st
 symbol	.	textNumbers	function	export declare function textNumbers(text: string): Set<string>
 symbol	.	textWords	function	export declare function textWords(text: string): Set<string>
 symbol	.	zipWithFile	function	export declare function zipWithFile(zip: Uint8Array, name: string, file: Uint8Array, date: Date): Uint8Array
+symbol	./runtime	MAX_TIMEOUT_MS	variable	export declare const MAX_TIMEOUT_MS = 2147483647
 symbol	./runtime	RUNTIME	variable	export declare const RUNTIME: Runtime
 symbol	./runtime	RunResult	typeAlias	export type RunResult = { code: number; stderr: string; }
 symbol	./runtime	Runtime	typeAlias	export type Runtime = "deno" | "bun" | "node" | "browser"
@@ -82,6 +83,6 @@ symbol	./runtime	removeQuietly	function	export declare function removeQuietly(ta
 symbol	./runtime	rename	function	export declare function rename(from: string, to: string): Promise<void>
 symbol	./runtime	resolvePath	function	export declare function resolvePath(target: string): Promise<string>
 symbol	./runtime	run	function	export declare function run(cmd: string, argv: string[]): Promise<RunResult>
-symbol	./runtime	runWithTimeout	function	export declare function runWithTimeout(cmd: string, argv: string[], timeoutMs: number): Promise<TimedRunResult>
+symbol	./runtime	runWithTimeout	function	export declare function runWithTimeout(cmd: string, argv: string[], timeoutMs: number, signal?: AbortSignal): Promise<TimedRunResult>
 symbol	./runtime	toFileUrl	function	export declare function toFileUrl(file: string): Promise<string>
 symbol	./runtime	writeFile	function	export declare function writeFile(file: string, data: Uint8Array | string): Promise<void>
