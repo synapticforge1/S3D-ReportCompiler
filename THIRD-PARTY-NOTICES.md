@@ -5,15 +5,17 @@
 This file lists the third-party software it depends on. Every entry was verified from the installed
 package's own `package.json` and `LICENSE` file, not from memory or from the registry summary.
 
-**Last verified: 2026-08-08, against the tree pinned by `package-lock.json`. `npm audit`: 0
-vulnerabilities.** Since 2026-10-28 the tree is pinned by `bun.lock` instead — the same 20 package
-versions, measured — and `bun audit` reports no vulnerabilities (49 packages checked).
+**Last verified: 2026-11-07, against the tree pinned by `bun.lock`. `bun audit`: no
+vulnerabilities (49 packages checked).** (First verified 2026-08-08 against `package-lock.json`;
+`bun.lock` replaced it on 2026-10-28; TypeScript joined the development tree since.)
 
 ## Does this package redistribute any of it?
 
-**No.** The published package contains six files of first-party source — `LICENSE`, `README.md`,
-`deno.json`, `main.ts`, `src/report_core.ts`, `src/report_runtime.ts` — and no vendored or bundled
-third-party code. Dependencies are declared and resolved by the consumer's own runtime.
+**No.** The JSR package contains seven first-party files — `LICENSE`, `THIRD-PARTY-NOTICES.md`,
+`README.md`, `jsr.json`, `main.ts`, `src/report_core.ts`, `src/report_runtime.ts` (`jsr.json`
+`publish.include`) — and the npm package that source compiled to JavaScript with its declarations;
+neither holds vendored or bundled third-party code. Dependencies are declared and resolved by the
+consumer's own runtime.
 
 That means no attribution obligation is triggered by installing or publishing this package. This file
 exists so a reviewer does not have to reconstruct the tree to establish that.
@@ -23,8 +25,10 @@ Two places where third-party code **is** carried into an artifact are called out
 
 ## Licences in the dependency tree
 
-All permissive. **No copyleft, and no NOTICE files to propagate** — none of the Apache-2.0 packages
-above ships one, so Apache-2.0 §4(d) imposes nothing here.
+All permissive. **No copyleft, and no NOTICE files to propagate** — none of the Apache-2.0 RUNTIME
+packages ships one, so Apache-2.0 §4(d) imposes nothing here. (`typescript`, a development tool,
+ships a `NOTICE.txt`; it is never redistributed — the npm package is compiled BY it, and carries
+none of its code.)
 
 ### Direct runtime dependencies
 
@@ -54,8 +58,10 @@ above ships one, so Apache-2.0 §4(d) imposes nothing here.
 
 | Package | Version | Licence | Note |
 |---|---|---|---|
-| `@types/node` | 22.20.1 | MIT | needed by `deno check`; not required at runtime |
+| `@types/node` | 22.20.1 | MIT | needed by `bun run check` (and CI's `deno check`); not required at runtime |
 | `undici-types` | 6.21.0 | MIT | via `@types/node` |
+| `typescript` | 7.0.2 | Apache-2.0 | compiles the npm package and its `.d.ts` (`npm:build`), and the compatibility gate's surface; ships a `NOTICE.txt` (above) |
+| `@typescript/typescript-<platform>` | 7.0.2 | Apache-2.0 | `typescript` — its native compiler, one per platform |
 
 ⚠️ `mj-context-menu` declares `Apache-2.0` in its `package.json` but **ships no licence file**. The
 declaration governs; noted only so a reviewer running an automated file-based scan is not surprised
@@ -113,10 +119,10 @@ employer's own terms.
 | Question | Answer |
 |---|---|
 | Any copyleft (GPL/LGPL/AGPL/MPL)? | **No** |
-| Any NOTICE files requiring propagation? | **No** — none of the Apache-2.0 packages ships one |
+| Any NOTICE files requiring propagation? | **No** — none of the Apache-2.0 runtime packages ships one; the development tool that does (`typescript`) is not redistributed |
 | Any licence incompatible with releasing this as MIT? | **No** — MIT, Apache-2.0, 0BSD and Zlib are all compatible with an MIT release |
-| Third-party code inside the published package? | **No** — six first-party files |
-| Known vulnerabilities? | **None** — `npm audit`: 0 |
+| Third-party code inside the published package? | **No** — seven first-party files on JSR; the same source compiled on npm |
+| Known vulnerabilities? | **None** in this repository's tree — `bun audit`, 2026-11-07. A consumer's install resolves `@xmldom/xmldom` afresh (README § Requirements: the `overrides` pins hold here only) |
 | Attribution required to publish? | **No**, given the above. This file is provided for transparency |
 
 Apache-2.0 carries an express patent grant that terminates on patent litigation. That is normally

@@ -19,6 +19,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -44,8 +45,6 @@ const TIMEOUT = 300_000;
 const work = mkdtempSync(join(tmpdir(), "s3d-test-"));
 after(() => rmSync(work, { recursive: true, force: true }));
 
-const exercised = new Set<string>();
-
 type Result = { code: number | null; out: string };
 
 /** Run a TypeScript entry point on this runtime. */
@@ -61,7 +60,6 @@ function run(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {
 
 /** Generate a control's input folder; returns it. */
 function control(name: string, dir = join(work, name)): string {
-  exercised.add(name);
   const g = run([join(CONTROLS, `${name}.ts`), dir]);
   assert.equal(g.code, 0, `the ${name} generator failed:\n${g.out}`);
   return dir;
@@ -142,17 +140,19 @@ test("colliding {{..}} delimiters: the guard refuses, no PDF", { timeout: TIMEOU
   assert.ok(!existsSync(r.pdf), "a PDF was written");
 });
 
-/** The build's temp Chrome profiles currently in the temp folder. */
-const profiles = () =>
-  new Set(readdirSync(tmpdir()).filter((n) => n.startsWith("compiled_reports_")));
-
 test("hidden content in one report: set-wide conservation fails", { timeout: TIMEOUT }, () => {
-  const before = profiles();
-  const r = build(control("control-hidden-content"));
+  // The build's temp folder is its own, so a build or suite running at the same time on this
+  // machine cannot make this fail (it counted every compiled_reports_* in the shared temp
+  // folder; 2026-11-07 review). Every name tmpdir() reads, on each platform.
+  const temp = join(work, "own-temp");
+  mkdirSync(temp, { recursive: true });
+  const r = build(control("control-hidden-content"), {
+    env: { ...process.env, TMP: temp, TEMP: temp, TMPDIR: temp },
+  });
   assert.equal(r.code, 1, tail(r.out));
   // A failed verification still cleans up (it used to exit before the finally).
   assert.deepEqual(
-    [...profiles()].filter((n) => !before.has(n)),
+    readdirSync(temp).filter((n) => n.startsWith("compiled_reports_")),
     [],
     "a failed build left its temp Chrome profile behind",
   );
@@ -222,16 +222,33 @@ test("a second report on $$..$$ renders, with no stray $ left", { timeout: TIMEO
   assert.equal((baked.match(/\$\$/g) ?? []).length, 0, "a $$ delimiter survived into the bake");
 });
 
-test("expressions written with &lt; / &gt; render like the baseline", { timeout: TIMEOUT }, () => {
-  const r = build(control("control-math-entities"));
-  assert.equal(r.code, 0, tail(r.out));
-  has(
-    r.out,
-    /math:\s+169 expressions, 0 failed/, // the custom-delimiters control's count: same report
-    /per-report: 1\/1 reports/,
-    /PASS: every source word and number present/,
-  );
-});
+test(
+  "expressions written with &lt; / &gt; render like the baseline",
+  { timeout: TIMEOUT },
+  async () => {
+    const dir = control("control-math-entities");
+    const r = build(dir);
+    assert.equal(r.code, 0, tail(r.out));
+    has(
+      r.out,
+      /math:\s+169 expressions, 0 failed/, // the custom-delimiters control's count: same report
+      /per-report: 1\/1 reports/,
+      /PASS: every source word and number present/,
+    );
+    // ...and renders EXACTLY like the baseline. The verification checks words and numbers, never a
+    // relation symbol: a bake that swapped &lt; and &gt; printed every `λ < λp` as `λ > λp` and
+    // still PASSED this test (2026-11-07 review, measured by inverting the bake's table).
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    core.resetBakeState();
+    const baseline: string = core.bakeBody(
+      readFileSync(join(SAMPLES, "member_0_report.html"), "utf8"),
+      "r0-",
+    );
+    const encoded: string = core.bakeBody(readFileSync(join(dir, "e_report.html"), "utf8"), "r0-");
+    assert.ok(baseline.includes("mjx-c3C"), "the baseline has no < to compare");
+    assert.equal(encoded, baseline, "the entity-written maths bakes differently from the baseline");
+  },
+);
 
 test("SVG url(#id) references follow their renamed ids", { timeout: TIMEOUT }, () => {
   const r = build(control("control-svg-references"));
@@ -2077,6 +2094,101 @@ const filesOf = (dir: string) =>
     .filter((n) => n.endsWith(".html"))
     .map((n) => ({ name: n, data: new Uint8Array(readFileSync(join(dir, n))) }));
 
+test(
+  "review 3, group E: the README's first run -- no paths, the default layout",
+  { timeout: TIMEOUT },
+  () => {
+    // Every test passed explicit paths, so the layout the README's "First run" describes was never
+    // run: the #22 / #24 shape, the documented default being the untested one (2026-11-07 review).
+    const two = filesOf(SAMPLES).slice(0, 2);
+    // The font cache lives in the working directory: seeded from this checkout's, so these runs
+    // need no network when the rest of the suite needs none.
+    const fonts = join(ROOT, ".mathjax-fonts");
+    const seed = (dir: string) => {
+      if (existsSync(fonts)) cpSync(fonts, join(dir, ".mathjax-fonts"), { recursive: true });
+    };
+    // 1. Run from a folder holding HTMLFilesToBeCompiled/: the reports there, the PDF in CompiledPDF/.
+    const nested = join(work, "default-nested");
+    mkdirSync(join(nested, "HTMLFilesToBeCompiled"), { recursive: true });
+    seed(nested);
+    for (const f of two) writeFileSync(join(nested, "HTMLFilesToBeCompiled", f.name), f.data);
+    const a = run([MAIN], { cwd: nested });
+    assert.equal(a.code, 0, tail(a.out));
+    has(a.out, /Compiling 2 report\(s\)/, /PASS/);
+    assert.ok(
+      existsSync(join(nested, "CompiledPDF", "combined_report.pdf")),
+      "no CompiledPDF/combined_report.pdf",
+    );
+    // 2. Run from the reports' own folder: the reports are the working directory's.
+    const flat = join(work, "default-flat");
+    mkdirSync(flat, { recursive: true });
+    seed(flat);
+    for (const f of two) writeFileSync(join(flat, f.name), f.data);
+    const b = run([MAIN], { cwd: flat });
+    assert.equal(b.code, 0, tail(b.out));
+    has(b.out, /Compiling 2 report\(s\)/, /PASS/);
+    assert.ok(
+      existsSync(join(flat, "CompiledPDF", "combined_report.pdf")),
+      "no PDF from the flat layout",
+    );
+    // 3. --version prints the version the package declares.
+    const v = run([MAIN, "--version"]);
+    assert.equal(v.code, 0, v.out);
+    const version = JSON.parse(readFileSync(join(ROOT, "jsr.json"), "utf8")).version;
+    assert.match(v.out, new RegExp(version.replace(/\./g, "\\.")));
+  },
+);
+
+test("review 3, group E: every graphics and structure check can fail", async () => {
+  // Two of the four checks verification.md lists had no failing case: deleting any of these lines
+  // left every test green (2026-11-07 review). Each failure planted alone, on a clean observation.
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const expected = { words: new Set<string>(), numbers: new Set<string>(), expectedImages: 2 };
+  const clean = {
+    text: "MEMBER #1 DESIGN REPORT MEMBER #2 DESIGN REPORT",
+    pages: 4,
+    imagePaints: 2,
+    diagramTitlePages: [1, 3],
+    diagramAxisPages: [1, 3],
+    headingPages: [1, 3],
+    blankPages: [],
+  };
+  assert.deepEqual(core.compareAgainstPdf(expected, clean, 2).failures, [], "the clean case fails");
+  for (const [what, change, failure] of [
+    ["an image painted twice", { imagePaints: 3 }, /an image was split across a page break/],
+    ["an image not painted", { imagePaints: 1 }, /fewer images drawn than the sources contain/],
+    [
+      "a diagram's axis on the next page",
+      { diagramAxisPages: [1, 4] },
+      /diagram split on page\(s\) 3/,
+    ],
+    ["a report's heading missing", { headingPages: [1] }, /report count does not match the source/],
+    ["a blank page", { blankPages: [2] }, /blank/],
+  ] as const) {
+    const failures: string[] = core.compareAgainstPdf(
+      expected,
+      { ...clean, ...change },
+      2,
+    ).failures;
+    assert.ok(
+      failures.some((f) => failure.test(f)),
+      `${what}: not failed (${failures.join("; ") || "no failure"})`,
+    );
+  }
+  // The per-report check cannot segment a PDF whose headings do not match the sources -- and
+  // says so (`checked: false`, which the CLI turns into a failure), instead of checking nothing.
+  const src = (n: number) =>
+    `<html><body><h2>MEMBER #${n} DESIGN REPORT</h2><p>x</p></body></html>`;
+  for (const [what, pages] of [
+    ["a heading missing", ["MEMBER #1 DESIGN REPORT x", "x"]],
+    ["two headings on one page", ["MEMBER #1 DESIGN REPORT MEMBER #2 DESIGN REPORT x"]],
+  ] as const) {
+    const r = core.compareEachReport([src(1), src(2)], [...pages]);
+    assert.equal(r.checked, false, `${what}: segmented anyway`);
+    assert.match(r.reason, /report heading\(s\)/);
+  }
+});
+
 test("review 3, group A: nothing is added, hidden or carried between reports", async () => {
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
   const flat = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -3266,6 +3378,6 @@ test("every control in tests/controls/ is exercised by a test above", () => {
     [],
     "control file(s) no test runs — add a test or retire the file",
   );
-  // And every control this run did use is one that exists (a renamed file breaks loudly).
-  for (const c of exercised) assert.ok(all.includes(c), `a test uses a missing control: ${c}`);
+  // (A test naming a control that does not exist fails by itself: control() runs the generator and
+  // asserts exit 0. A loop re-checking that here could not fail, and was removed 2026-11-07.)
 });

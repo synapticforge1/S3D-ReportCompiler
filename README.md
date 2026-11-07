@@ -24,9 +24,11 @@ and then checks its own work.
   verification shares no code with the transforms, so a bug cannot hide by agreeing with itself.
 - **Hermetic output, enforced.** The baked document runs no code and loads nothing from another
   host — and does not just happen to: the bake strips scripts and event handlers, and the
-  document's own Content-Security-Policy forbids every script and every outside load. MathJax's
-  fonts are inlined as data URIs. No CDN can be slow, blocked, or down at render time, and nothing
-  inside a report file can change the PDF while it renders.
+  document's own Content-Security-Policy forbids every script and every outside load but one,
+  MathJax's font folder (`cdn.jsdelivr.net/npm/mathjax@3.2.2/…/woff-v2/`), which the in-browser
+  path loads its fonts from. The CLI inlines those fonts as data URIs, so its render loads
+  nothing at all. No CDN can be slow, blocked, or down at render time, and nothing inside a report
+  file can change the PDF while it renders.
 - **Delimiters are read, not assumed.** Each report's own `tex2jax` config decides what marks an
   equation, so a template that switches from `[math]..[math]` to `$$..$$` keeps working.
 - **Nothing is removed silently.** These are calculations that get sealed. Every removal and rewrite
@@ -385,13 +387,13 @@ switches globally), then on Bun and Deno — and fails unless every build passes
 the `fnm install` that fixes it; it is never skipped.
 
 ```
-✅ node 22.18.0 (floor)         PASS  html 7f283563003f
-✅ node 22                      PASS  html 7f283563003f
-✅ node 24                      PASS  html 7f283563003f
-✅ node 26 (LTS 2026-10-28)     PASS  html 7f283563003f
-✅ bun                          PASS  html 7f283563003f
-✅ deno                         PASS  html 7f283563003f
-✅ 6 runtime(s), one baked document (7f283563003f)
+✅ node 22.18.0 (floor)         PASS  html 37792fe31c93
+✅ node 22                      PASS  html 37792fe31c93
+✅ node 24                      PASS  html 37792fe31c93
+✅ node 26 (LTS 2026-10-28)     PASS  html 37792fe31c93
+✅ bun                          PASS  html 37792fe31c93
+✅ deno                         PASS  html 37792fe31c93
+✅ 6 runtime(s), one baked document (37792fe31c93)
 ```
 
 ---
@@ -561,7 +563,7 @@ Two limits worth knowing before you rely on it:
   `0 diagram(s) checked` means it did not run, **not** that everything is fine.
 - **It proves presence, not absence.** Every source word and number must be in the PDF; nothing
   checks that the PDF holds nothing else. That is why the render itself cannot add anything: the
-  document runs no code and loads nothing from outside (see *Hermetic output* above). The build
+  CLI's document runs no code and loads nothing from outside (see *Hermetic output* above). The build
   also checks that every graphic reference the bake renamed — a gradient, a clip path, an arrowhead
   — still resolves, since the PDF check counts text and images, not those.
 
@@ -577,6 +579,7 @@ and each lands here with its migration.
 
 | Version | What changed | How to migrate |
 |---|---|---|
+| Unreleased (on `main`; the gate says minor: 1.3.0) | No API removed or changed. **Added:** `decodeReport(bytes, name)`. **Now refused where they used to pass silently:** a report that is not UTF-8, or declares another charset over non-ASCII bytes; an undefined TeX command (it was typeset as red text and counted converted); `--keep-html` together with `--no-keep-html`. **Changed output:** each report's TeX starts without the previous report's `\def` / `\newcommand` / `\definecolor`; an SVG `<style>` that cannot be hoisted exactly moves to its report's stylesheet instead of staying confined to its own `<svg>`. The 13 samples and both real sets bake byte-identically | Re-save a non-UTF-8 report as UTF-8; fix the misspelled command the error names; give one of the two flags. A report that relied on an earlier report's macro must define it itself |
 | 1.2.0 (2026-11-06) | No API removed or changed (19 additions). **Added:** SkyCiv zip input (`s3d-reportcompiler pack.zip`; `readZipReports`, `zipWithFile`, `checkZipUpdate`); `findBrokenReferences()` with `BakedReport` / `ReferenceCheck`; `resetBakeState()`; `bakeRemovals`, `cssWarnings`, `bakeWarnings`; on `/runtime`, `runWithTimeout`, `MAX_TIMEOUT_MS`, `listNames`, `fileIdentity`. **Behaviour:** <br>• the core's counters are per process — call `resetBakeState()` before each batch; <br>• the baked document carries a Content-Security-Policy (compare baked hashes from 1.2.0 on, not across it); <br>• `bakeBody` leaves a body's own `<style>` blocks to `bakeStyle` — use the two together; <br>• maths pairs only within one text run, as MathJax does, and `visibility: hidden` is lifted only where the report's own script reveals it (unchanged on every real report measured); <br>• the CLI **refuses** an output that is not a `.pdf`, a user's file at the baked HTML's name, an empty or a third path argument, a mistyped setting (`S3D_CHROME_NO_SANDBOX`, `S3D_CHROME_TIMEOUT_MS`, `CHROME_PATH`), and an unreadable `*.html` entry (a broken link, a folder) — a symlinked report is now compiled, not skipped; <br>• a PDF is `<name>.unverified.pdf` until it passes; <br>• Chrome keeps its sandbox and is stopped after 10 minutes | Baking more than once in one process: call `resetBakeState()` per batch. A script that names an output without `.pdf`: add it. A Linux host without a usable sandbox: `S3D_CHROME_NO_SANDBOX=1`. A very large set: `S3D_CHROME_TIMEOUT_MS` |
 | 1.1.5 – 1.1.7 | nothing breaking — fixes only (1.1.7: a TeX error fails the build instead of typesetting a red error box; every named entity decodes inside maths) | — |
 | 1.1.4 | nothing breaking — the same library as 1.1.0; released to JSR and npm together, both with provenance | — |

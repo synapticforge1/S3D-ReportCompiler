@@ -45,6 +45,7 @@ import {
   bakeBody, bakeStyle, assembleDocument, mathStyleSheet,
   findLeftoverMath, findBrokenReferences, mathStats, audit, delimSignatures, sortReportNames,
   resetBakeState, skippedDelims, svgStyleWarnings, cssWarnings, bakeWarnings, decodeReport,
+  bakeRemovals,
 } from "./report_core.browser.js";
 
 const log = (msg) => { document.getElementById("log").textContent += "\n" + msg; };
@@ -96,7 +97,13 @@ async function bake() {
     log(`baked ${names[i]}`);
   }
 
-  // The warnings the command line prints -- all of them (cssWarnings and bakeWarnings were missing).
+  // The warnings the command line prints -- all of them (cssWarnings and bakeWarnings were missing,
+  // and until 2026-11-07 so were the four below the first).
+  if (delimSignatures.size > 1) log(`warning: reports declare ${delimSignatures.size} different delimiter sets`);
+  if (audit.bodyTagMissing > 0) log(`warning: ${audit.bodyTagMissing} report(s) had no <body>; whole file used`);
+  const removed = Object.entries(bakeRemovals).filter(([, n]) => n > 0);
+  if (removed.length) log(`removed: ${removed.map(([k, n]) => `${n} ${k}`).join(", ")}`);
+  if (mathStats.failed > 0) log(`first failure: ${mathStats.firstFailure}`);
   for (const d of skippedDelims) log(`warning: refused degenerate delimiter "${d}"`);
   for (const s of svgStyleWarnings) log(`warning: SVG rule "${s}" could not be hoisted; moved to its report's stylesheet`);
   for (const r of cssWarnings) log(`warning: CSS "${r}" cannot be scoped to its report; it was left out`);
