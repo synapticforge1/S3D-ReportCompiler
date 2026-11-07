@@ -1,3 +1,6 @@
+cli-env	CHROME_PATH
+cli-env	S3D_CHROME_NO_SANDBOX
+cli-env	S3D_CHROME_TIMEOUT_MS
 cli-flag	--help
 cli-flag	--keep-html
 cli-flag	--no-keep-html
