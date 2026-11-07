@@ -1215,7 +1215,14 @@ test("full review, group A: no wrong content passes -- maths, body, tags, CSS, l
   core.bakeStyle(page("<style>@import url(x.css); p{}</style>", ""), ".rs0", "r0-");
   assert.deepEqual(
     { ...core.bakeRemovals },
-    { activeAttributes: 1, metaBaseTags: 1, blocklessAtRules: 1, atRules: 0, bodySheetsMoved: 1 },
+    {
+      activeAttributes: 1,
+      metaBaseTags: 1,
+      blocklessAtRules: 1,
+      atRules: 0,
+      bodySheetsMoved: 1,
+      noscript: 0,
+    },
   );
 });
 
@@ -1595,6 +1602,104 @@ test("the verification does not expect TeX settings in the PDF, only what prints
   for (const kept of ["67", "71", "2.5"]) assert.ok(tokens.numbers.has(kept), `${kept} prints`);
 });
 
+test("review 2, group A: the bake and the verification read markup as a browser does", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const cfg = `<script>MathJax={tex2jax:{inlineMath:[['[mathin]','[mathin]']]}}</script>`;
+  const doc = (body: string, head = "") =>
+    `<html><head>${cfg}${head}</head><body>${body}</body></html>`;
+  const bake = (src: string) => {
+    core.resetBakeState();
+    const body: string = core.bakeBody(src, "r0-");
+    const style: string = core.bakeStyle(src, ".rs0", "r0-");
+    return { body, style, guard: core.findLeftoverMath(body) as string[] };
+  };
+  const expects = (src: string) => core.extractSourceTokens([src]);
+
+  // Maths pairs within one text run, as MathJax does: two strays across cells are NOT one
+  // expression (it typeset the cells between, tags and values), and the guard refuses them.
+  const cells = bake(
+    doc("<table><tr><td>a [mathin] b</td><td>Pn = 1234.5</td><td>[mathin] c</td></tr></table>"),
+  );
+  assert.ok(cells.body.includes("<td>Pn = 1234.5</td>"), "cells typeset as one expression");
+  assert.ok(cells.guard.length > 0, "stray delimiters passed the guard");
+  // ...never inside an attribute (it broke the tag open into the page)...
+  const attr = bake(doc(`<span title="[mathin]x[mathin]">t</span>`));
+  assert.ok(attr.body.includes(`title="[mathin]x[mathin]"`), "maths typeset inside an attribute");
+  // ...nor in pre / code; but across a <br>, which MathJax reads as a newline, not as "<br>".
+  assert.ok(!bake(doc("<pre>[mathin]x[mathin]</pre>")).body.includes("mjx-container"));
+  const br = bake(doc("<p>[mathin]a<br>b[mathin]</p>"));
+  assert.equal(br.guard.length, 0, br.guard.join("; "));
+  assert.ok(!/mjx-c3C/.test(br.body), `"<br>" was typeset as a "<" relation`);
+  // `<L_p` in maths reads as a tag to a browser and to the verifier: the bake must not typeset
+  // across it either, or the verifier skips what it covers. Refused, loudly.
+  assert.ok(bake(doc("<p>[mathin]L_b<L_p[mathin] so 55.5 and <b>66.6</b></p>")).guard.length > 0);
+
+  // Comments and scripts end where the HTML parser ends them, in the bake AND the verification.
+  for (const [what, src, kept] of [
+    ["<!-->", doc("<!--><p>Moment 321.5</p><!-- x -->"), "321.5"],
+    ["<!--->", doc("<!---><p>Moment 321.6</p><!-- x -->"), "321.6"],
+    ["</script >", doc("<script>x</script ><p>Shear 77.7</p><script>y</script>"), "77.7"],
+  ] as const) {
+    assert.ok(bake(src).body.includes(kept), `${what}: the bake dropped the text after it`);
+    assert.ok(expects(src).numbers.has(kept), `${what}: the verification does not expect it`);
+  }
+  // <noscript> is not drawn (scripting is on; the policy only blocks scripts): neither printed
+  // nor expected.
+  const ns = doc("<noscript>Enable JavaScript 999.1</noscript><p>x</p>");
+  assert.ok(!bake(ns).body.includes("999.1"), "<noscript> left in the bake");
+  assert.equal(core.bakeRemovals.noscript, 1);
+  assert.ok(!expects(ns).numbers.has("999.1"), "<noscript> text expected in the PDF");
+
+  // The spinner goes only while it holds no text; an element sharing its id is content.
+  const spinner = doc(`<div id="loading"><img src="x.gif" alt="Loading"></div><p>r</p>`);
+  assert.ok(!bake(spinner).body.includes("x.gif"));
+  assert.equal(core.audit.loadersRemoved, 1);
+  const section = doc(`<div id="loading"><h2>Loading</h2><p>Dead load 12.5</p></div>`);
+  assert.ok(bake(section).body.includes("12.5"), "a section with the spinner's id was removed");
+  assert.equal(core.audit.loadersRemoved, 0);
+  assert.ok([...core.bakeWarnings].some((w: string) => w.includes(`id="loading"`)));
+  assert.ok(expects(section).numbers.has("12.5"), "its values are not expected");
+
+  // Only the gate the report's script opens is made visible; other hidden rules stay hidden.
+  const reveal = `<script>jQuery('#report').css('visibility', 'visible');</script>`;
+  const gated = bake(
+    doc(
+      `<div id="report">r</div>${reveal}`,
+      "<style>#report{visibility:hidden} .old{visibility:hidden} td{line-height:100%} img{max-height:100%} #report{height:100%}</style>",
+    ),
+  );
+  assert.match(gated.style, /#r0-report\s*\{\s*visibility: visible/);
+  assert.match(gated.style, /\.old\s*\{\s*visibility:\s*hidden/, "a hidden rule was made visible");
+  assert.match(gated.style, /line-height:\s*100%/, "line-height rewritten");
+  assert.match(gated.style, /max-height:\s*100%/, "max-height rewritten");
+  assert.match(gated.style, /height: auto/);
+  assert.ok([...core.bakeWarnings].some((w: string) => w.includes(".old")));
+  // A sheet wrapped in <!-- --> (CSS ignores them) keeps its rules.
+  assert.match(
+    bake(doc("<p class='a'>x</p>", "<style><!-- .a{color:red} --></style>")).style,
+    /\.rs0 \.a/,
+  );
+
+  // The verification: an escaped \\ is a line break, not \color; an unclosed group drops nothing.
+  assert.ok(expects(doc(String.raw`<p>\\color{red} 12.5</p>`)).words.has("color"));
+  assert.ok(expects(doc(String.raw`<p>\color{red x 4567.8</p>`)).numbers.has("4567.8"));
+
+  // A TeX error says what it was, not "[object Object]".
+  bake(doc(String.raw`<p>[mathin]\frac{1}[mathin]</p>`));
+  assert.ok(core.mathStats.failed > 0);
+  assert.doesNotMatch(core.mathStats.firstFailure, /object Object/);
+
+  // A zip entry with a second name (Info-ZIP Unicode Path, 0x7075) is refused: readers differ.
+  const unicodePath = new Uint8Array([0x75, 0x70, 5, 0, 1, 0, 0, 0, 0x41]);
+  await assert.rejects(
+    core.readZipReports(
+      testZip([{ name: "member_1_report.html", data: new Uint8Array([60]), extra: unicodePath }]),
+      "p.pdf",
+    ),
+    /second, different name/,
+  );
+});
+
 // ── SkyCiv's zip (roadmap task 16) ───────────────────────────────────────────
 //
 // The test zips come from the writer below, NOT from the tool's own: a reader checked only against
@@ -1624,6 +1729,8 @@ type TestEntry = {
   /** sizes and CRC after the data (bit 3), zero in the local header */
   descriptor?: boolean;
   crc?: number;
+  /** an extra field, written into both headers */
+  extra?: Uint8Array;
 };
 
 function testZip(
@@ -1648,6 +1755,8 @@ function testZip(
     local.writeUInt32LE(e.descriptor ? 0 : body.length, 18);
     local.writeUInt32LE(e.descriptor ? 0 : e.data.length, 22);
     local.writeUInt16LE(name.length, 26);
+    const extra = Buffer.from(e.extra ?? new Uint8Array(0));
+    local.writeUInt16LE(extra.length, 28);
     const descriptor = Buffer.alloc(e.descriptor ? 16 : 0);
     if (e.descriptor) {
       descriptor.writeUInt32LE(0x08074b50, 0);
@@ -1665,11 +1774,12 @@ function testZip(
     c.writeUInt32LE(body.length, 20);
     c.writeUInt32LE(e.data.length, 24);
     c.writeUInt16LE(name.length, 28);
+    c.writeUInt16LE(extra.length, 30);
     c.writeUInt32LE(0x81a40000, 38);
     c.writeUInt32LE(at, 42);
-    central.push(c, name);
-    parts.push(local, name, body, descriptor);
-    at += 30 + name.length + body.length + descriptor.length;
+    central.push(c, name, extra);
+    parts.push(local, name, extra, body, descriptor);
+    at += 30 + name.length + extra.length + body.length + descriptor.length;
   }
   if (opts.gap) {
     parts.push(Buffer.from("stray bytes"));

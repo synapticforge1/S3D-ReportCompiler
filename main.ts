@@ -115,6 +115,7 @@ import {
   sortReportNames,
   svgStyleWarnings,
   bakeRemovals,
+  bakeWarnings,
   cssWarnings,
   checkZipUpdate,
   readZipReports,
@@ -880,6 +881,7 @@ const removed = [
   [bakeRemovals.blocklessAtRules, "@import/@charset/@namespace rule(s)"],
   [bakeRemovals.atRules, "CSS at-rule(s) that cannot be scoped"],
   [bakeRemovals.bodySheetsMoved, "body <style> block(s) moved into the scoped sheet"],
+  [bakeRemovals.noscript, "<noscript> element(s), which a browser does not draw"],
 ] as const;
 if (removed.some(([n]) => n > 0)) {
   console.log(
@@ -892,6 +894,7 @@ if (removed.some(([n]) => n > 0)) {
 for (const rule of cssWarnings) {
   console.warn(`  warning: CSS "${rule}" cannot be scoped to its report; it was left out`);
 }
+for (const warning of bakeWarnings) console.warn(`  warning: ${warning}`);
 
 const leftovers = findLeftoverMath(bodies.join(""));
 if (leftovers.length > 0 || mathStats.failed > 0) {

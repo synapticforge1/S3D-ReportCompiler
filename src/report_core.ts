@@ -299,7 +299,8 @@ export const audit = {
  * though the module promised every removal was: event-handler attributes and `javascript:` URLs
  * (`activeAttributes`), `<meta>` / `<base>` in a body (`metaBaseTags`), `@import` / `@charset` /
  * `@namespace` (`blocklessAtRules`), block at-rules this cannot scope (`atRules`, each named in
- * {@link cssWarnings}), and body `<style>` blocks moved into the scoped sheet (`bodySheetsMoved`).
+ * {@link cssWarnings}), body `<style>` blocks moved into the scoped sheet (`bodySheetsMoved`), and
+ * `<noscript>` elements, which a browser with scripting on does not draw (`noscript`).
  */
 export const bakeRemovals = {
   activeAttributes: 0,
@@ -307,6 +308,7 @@ export const bakeRemovals = {
   blocklessAtRules: 0,
   atRules: 0,
   bodySheetsMoved: 0,
+  noscript: 0,
 };
 
 /**
@@ -330,6 +332,39 @@ function startTagRe(name = "[a-zA-Z][^\\s/>]*", flags = "gi"): RegExp {
 /** `<style …>…</style>`, its attributes read with {@link TAG_ATTRS}: groups 1 attributes, 2 sheet. */
 const STYLE_ELEMENT = String.raw`<style(?![^\s/>])(${TAG_ATTRS})>([\s\S]*?)<\/style\s*>`;
 
+/**
+ * What a browser does not draw, found where the HTML parser finds it -- one left-to-right pass, so
+ * whichever starts first wins (a `<!--` inside a script is script; a `<script>` inside a comment
+ * is comment):
+ * - a comment: `<!-->` and `<!--->` are complete EMPTY comments, and one also ends at `--!>`; an
+ *   unclosed one runs to the end;
+ * - a script or noscript element, ending at the first `</script` / `</noscript` followed by
+ *   whitespace, `/` or `>` (`</script >` ends it too); unclosed, it runs to the end;
+ * - raw-text elements (`style`, `textarea`, `title`, …), whose content is never markup -- matched
+ *   only to be KEPT whole, so a `<!--` inside one is not taken for a comment.
+ *
+ * The lazy `<!--…-->` and `<script…</script>` regexes this replaces ran past `<!-->` and
+ * `</script >` to the NEXT terminator, dropping the content between from the bake and the
+ * verification alike (2026-11-06 review). `<noscript>` is dropped because the page renders with
+ * scripting on (its policy blocks scripts; it does not turn scripting off), so a browser does not
+ * show it -- left in, it printed nothing and the verification expected its text.
+ */
+const UNDRAWN = new RegExp(
+  String.raw`<!--(?:-?>|[\s\S]*?(?:--!?>|$))` +
+    String.raw`|<(script|noscript)(?![^\s/>])${TAG_ATTRS}>[\s\S]*?(?:<\/\1(?=[\s/>])[^>]*>|$)` +
+    String.raw`|<(style|textarea|title|xmp|noembed|noframes)(?![^\s/>])${TAG_ATTRS}>[\s\S]*?(?:<\/\2(?=[\s/>])[^>]*>|$)`,
+  "gi",
+);
+
+/** `html` without the comments, scripts and `<noscript>` a browser does not draw ({@link UNDRAWN}). */
+function stripUndrawn(html: string, count = false): string {
+  return html.replace(UNDRAWN, (m, scriptish: string | undefined, raw: string | undefined) => {
+    if (raw !== undefined) return m;
+    if (count && scriptish?.toLowerCase() === "noscript") bakeRemovals.noscript++;
+    return "";
+  });
+}
+
 // The three below are annotated rather than left to inference: JSR rejects a
 // public API whose types it cannot read without running the type checker
 // ("slow types"), and these are exported.
@@ -343,6 +378,13 @@ export const delimSignatures: Set<string> = new Set();
 
 /** Every opening delimiter encountered, for diagnostics. */
 export const seenOpeners: Set<string> = new Set();
+
+/**
+ * Things the bake declined to do because the report did not look like the template it expects --
+ * each kept the content rather than guess (a spinner id on an element that holds text, a hidden
+ * rule no script reveals). Print them: each is a place to look.
+ */
+export const bakeWarnings: Set<string> = new Set();
 
 /**
  * Selectors from an inline SVG's `<style>` block that could not be hoisted onto
@@ -1137,7 +1179,7 @@ function hoistSvgRules(sheet: string, apply: (selector: string, attrs: string) =
  * Matches the closing tag by depth rather than assuming the element contains no
  * nested tags of the same name.
  */
-function removeElementById(html: string, id: string): string {
+function removeElementById(html: string, id: string, onlyIfTextless = false): string {
   // The attribute named id, read in order -- not data-id=, and not "id=" inside
   // another attribute's value (whose element is not the one asked for).
   const m = [...html.matchAll(startTagRe())].find((t) => attrsOf(t[0]).get("id") === id);
@@ -1153,6 +1195,16 @@ function removeElementById(html: string, id: string): string {
     if (depth === 0) {
       const end = html.indexOf(">", hit.index);
       if (end < 0) return html;
+      if (onlyIfTextless) {
+        const inner = html.slice(m.index + m[0].length, hit.index);
+        const text = inner.replace(startTagRe(), " ").replace(/<\/[^>]*>/g, " ");
+        if (/[^\s]/.test(text.replace(/&nbsp;|&#160;|&#xa0;/gi, " "))) {
+          bakeWarnings.add(
+            `the element with id="${id}" holds text, so it was kept, not removed as the spinner`,
+          );
+          return html;
+        }
+      }
       audit.loadersRemoved++;
       return html.slice(0, m.index) + html.slice(end + 1);
     }
@@ -1197,7 +1249,8 @@ export const mathStats = { converted: 0, failed: 0, firstFailure: "" };
 /**
  * Start a new batch: zero every running counter and empty every diagnostic set --
  * {@link mathStats}, {@link audit}, {@link bakeRemovals}, {@link delimSignatures},
- * {@link seenOpeners}, {@link skippedDelims}, {@link svgStyleWarnings} and {@link cssWarnings} --
+ * {@link seenOpeners}, {@link skippedDelims}, {@link svgStyleWarnings}, {@link cssWarnings} and
+ * {@link bakeWarnings} --
  * and clear MathJax's equation labels and numbering (each report also gets a fresh table).
  *
  * They are module-level and cumulative, which suits the CLI (one build per process) and nothing
@@ -1222,6 +1275,7 @@ export function resetBakeState(): void {
   skippedDelims.clear();
   svgStyleWarnings.clear();
   cssWarnings.clear();
+  bakeWarnings.clear();
   texInput.parseOptions.tags.reset(0);
 }
 
@@ -1238,7 +1292,14 @@ function tex2html(latex: string, display: boolean): string {
     return html;
   } catch (e) {
     if (mathStats.failed === 0) {
-      mathStats.firstFailure = `${latex.trim().slice(0, 60)} (${e})`;
+      // MathJax throws its own TexError, not an Error: interpolated whole it read "[object Object]".
+      const why =
+        typeof e === "object" &&
+        e !== null &&
+        typeof (e as { message?: unknown }).message === "string"
+          ? (e as { message: string }).message
+          : String(e);
+      mathStats.firstFailure = `${latex.trim().slice(0, 60)} (${why})`;
     }
     mathStats.failed++;
     // Leave the source visible rather than silently dropping a calculation.
@@ -1282,7 +1343,10 @@ const TEX_ENTITIES: Record<string, string> = {
  * the bake and the verification share no logic.
  */
 function texFromMarkup(s: string): string {
-  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (m, e: string) => {
+  // The only tags a text run can hold (inTextRuns): MathJax reads <br> as a newline and <wbr> as
+  // nothing. Passed through, TeX typeset "<br>" as the relation "<", b, r, ">".
+  const text = s.replace(/<\/?br(?![^\s/>])[^>]*>/gi, "\n").replace(/<wbr(?![^\s/>])[^>]*>/gi, "");
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (m, e: string) => {
     // Every named entity, not six: an exporter that escapes text writes `&ge;`, `&times;`,
     // `&deg;`, and an undecoded one hands TeX a bare "&". MathJax's own table (the one its
     // browser build reads), case-SENSITIVELY -- `&Delta;` and `&delta;` are different
@@ -1454,8 +1518,7 @@ export function bakeBody(src: string, prefix: string): string {
 
   // Scripts come out next, so the config block -- which contains the delimiter
   // strings as literals -- is never itself read as an expression.
-  let html = src.replace(/<script[\s\S]*?<\/script>/gi, "");
-  html = html.replace(/<!--[\s\S]*?-->/g, "");
+  const html = stripUndrawn(src, true);
 
   // A fresh label table and equation counter for every report, as it has standing alone: MathJax
   // keeps both across conversions, so report 1's `\label{eq}` failed as "multiply defined" after
@@ -1478,8 +1541,10 @@ export function bakeBody(src: string, prefix: string): string {
   });
 
   // The spinner exists only to be hidden by the JS that we removed. It is the
-  // one element deliberately dropped, and the count is reported.
-  body = removeElementById(body, "loading");
+  // one element deliberately dropped, and the count is reported -- and only while it draws no
+  // text: an element that merely shares the id ("loading" is a plausible section name in a
+  // structural report) used to go with its whole subtree, and the verification cut it too.
+  body = removeElementById(body, "loading", true);
 
   // One left-to-right pass over every configured pair, so they cannot
   // interleave. Each pair contributes one capture group, in the same order.
@@ -1489,15 +1554,26 @@ export function bakeBody(src: string, prefix: string): string {
   // rewrites below. After this the maths is MathJax's own markup -- whose ids
   // (\label, \eqref) are then namespaced like any other, so two reports'
   // equation numbers cannot collide either.
-  if (delims.length > 0)
-    body = body.replace(buildMathRegex(delims), (...args) => {
-      const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
-      const i = groups.findIndex((g) => g !== undefined);
-      const inner = groups[i]; // undefined when i < 0: no pair matched
-      return inner === undefined
-        ? (args[0] as string)
-        : tex2html(texFromMarkup(inner), delims[i].display);
-    });
+  //
+  // Within one TEXT RUN only, as MathJax in a browser pairs them: never across an element boundary
+  // (only <br> and <wbr> join a run), never inside a tag's attributes, never inside pre / code /
+  // textarea / style / annotation. Over the whole body, two stray delimiters typeset the table cells
+  // between them -- tags and values -- as one "expression", and maths in a title="" attribute
+  // broke its tag open into the page; both passed (2026-11-06 review). A pair a browser would not
+  // see now stays as written, and the guard refuses it.
+  if (delims.length > 0) {
+    const re = buildMathRegex(delims);
+    body = inTextRuns(body, (run) =>
+      run.replace(re, (...args) => {
+        const groups = args.slice(1, 1 + delims.length) as (string | undefined)[];
+        const i = groups.findIndex((g) => g !== undefined);
+        const inner = groups[i]; // undefined when i < 0: no pair matched
+        return inner === undefined
+          ? (args[0] as string)
+          : tex2html(texFromMarkup(inner), delims[i].display);
+      }),
+    );
+  }
 
   // Namespace every id rather than the two this template happens to use, so
   // many documents can share one page without colliding. Attributes are read
@@ -1592,6 +1668,83 @@ function browserBody(html: string, bodyOpen: RegExpExecArray): string {
   return (before.trim() ? before : "") + inner + (trailing.trim() ? trailing : "");
 }
 
+/**
+ * The selectors a report's own script makes visible -- the gate the bake opens in its place:
+ * `jQuery(sel)` / `$(sel)` with `.css('visibility', 'visible')` or `.css({visibility: 'visible'})`,
+ * and `getElementById(id)` / `querySelector(sel)` with `.style.visibility = 'visible'`. Whitespace
+ * in each selector collapsed, so it compares with a sheet's.
+ */
+function revealedSelectors(src: string): Set<string> {
+  const scripts = [...src.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)]
+    .map((m) => m[1])
+    .join("\n");
+  const out = new Set<string>();
+  const add = (s: string) => out.add(s.replace(/\s+/g, " ").trim());
+  // The selector is group 2 in the first, group 3 in the second.
+  const jquery =
+    /(?:jQuery|\$)\(\s*(["'])((?:(?!\1)[^\\]|\\.)*)\1\s*\)\s*\.css\(\s*(?:(["'])visibility\3\s*,\s*(["'])visible\4|\{[^}]*?visibility["']?\s*:\s*(["'])visible\5)/g;
+  const dom =
+    /(getElementById|querySelector)\(\s*(["'])((?:(?!\2)[^\\]|\\.)*)\2\s*\)\s*\.style\.visibility\s*=\s*(["'])visible\4/g;
+  for (const m of scripts.matchAll(jquery)) add(m[2]);
+  for (const m of scripts.matchAll(dom)) add(m[1] === "getElementById" ? `#${m[3]}` : m[3]);
+  return out;
+}
+
+/** Elements whose content MathJax does not search for maths (its `skipHtmlTags`, plus `title`). */
+const NO_MATH_ELEMENTS = new Set([
+  "script",
+  "noscript",
+  "style",
+  "textarea",
+  "pre",
+  "code",
+  "annotation",
+  "annotation-xml",
+  "title",
+]);
+
+/**
+ * Apply `fn` to every TEXT RUN of `html` -- text, with the `<br>` / `<wbr>` tags inside it, between
+ * any other two tags -- outside the {@link NO_MATH_ELEMENTS}. Tags themselves are never passed to
+ * `fn`, so nothing it does can reach an attribute value.
+ */
+function inTextRuns(html: string, fn: (run: string) => string): string {
+  const tag = new RegExp(`${startTagRe().source}|<\\/([a-zA-Z][^\\s/>]*)\\s*>`, "gi");
+  let out = "";
+  let run = "";
+  let at = 0;
+  /** The open no-maths element and its nesting depth, while inside one. */
+  let skip: { name: string; depth: number } | null = null;
+  const flush = () => {
+    out += skip ? run : fn(run);
+    run = "";
+  };
+  for (let m = tag.exec(html); m; m = tag.exec(html)) {
+    run += html.slice(at, m.index);
+    at = m.index + m[0].length;
+    const startName = m[1]?.toLowerCase();
+    const endName = m[3]?.toLowerCase();
+    if (!skip && (startName === "br" || startName === "wbr" || endName === "br")) {
+      run += m[0];
+      continue;
+    }
+    flush();
+    out += m[0];
+    const name = startName ?? endName ?? "";
+    if (skip) {
+      if (name === skip.name) {
+        skip.depth += startName ? 1 : -1;
+        if (skip.depth === 0) skip = null;
+      }
+    } else if (startName && NO_MATH_ELEMENTS.has(startName) && !/\/\s*>$/.test(m[0])) {
+      skip = { name: startName, depth: 1 };
+    }
+  }
+  run += html.slice(at);
+  flush();
+  return out;
+}
+
 /** Apply `fn` to every start tag (`<name …>`), leaving text, comments and end tags alone. */
 function inTags(html: string, fn: (tag: string) => string): string {
   return html.replace(startTagRe(), (tag: string) => fn(tag));
@@ -1615,17 +1768,15 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   // which portableSvg hoists onto presentation attributes -- pulling it in here
   // as well would leak an SVG-scoped rule into document scope. `<head\b`, so a
   // <header> is not read as the head.
-  // <head>'s start tag read quote-aware; its content runs to the first </head>.
-  const headOpen = startTagRe("head", "i").exec(src);
+  // <head>'s start tag read quote-aware; its content runs to the first </head>. The whole page as
+  // a browser draws it: a commented-out <style> in the head is no sheet either.
+  const page = stripUndrawn(src);
+  const headOpen = startTagRe("head", "i").exec(page);
   const innerStart = headOpen ? headOpen.index + headOpen[0].length : -1;
-  const headClose = headOpen ? /<\/head\s*>/i.exec(src.slice(innerStart)) : null;
-  const headInner = headClose ? src.slice(innerStart, innerStart + headClose.index) : "";
+  const headClose = headOpen ? /<\/head\s*>/i.exec(page.slice(innerStart)) : null;
+  const headInner = headClose ? page.slice(innerStart, innerStart + headClose.index) : "";
   const afterHead = headClose ? innerStart + headClose.index + headClose[0].length : 0;
-  // The body as bakeBody sees it: no scripts, no comments.
-  const rest = src
-    .slice(afterHead)
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<!--[\s\S]*?-->/g, "");
+  const rest = page.slice(afterHead);
   const blocks: [string, string][] = [
     ...[...headInner.matchAll(STYLE_BLOCK)].map((m) => [m[1], m[2]] as [string, string]),
     ...[...rest.matchAll(PAGE_STYLE_OR_SVG)]
@@ -1649,7 +1800,33 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
     })
     // Strip comments before counting, or a commented-out rule is audited as
     // though it had been active.
-    .replace(/\/\*[\s\S]*?\*\//g, "");
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    // `<!--` and `-->` in a sheet are CSS's CDO / CDC tokens, which CSS ignores (old pages wrap
+    // their rules in them). Inside a <style> they are text now, not a comment, so the brace walker
+    // would read "<!--" as part of the first selector.
+    .replace(/<!--|-->/g, "");
+
+  // The gate the removed JavaScript would have opened -- ONLY that: `visibility: hidden` in a rule
+  // whose selector the report's own script reveals (`jQuery('#report').css('visibility',
+  // 'visible')`). It used to be lifted from every rule, so anything a template deliberately hid
+  // printed in the sealed PDF, and the presence-only verification could not notice (2026-11-06
+  // review). A hidden rule no script reveals stays hidden.
+  const revealed = revealedSelectors(src);
+  css = css.replace(/([^{}]*)\{([^{}]*)\}/g, (rule, selector: string, decls: string) => {
+    if (!/(?<![\w-])visibility\s*:\s*hidden/i.test(decls)) return rule;
+    const parts = selector
+      .split(",")
+      .map((s) => s.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    if (parts.length === 0 || !parts.every((p) => revealed.has(p))) {
+      bakeWarnings.add(`CSS "${selector.trim()}" hides content no script reveals; it stays hidden`);
+      return rule;
+    }
+    return `${selector}{${decls.replace(/(?<![\w-])visibility\s*:\s*hidden/gi, () => {
+      audit.visibilityNeutralised++;
+      return "visibility: visible";
+    })}}`;
+  });
 
   audit.atPageDropped += (css.match(/@page\b/gi) ?? []).length;
   // scopeCss namespaces ids in selectors; a declaration's url(#id) names an id
@@ -1664,15 +1841,10 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
     (s) => namespaceIds(s, prefix),
   );
 
-  // The gate the removed JavaScript would have opened.
-  css = css.replace(/visibility:\s*hidden/gi, () => {
-    audit.visibilityNeutralised++;
-    return "visibility: visible";
-  });
-
   // height:100% is meaningless in paged media and makes some engines emit a
-  // single viewport-tall page.
-  css = css.replace(/height:\s*100%/gi, () => {
+  // single viewport-tall page. The property `height` only: `line-height` / `max-height: 100%`
+  // became the invalid "auto", which a browser drops.
+  css = css.replace(/(?<![\w-])height:\s*100%/gi, () => {
     audit.heightNeutralised++;
     return "height: auto";
   });
@@ -1966,7 +2138,9 @@ const TEX_SPEC_ENVIRONMENTS = new Set(["array", "subarray", "tabular", "alignat"
 
 /** `text` with every non-printing TeX argument removed (see {@link NONPRINTING_TEX}). */
 function dropNonPrintingTex(text: string): string {
-  // A group from `at` (a "{" or "["), braces nested; returns the index past its close.
+  // A group from `at` (a "{" or "["), braces nested; returns the index past its close -- or -1 if
+  // it never closes, and then nothing is dropped: running to the end dropped the rest of the
+  // report from the expected tokens (2026-11-06 review).
   const group = (at: number, open: string, close: string): number => {
     let depth = 0;
     for (let i = at; i < text.length; i++) {
@@ -1974,7 +2148,7 @@ function dropNonPrintingTex(text: string): string {
       else if (text[i] === open) depth++;
       else if (text[i] === close && --depth === 0) return i + 1;
     }
-    return text.length;
+    return -1;
   };
   const skipSpace = (i: number) => {
     while (i < text.length && /\s/.test(text[i])) i++;
@@ -1982,13 +2156,16 @@ function dropNonPrintingTex(text: string): string {
   };
   let out = "";
   let i = 0;
-  // `\\[4pt]` is a line break's extra space; only a dimension in the brackets is one.
+  // `\\[4pt]` is a line break's extra space; only a dimension in the brackets is one. A `\\` not
+  // followed by one is matched too, and skipped: it is a line break, so `\\color` is a break and
+  // the TEXT "color", which prints (2026-11-06 review: it was read as \color).
   const command =
-    /\\([a-zA-Z]+)|\\\\\s*\[\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|mm|cm|in|em|ex|mu|px|pc|bp|dd|cc|sp)\s*\]/g;
+    /\\([a-zA-Z]+)|\\\\(\s*\[\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|mm|cm|in|em|ex|mu|px|pc|bp|dd|cc|sp)\s*\])?/g;
   for (let m = command.exec(text); m; m = command.exec(text)) {
     const name = m[1];
     let at = command.lastIndex;
     if (name === undefined) {
+      if (m[2] === undefined) continue; // a bare `\\`
       out += `${text.slice(i, m.index)} `;
       i = at;
       continue;
@@ -1996,6 +2173,7 @@ function dropNonPrintingTex(text: string): string {
     const spec = Object.hasOwn(NONPRINTING_TEX, name) ? NONPRINTING_TEX[name] : undefined;
     if (spec === undefined) continue;
     let environment = "";
+    let unclosed = false;
     for (const kind of spec) {
       const j = skipSpace(at);
       if (kind === "*") {
@@ -2004,20 +2182,114 @@ function dropNonPrintingTex(text: string): string {
         if (text[j] === "[") at = group(j, "[", "]");
       } else if (text[j] === "{") {
         const end = group(j, "{", "}");
-        if (name === "begin") environment = text.slice(j + 1, end - 1).trim();
+        if (end > 0 && name === "begin") environment = text.slice(j + 1, end - 1).trim();
         at = end;
       } else if (j < text.length) {
         at = text[j] === "\\" ? (/^\\[a-zA-Z]+/.exec(text.slice(j))?.[0].length ?? 2) + j : j + 1;
       }
+      if (at < 0) {
+        unclosed = true;
+        break;
+      }
     }
-    if (TEX_SPEC_ENVIRONMENTS.has(environment.replace(/\*$/, ""))) {
+    if (!unclosed && TEX_SPEC_ENVIRONMENTS.has(environment.replace(/\*$/, ""))) {
       const j = skipSpace(at);
       if (text[j] === "{") at = group(j, "{", "}");
+      if (at < 0) unclosed = true;
     }
+    if (unclosed) continue;
     out += `${text.slice(i, m.index)} `;
     i = command.lastIndex = at;
   }
   return (out + text.slice(i)).replace(TEX_DIMENSION_COMMANDS, " ");
+}
+
+/**
+ * The source as a reader sees it, for the verification: comments, scripts, `<noscript>` and style
+ * sheets removed where an HTML parser ends them. A character scan, written apart from the bake's
+ * reading (design-decisions §9). A comment opened by `<!--` ends at `-->` or `--!>`, or at once
+ * when it is `<!-->` / `<!--->`; a script, noscript or style element ends at its end tag's name
+ * followed by whitespace, `/` or `>`; anything unclosed runs to the end. The lazy regexes this
+ * replaces read `<!-->` and `</script >` as never ending, and cut the text after them.
+ */
+function readerVisible(html: string): string {
+  const lower = html.toLowerCase();
+  let out = "";
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) break;
+    out += html.slice(i, lt);
+    if (lower.startsWith("<!--", lt)) {
+      let end: number;
+      if (lower.startsWith(">", lt + 4)) end = lt + 5;
+      else if (lower.startsWith("->", lt + 4)) end = lt + 6;
+      else {
+        const a = lower.indexOf("-->", lt + 4);
+        const b = lower.indexOf("--!>", lt + 4);
+        const close = [a < 0 ? Infinity : a + 3, b < 0 ? Infinity : b + 4];
+        end = Math.min(...close);
+        if (end === Infinity) end = html.length;
+      }
+      out += " ";
+      i = end;
+      continue;
+    }
+    const element = /^<(script|noscript|style)(?=[\s/>])/.exec(lower.slice(lt, lt + 12));
+    if (element) {
+      const name = element[1];
+      let at = sourceTagEnd(html, lt);
+      for (;;) {
+        const close = lower.indexOf(`</${name}`, at);
+        if (close < 0) {
+          at = html.length;
+          break;
+        }
+        const after = lower[close + 2 + name.length];
+        if (after === undefined || /[\s/>]/.test(after)) {
+          const gt = lower.indexOf(">", close);
+          at = gt < 0 ? html.length : gt + 1;
+          break;
+        }
+        at = close + 2 + name.length;
+      }
+      out += " ";
+      i = at;
+      continue;
+    }
+    out += "<";
+    i = lt + 1;
+  }
+  return out + html.slice(i);
+}
+
+/**
+ * `html` without the loading spinner -- the first element whose `id` attribute is `loading` --
+ * but only while it holds no text: an element that merely shares the id is content, and is
+ * expected in the PDF. Written apart from the bake's removal (design-decisions §9).
+ */
+function withoutSpinner(html: string): string {
+  for (const m of html.matchAll(SOURCE_TAG)) {
+    if (m[0][1] === "/" || m.index === undefined) continue;
+    const id = /\sid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(
+      m[0].replace(/^<[^\s/>]+/, " "),
+    );
+    if ((id?.[1] ?? id?.[2] ?? id?.[3]) !== "loading") continue;
+    const name = /^<([^\s/>]+)/.exec(m[0])?.[1].toLowerCase() ?? "";
+    const open = m.index + m[0].length;
+    let depth = 1;
+    const scan = new RegExp(`<(/?)${name.replace(/[^\w-]/g, "")}(?=[\\s/>])`, "gi");
+    scan.lastIndex = open;
+    for (let t = scan.exec(html); t; t = scan.exec(html)) {
+      depth += t[1] ? -1 : 1;
+      if (depth > 0) continue;
+      const inner = html.slice(open, t.index).replace(SOURCE_TAG, " ");
+      if (decodeEntities(inner).replace(/ /g, " ").trim() !== "") return html;
+      return `${html.slice(0, m.index)} ${html.slice(sourceTagEnd(html, t.index))}`;
+    }
+    return html;
+  }
+  return html;
 }
 
 /**
@@ -2035,11 +2307,7 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
   let expectedImages = 0;
 
   for (const raw of sources) {
-    let html = raw
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<!--[\s\S]*?-->/g, " ")
-      .replace(/<div id="loading"[\s\S]*?<\/div>/i, " ");
+    let html = withoutSpinner(readerVisible(raw));
 
     // Only the body is drawn; <title> would otherwise read as missing. The body as a READER sees
     // it: everything after the <body> start tag, including text past </body> or before <body>
@@ -2070,8 +2338,9 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
     // does not leave the rest of the tag behind as text.
     const text = dropNonPrintingTex(decodeEntities(html.replace(SOURCE_TAG, " ")));
 
-    for (const c of text.match(/\\([a-zA-Z]{2,})/g) ?? []) {
-      texCommands.add(c.slice(1).toLowerCase());
+    // `\\` first, so `\\color` is a line break and the word "color", not the command \color.
+    for (const [, name] of text.matchAll(/\\\\|\\([a-zA-Z]{2,})/g)) {
+      if (name !== undefined) texCommands.add(name.toLowerCase());
     }
     for (const n of textNumbers(text)) numbers.add(n);
     for (const w of textWords(text)) words.add(w);
@@ -2461,6 +2730,18 @@ function parseZip(zip: Uint8Array): { records: ZipRecord[]; comment: Uint8Array 
       fail(`entry ${i + 1}'s name is not in UTF-8 (re-create the zip with a current tool)`);
     }
     const what = `"${name}"`;
+    // A second name, which 7-Zip and Info-ZIP show instead of the first (the Info-ZIP Unicode Path
+    // extra field, 0x7075): two readers would name the entry differently. Refused, in either header.
+    const hasUnicodePath = (extra: Uint8Array) => {
+      const v = new DataView(extra.buffer, extra.byteOffset, extra.byteLength);
+      for (let k = 0; k + 4 <= extra.length; k += 4 + v.getUint16(k + 2, true)) {
+        if (v.getUint16(k, true) === 0x7075) return true;
+      }
+      return false;
+    };
+    if (hasUnicodePath(zip.subarray(p + 46 + n, p + 46 + n + e))) {
+      fail(`${what} carries a second, different name (a Unicode Path field)`);
+    }
     if (u16(p + 34) !== 0) fail(`${what} is on another disk of a split archive`);
     if (flags & 0x2041) fail(`${what} is encrypted`);
     if (method !== 0 && method !== 8) fail(`${what} uses compression method ${method}`);
@@ -2504,6 +2785,9 @@ function parseZip(zip: Uint8Array): { records: ZipRecord[]; comment: Uint8Array 
         fail(`${what}: its data descriptor disagrees with the central directory`);
       }
       next += sig + 12;
+    }
+    if (hasUnicodePath(zip.subarray(local + 30 + ln, start))) {
+      fail(`${what} carries a second, different name (a Unicode Path field)`);
     }
     spans.push([local, next, what]);
     records.push({
