@@ -1504,6 +1504,97 @@ test(
   },
 );
 
+test("the verification does not expect TeX settings in the PDF, only what prints", async () => {
+  // Found by the first real SkyCiv zip (2026-11-06): `\color{blue}{\text{ NONCOMPACT}}` made
+  // "blue" missing from a correct PDF. Each member of the class, and each printed argument kept.
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const tex = [
+    String.raw`\rightarrow\color{blue}{\text{ NONCOMPACT}}`,
+    String.raw`\color[rgb]{0.25,0.75,1}{\text{shaded}}`,
+    String.raw`\textcolor{crimson}{\text{flagged}}`,
+    String.raw`\colorbox{yellow}{\text{boxed}}`,
+    String.raw`\fcolorbox{magenta}{orange}{\text{framed}}`,
+    String.raw`\hspace{17em} \hspace*{19pt} \mspace{23mu} \kern29pt \mkern 31mu \raise 37pt\hbox{lifted}`,
+    String.raw`\rule[41pt]{43pt}{47pt} \raisebox{53pt}{\text{raised}}`,
+    String.raw`a \\[59pt] b \\ [kept]`,
+    String.raw`\phantom{invisible} \hphantom{6100} \vphantom{ghost}`,
+    String.raw`\label{eqlabel} \require{cancel} \style{font-weight:bold}{\text{styled}}`,
+    String.raw`\class{marker}{\text{classed}} \cssId{anchor}{\text{identified}}`,
+    String.raw`\unicode[Arial]{8710} \enclose{circle}[mathcolor="teal"]{\text{circled}}`,
+    String.raw`\bbox[violet,5px]{\text{bboxed}} \href{https://example.org/xyz}{\text{linked}}`,
+    String.raw`\begin{array}{clr} 67 \end{array} \begin{aligned} 71 \end{aligned}`,
+  ].join(" ");
+  const tokens = core.extractSourceTokens([`<body>[math]${tex}[math] 2.5</body>`]);
+  for (const gone of [
+    "blue",
+    "rgb",
+    "crimson",
+    "yellow",
+    "magenta",
+    "orange",
+    "invisible",
+    "ghost",
+    "eqlabel",
+    "cancel",
+    "font",
+    "weight",
+    "bold",
+    "marker",
+    "anchor",
+    "arial",
+    "circle",
+    "mathcolor",
+    "teal",
+    "violet",
+    "https",
+    "example",
+    "xyz",
+    "array",
+    "clr",
+    "aligned",
+  ]) {
+    assert.ok(!tokens.words.has(gone), `"${gone}" is a setting, but is expected in the PDF`);
+  }
+  for (const gone of [
+    "0.25",
+    "0.75",
+    "17",
+    "19",
+    "23",
+    "29",
+    "31",
+    "37",
+    "41",
+    "43",
+    "47",
+    "53",
+    "59",
+    "6100",
+    "8710",
+  ]) {
+    assert.ok(!tokens.numbers.has(gone), `${gone} is a setting, but is expected in the PDF`);
+  }
+  for (const kept of [
+    "noncompact",
+    "shaded",
+    "flagged",
+    "boxed",
+    "framed",
+    "lifted",
+    "raised",
+    "kept",
+    "styled",
+    "classed",
+    "identified",
+    "circled",
+    "bboxed",
+    "linked",
+  ]) {
+    assert.ok(tokens.words.has(kept), `"${kept}" prints, but is no longer checked`);
+  }
+  for (const kept of ["67", "71", "2.5"]) assert.ok(tokens.numbers.has(kept), `${kept} prints`);
+});
+
 // ── SkyCiv's zip (roadmap task 16) ───────────────────────────────────────────
 //
 // The test zips come from the writer below, NOT from the tool's own: a reader checked only against

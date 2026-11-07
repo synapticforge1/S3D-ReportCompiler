@@ -1920,6 +1920,107 @@ function sourceTagEnd(html: string, at: number): number {
 }
 
 /**
+ * TeX arguments that are SETTINGS, not text: what a reader never sees on the page, so they are not
+ * expected in the PDF. Each spec lists the arguments dropped, in order: `[` an optional `[…]`, `{`
+ * a required group (or one token), `*` an optional star. Arguments after these -- the text a
+ * command colours, raises or boxes -- are left, so they are still checked.
+ *
+ * Found by the first real SkyCiv zip (2026-11-06): `\color{blue}{\text{ NONCOMPACT}}` in two of 75
+ * reports, and "blue" reported missing from a correct PDF. The whole class is here -- colours,
+ * spacing (whose numbers never print), invisible content, labels, environment names and column
+ * specs, and MathJax's own extensions -- not only `\color`. Written for the verification alone
+ * (design-decisions §9); applied to all text, which can only make it expect less.
+ */
+const NONPRINTING_TEX: Record<string, string> = {
+  color: "[{",
+  textcolor: "[{",
+  colorbox: "[{",
+  fcolorbox: "[{{",
+  pagecolor: "[{",
+  definecolor: "{{{",
+  hspace: "*{",
+  vspace: "*{",
+  mspace: "{",
+  rule: "[{{",
+  raisebox: "{[[",
+  phantom: "{",
+  hphantom: "{",
+  vphantom: "{",
+  label: "{",
+  require: "{",
+  style: "{",
+  class: "{",
+  cssId: "{",
+  unicode: "[{",
+  href: "{",
+  enclose: "{[",
+  bbox: "[",
+  begin: "{",
+  end: "{",
+};
+/** Commands followed by a bare dimension (`\kern3pt`, `\raise 2pt`), which never prints. */
+const TEX_DIMENSION_COMMANDS =
+  /\\(?:kern|mkern|hskip|mskip|vskip|raise|lower|moveleft|moveright)\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|mm|cm|in|em|ex|mu|px|pc|bp|dd|cc|sp)/g;
+/** Environments whose first group after `\begin{…}` is a column or count spec. */
+const TEX_SPEC_ENVIRONMENTS = new Set(["array", "subarray", "tabular", "alignat", "alignedat"]);
+
+/** `text` with every non-printing TeX argument removed (see {@link NONPRINTING_TEX}). */
+function dropNonPrintingTex(text: string): string {
+  // A group from `at` (a "{" or "["), braces nested; returns the index past its close.
+  const group = (at: number, open: string, close: string): number => {
+    let depth = 0;
+    for (let i = at; i < text.length; i++) {
+      if (text[i] === "\\") i++;
+      else if (text[i] === open) depth++;
+      else if (text[i] === close && --depth === 0) return i + 1;
+    }
+    return text.length;
+  };
+  const skipSpace = (i: number) => {
+    while (i < text.length && /\s/.test(text[i])) i++;
+    return i;
+  };
+  let out = "";
+  let i = 0;
+  // `\\[4pt]` is a line break's extra space; only a dimension in the brackets is one.
+  const command =
+    /\\([a-zA-Z]+)|\\\\\s*\[\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|mm|cm|in|em|ex|mu|px|pc|bp|dd|cc|sp)\s*\]/g;
+  for (let m = command.exec(text); m; m = command.exec(text)) {
+    const name = m[1];
+    let at = command.lastIndex;
+    if (name === undefined) {
+      out += `${text.slice(i, m.index)} `;
+      i = at;
+      continue;
+    }
+    const spec = Object.hasOwn(NONPRINTING_TEX, name) ? NONPRINTING_TEX[name] : undefined;
+    if (spec === undefined) continue;
+    let environment = "";
+    for (const kind of spec) {
+      const j = skipSpace(at);
+      if (kind === "*") {
+        if (text[j] === "*") at = j + 1;
+      } else if (kind === "[") {
+        if (text[j] === "[") at = group(j, "[", "]");
+      } else if (text[j] === "{") {
+        const end = group(j, "{", "}");
+        if (name === "begin") environment = text.slice(j + 1, end - 1).trim();
+        at = end;
+      } else if (j < text.length) {
+        at = text[j] === "\\" ? (/^\\[a-zA-Z]+/.exec(text.slice(j))?.[0].length ?? 2) + j : j + 1;
+      }
+    }
+    if (TEX_SPEC_ENVIRONMENTS.has(environment.replace(/\*$/, ""))) {
+      const j = skipSpace(at);
+      if (text[j] === "{") at = group(j, "{", "}");
+    }
+    out += `${text.slice(i, m.index)} `;
+    i = command.lastIndex = at;
+  }
+  return (out + text.slice(i)).replace(TEX_DIMENSION_COMMANDS, " ");
+}
+
+/**
  * Derive the expected content from the **raw source reports**, independently of
  * anything the bake step did.
  *
@@ -1967,7 +2068,7 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
     // real numbers, making this check falsely lenient. Requiring a letter after
     // "<" keeps it to genuine tags; quotes are respected, so a ">" inside an attribute value
     // does not leave the rest of the tag behind as text.
-    const text = decodeEntities(html.replace(SOURCE_TAG, " "));
+    const text = dropNonPrintingTex(decodeEntities(html.replace(SOURCE_TAG, " ")));
 
     for (const c of text.match(/\\([a-zA-Z]{2,})/g) ?? []) {
       texCommands.add(c.slice(1).toLowerCase());
