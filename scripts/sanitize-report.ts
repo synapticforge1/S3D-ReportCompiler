@@ -92,16 +92,20 @@ const SRC_DIR = "local/HTMLFilesToBeCompiled";
 const OUT_DIR = "tests/HTMLFilesToBeCompiled";
 
 /**
- * Matches `Label:` plus the inline-maths spacer, then the value up to the `<br>`
- * that ends the row. The spacer is optional so this still works on a report that
- * does not use it; the value group is lazy so it stops at the first `<br>`.
+ * Matches `Label:` plus the inline-maths spacer, then the WHOLE value: up to the `<br>` that
+ * starts the next field ROW (a label in the template's own layout -- `Label:` and the spacer) or
+ * to the end of the block (`</td>`, `</p>`, …). It used to stop at the first `<br>`, so notes
+ * split by `<br>` (client / job number / scope) were scrubbed to their first line and the rest
+ * passed the residue check unseen -- it only looks for what was removed (2026-11-06 review).
+ * The next row is recognised by the spacer, so a line inside the value that merely LOOKS like a
+ * label ("Ref: 4471") does not end it early.
  */
 function fieldPattern(label: string): RegExp {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(
-    `(${escaped}:\\s*(?:\\[[a-z]+\\]\\\\text\\{[^}]*\\}\\[[a-z]+\\])?)([\\s\\S]*?)(<br\\s*/?>)`,
-    "i",
-  );
+  const spacer = String.raw`\[[a-z]+\]\\text\{[^}]*\}\[[a-z]+\]`;
+  const nextRow = String.raw`<br\s*/?>(?=\s*[A-Z][A-Za-z ]{0,40}:\s*${spacer})`;
+  const blockEnd = String.raw`<\/(?:td|th|p|div|li|tr|table)\s*>`;
+  return new RegExp(`(${escaped}:\\s*(?:${spacer})?)([\\s\\S]*?)(${nextRow}|${blockEnd})`, "i");
 }
 
 let failures = 0;
@@ -167,7 +171,9 @@ for (const file of files) {
       continue;
     }
 
-    removed.push(match[2]);
+    // The value's TEXT, for the residue check: a multi-line value carries its <br> tags (and maybe
+    // entities), and "br" checked as a word refused every such file -- <br> is everywhere.
+    removed.push(match[2].replace(/<[^>]*>/g, " ").replace(/&[#\w]+;/g, " "));
     out = out.replace(pattern, `$1${value}$3`);
   }
 

@@ -90,6 +90,8 @@ const ANY_PATH = String.raw`${DRIVE}(?:${SEP}${MID})*${SEP}${SEGMENT}`;
 // A network path, \\server\share\..., single- or JSON-escaped; not after a word,
 // a ":" or another backslash, so a drive path's own separators never start one.
 const UNC = String.raw`(?<![\w:\\])(?:\\{4}|\\{2})[A-Za-z0-9_.$-]+\\{1,2}${SEGMENT}(?:${SEP}${MID})*(?:${SEP}${SEGMENT})?`;
+// An absolute POSIX path: "/" then two or more path-like segments (no regex metacharacters).
+const POSIX_PATH = String.raw`(?<![\w.:/\\-])\/(?:[\w.~@%+-]+\/)+[\w.~@%+-]+`;
 
 /**
  * This checkout, and the folder holding it, in any separator and any drive spelling. A
@@ -177,6 +179,11 @@ const RULES: Array<[RegExp, string]> = [
   // Last: any network path, then any drive path still standing.
   [new RegExp(UNC, "g"), "<unc-path>"],
   [new RegExp(ANY_PATH, "g"), "<path>"],
+  // Any other absolute POSIX path of two segments or more -- /srv/…, /Volumes/…, /tmp/…, /opt/… --
+  // which records a machine's layout as much as a home folder does; they used to pass untouched,
+  // "0 drive path(s) after" (2026-11-06 review). Not after a word, ".", ":" or "/" (so not a URL's
+  // path or a relative one), and only path-like segments (so not a regex like /^#./).
+  [new RegExp(POSIX_PATH, "g"), "<path>"],
 ];
 
 /**
@@ -185,7 +192,16 @@ const RULES: Array<[RegExp, string]> = [
  * and a transcript holds them -- `git log` prints authors, a config read prints one -- yet this
  * script looked only at the username and paths: an address passed as clean (2026-11-06).
  */
-const EMAIL = /[A-Za-z0-9._%+-]+(?:@|%40|\\u0040)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+const EMAIL =
+  /[A-Za-z0-9._%+-]+(?:@|%40|\\u0040|&#0*64;|&#x0*40;|&commat;)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/gi;
+
+/**
+ * The residue check's email pattern, deliberately LOOSER than {@link EMAIL}: spaces around the
+ * "@", "(at)" / "[at]" spellings. A residue check made of the same pattern as the redaction can
+ * never find what the redaction missed -- it was 0 by construction (2026-11-06 review).
+ */
+const EMAIL_RESIDUE =
+  /[A-Za-z0-9._%+-]+\s*(?:@|%40|\\u0040|&#0*64;|&#x0*40;|&commat;|[([]at[)\]])\s*[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/gi;
 
 /**
  * Addresses that name no one: the commit trailer's, GitHub's SSH user, and the reserved example
@@ -203,6 +219,11 @@ const isPublicEmail = (e: string) => {
 const drivePaths = (s: string) => [
   ...(s.match(new RegExp(`${DRIVE}${SEP}${SEGMENT}`, "g")) ?? []),
   ...(s.match(new RegExp(UNC, "g")) ?? []),
+  // Looser than the POSIX redaction rule (any segment characters), for the same reason as
+  // EMAIL_RESIDUE: a check that matches only what the rules replace cannot fail.
+  ...(s.match(/(?<![\w.:/\\-])\/(?:[^/\s"'<>()]+\/)+[^/\s"'<>()]+/g) ?? []).filter(
+    (p) => !/^\/(?:[^/]*\/)*[^/]*[\^$*?|[\]{}]/.test(p), // a regex literal, not a path
+  ),
 ];
 
 // The label is derived here rather than by testing `typeof target` later: args[0]
@@ -250,7 +271,9 @@ console.log(`paths:     ${leftPaths.length} drive path(s) after`);
 for (const p of leftPaths.slice(0, 5)) console.log(`  ${p}`);
 
 // Counted, never printed: the residue is the very thing that must not be shown.
-const leftEmails = (text.match(EMAIL) ?? []).filter((e) => !isPublicEmail(e));
+const leftEmails = (text.match(EMAIL_RESIDUE) ?? []).filter(
+  (e) => !isPublicEmail(e.replace(/\s+/g, "").replace(/[([]at[)\]]/i, "@")),
+);
 console.log(`emails:    ${emailHits} redacted, ${leftEmails.length} left`);
 
 // A residue is a failure, not a note: it used to print "redacted." and exit 0,

@@ -603,6 +603,22 @@ test("the sanitizer refuses a filled field it does not scrub, and short values",
   const one = sanitize(single);
   assert.equal(one.code, 1, one.out);
   has(one.out, /1 removed value\(s\) too short to verify absent/);
+
+  // Notes split by <br> (client / job number / scope) are scrubbed WHOLE, to the next field row
+  // -- a line that merely looks like a label ("Ref: 4471") included. They used to be cut at the
+  // first <br>, and the rest passed unseen (group D, 2026-11-06).
+  const notes = sanitizerInput("sanitize-notes", false);
+  edit(notes, "]Kestrel Brumby<br", "]Kestrel Brumby<br>Ref: QX4471<br>Wharfton warehouse<br");
+  const sn = run([join(ROOT, "scripts", "sanitize-report.ts"), "x_report.html"], { cwd: notes });
+  assert.equal(sn.code, 0, sn.out);
+  const written = readFileSync(
+    join(notes, "tests", "HTMLFilesToBeCompiled", "x_report.html"),
+    "utf8",
+  );
+  for (const leak of ["QX4471", "Wharfton", "Kestrel"]) {
+    assert.ok(!written.includes(leak), `"${leak}" survived the sanitizer`);
+  }
+  assert.match(written, /Project Units:/, "the next field went with the notes");
 });
 
 // ── the transcript redactor ──────────────────────────────────────────────────
@@ -718,6 +734,40 @@ test("the redactor removes checkout, drive and slug paths, and fails on a residu
   ]) {
     assert.ok(mailed.includes(kept), `"${kept}" was redacted:\n${mailed}`);
   }
+
+  // Any absolute POSIX path, not only home folders, and an HTML-entity "@" (group D, 2026-11-06).
+  writeFileSync(
+    file,
+    [
+      "out /srv/clients/acme-steel/job-41/report.html",
+      "mac /Volumes/Work/acme-steel/report.html",
+      "tmp /tmp/acme-steel-job/out.pdf",
+      "entity kestrel&#64;brumby-mail.org",
+      "code /^#./.test(v) and https://github.com/synapticforge1/S3D-ReportCompiler/actions stay",
+    ].join("\n"),
+  );
+  const posix = run([redact, file, "--user=zorblax"]);
+  assert.equal(posix.code, 0, posix.out);
+  const posixText = readFileSync(file, "utf8");
+  for (const leak of ["acme-steel", "/srv/", "/Volumes/", "/tmp/", "brumby-mail"]) {
+    assert.ok(!posixText.includes(leak), `"${leak}" survived:\n${posixText}`);
+  }
+  assert.ok(
+    posixText.includes("/^#./.test(v)"),
+    `a regex literal was redacted as a path:\n${posixText}`,
+  );
+  assert.ok(
+    posixText.includes("https://github.com/synapticforge1/S3D-ReportCompiler/actions"),
+    posixText,
+  );
+
+  // The residue check looks WIDER than the redaction: a spelling no rule redacts fails the run,
+  // without echoing it. (It used to re-apply the redaction's own pattern: 0 by construction.)
+  writeFileSync(file, "contact kestrel (at) brumby-mail.org\n");
+  const loose = run([redact, file, "--user=zorblax"]);
+  assert.equal(loose.code, 1, loose.out);
+  has(loose.out, /emails:\s+0 redacted, 1 left/, /not safe to publish/);
+  assert.ok(!loose.out.includes("brumby-mail"), "the residue was echoed");
 });
 
 // ── MathJax limitations the bake works around ────────────────────────────────
