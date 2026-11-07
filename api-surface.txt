@@ -25,10 +25,12 @@ symbol	.	VerificationResult	typeAlias	export type VerificationResult = { missing
 symbol	.	assembleDocument	function	export declare function assembleDocument(bodies: string[], styles: string[], mathCss: string): string
 symbol	.	audit	variable	export declare const audit: { loadersRemoved: number; bodyTagMissing: number; visibilityNeutralised: number; heightNeutralised: number; atPageDropped: number; strayTokensDropped: number; }
 symbol	.	bakeBody	function	export declare function bakeBody(src: string, prefix: string): string
+symbol	.	bakeRemovals	variable	export declare const bakeRemovals: { activeAttributes: number; metaBaseTags: number; blocklessAtRules: number; atRules: number; bodySheetsMoved: number; }
 symbol	.	bakeStyle	function	export declare function bakeStyle(src: string, scope: string, prefix: string): string
 symbol	.	buildMathRegex	function	export declare function buildMathRegex(delims: Delim[]): RegExp
 symbol	.	compareAgainstPdf	function	export declare function compareAgainstPdf(src: SourceTokens, pdf: PdfObservations, reportCount: number): VerificationResult
 symbol	.	compareEachReport	function	export declare function compareEachReport(sources: string[], pageTexts: string[]): PerReportResult
+symbol	.	cssWarnings	variable	export declare const cssWarnings: Set<string>
 symbol	.	decodeEntities	function	export declare function decodeEntities(s: string): string
 symbol	.	delimSignatures	variable	export declare const delimSignatures: Set<string>
 symbol	.	extractSourceTokens	function	export declare function extractSourceTokens(sources: string[]): SourceTokens
@@ -56,10 +58,12 @@ symbol	./runtime	dirExists	function	export declare function dirExists(dir: strin
 symbol	./runtime	env	function	export declare function env(name: string): string | undefined
 symbol	./runtime	exit	function	export declare function exit(code: number): never
 symbol	./runtime	fileExists	function	export declare function fileExists(file: string): Promise<boolean>
+symbol	./runtime	fileIdentity	function	export declare function fileIdentity(file: string): Promise<string | null>
 symbol	./runtime	findChrome	function	export declare function findChrome(): Promise<string | null>
 symbol	./runtime	isBrowser	variable	export declare const isBrowser: boolean
 symbol	./runtime	joinPath	function	export declare function joinPath(...parts: string[]): string
 symbol	./runtime	listFiles	function	export declare function listFiles(dir: string): Promise<string[]>
+symbol	./runtime	listNames	function	export declare function listNames(dir: string): Promise<string[]>
 symbol	./runtime	makeTempDir	function	export declare function makeTempDir(prefix: string): Promise<string>
 symbol	./runtime	mkdirp	function	export declare function mkdirp(dir: string): Promise<void>
 symbol	./runtime	readFile	function	export declare function readFile(file: string): Promise<Uint8Array>
