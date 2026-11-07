@@ -507,7 +507,10 @@ harness that prints only hashes and allow-listed count lines, never report text)
   ignored (measured: "4 problem(s)"); Biome lints them regardless.
 - ⚠️ **Not testable here:** Chrome writing a PDF and exiting non-zero. Bun and Node, as a
   stand-in "Chrome", fail on its `file://` entry point before a preload (`BUN_OPTIONS=--preload`)
-  runs (measured). `publish.yml`'s new job graph runs first at the next release.
+  runs (measured).
+- ✅ Since run: the pinned actions, review 3 on Linux and Node 22.18 / 24 / 26 (CI 42397073197 on
+  `847de49`, all 7 jobs); `publish.yml`'s new job graph in the 1.3.0 release (run 42397518507,
+  every job green).
 
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
