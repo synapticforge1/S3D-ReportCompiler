@@ -29,8 +29,9 @@ symbol	.	ZipReports	typeAlias	export type ZipReports = { reports: { name: string
 symbol	.	assembleDocument	function	export declare function assembleDocument(bodies: string[], styles: string[], mathCss: string): string
 symbol	.	audit	variable	export declare const audit: { loadersRemoved: number; bodyTagMissing: number; visibilityNeutralised: number; heightNeutralised: number; atPageDropped: number; strayTokensDropped: number; }
 symbol	.	bakeBody	function	export declare function bakeBody(src: string, prefix: string): string
-symbol	.	bakeRemovals	variable	export declare const bakeRemovals: { activeAttributes: number; metaBaseTags: number; blocklessAtRules: number; atRules: number; bodySheetsMoved: number; }
+symbol	.	bakeRemovals	variable	export declare const bakeRemovals: { activeAttributes: number; metaBaseTags: number; blocklessAtRules: number; atRules: number; bodySheetsMoved: number; noscript: number; }
 symbol	.	bakeStyle	function	export declare function bakeStyle(src: string, scope: string, prefix: string): string
+symbol	.	bakeWarnings	variable	export declare const bakeWarnings: Set<string>
 symbol	.	buildMathRegex	function	export declare function buildMathRegex(delims: Delim[]): RegExp
 symbol	.	checkZipUpdate	function	export declare function checkZipUpdate(original: Uint8Array, updated: Uint8Array, name: string, file: Uint8Array): Promise<string[]>
 symbol	.	compareAgainstPdf	function	export declare function compareAgainstPdf(src: SourceTokens, pdf: PdfObservations, reportCount: number): VerificationResult
