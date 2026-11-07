@@ -540,10 +540,9 @@ test(
       cwd: sanitizerInput("sanitize-clean", false),
     });
     assert.equal(r.code, 0, r.out);
-    has(
-      r.out,
-      /✓ x_report\.html: would remove "Zorblax Quarry", "Quentin Vardle", "Kestrel Brumby"; 6 token\(s\) verified absent/,
-    );
+    has(r.out, /✓ x_report\.html: would remove 3 field value\(s\); 6 token\(s\) verified absent/);
+    // Counted, never printed: the values are the client's data (2026-11-07 review).
+    hasNot(r.out, /Zorblax|Vardle|Brumby/);
   },
 );
 
@@ -557,7 +556,8 @@ test(
       cwd: sanitizerInput("sanitize-leak", true),
     });
     assert.equal(r.code, 1, r.out);
-    has(r.out, /❌ x_report\.html: 1 removed term\(s\) still present: Zorblax/);
+    has(r.out, /❌ x_report\.html: 1 removed term\(s\) still present elsewhere/);
+    hasNot(r.out, /Zorblax/);
   },
 );
 
@@ -593,7 +593,7 @@ test("the sanitizer refuses a filled field it does not scrub, and short values",
   edit(initials, /(MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT)/i, "$1 checked QV");
   const qv = sanitize(initials);
   assert.equal(qv.code, 1, qv.out);
-  has(qv.out, /1 removed term\(s\) still present: QV/);
+  has(qv.out, /1 removed term\(s\) still present elsewhere/);
 
   // A name in non-Latin letters: no ASCII word to look for, so nothing was checked.
   const greek = sanitizerInput("sanitize-greek", false);
@@ -601,7 +601,36 @@ test("the sanitizer refuses a filled field it does not scrub, and short values",
   edit(greek, /(MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT)/i, "$1 Ζωρμπλαξ");
   const gr = sanitize(greek);
   assert.equal(gr.code, 1, gr.out);
-  has(gr.out, /still present: Ζωρμπλαξ/);
+  has(gr.out, /still present elsewhere/);
+
+  // Review 3 (2026-11-07). The residue check reads entities on both sides: a name written as
+  // references was blanked to nothing to look for, and one spelled with an entity elsewhere
+  // (`M&uuml;ller` in the title) did not match the field's "Müller". Both passed with ✓.
+  const refsOnly = sanitizerInput("sanitize-refs", false);
+  edit(refsOnly, "]Quentin Vardle<br", "]&#26472;&#20255;<br");
+  edit(refsOnly, /<title>/i, "<title>&#26472;&#20255; ");
+  const ro = sanitize(refsOnly);
+  assert.equal(ro.code, 1, ro.out);
+  has(ro.out, /1 removed term\(s\) still present elsewhere/);
+  const spelled = sanitizerInput("sanitize-spelled", false);
+  edit(spelled, "]Quentin Vardle<br", "]Müller<br");
+  edit(spelled, /<title>/i, "<title>M&uuml;ller ");
+  const sp = sanitize(spelled);
+  assert.equal(sp.code, 1, sp.out);
+  has(sp.out, /1 removed term\(s\) still present elsewhere/);
+  //   ...and every row of the block is one the guard can read: a filled Company in bold, or
+  //   without the spacer beside rows that have it, was never looked at.
+  for (const [what, row] of [
+    ["bold", "<b>Company</b>: Brightwater Holdings"],
+    ["no spacer", "Company: Brightwater Holdings"],
+  ]) {
+    const dir = sanitizerInput(`sanitize-shape-${what.replace(/\W/g, "")}`, false);
+    edit(dir, /Company:\s*\[mathin\]\\text\{[^}]*\}\[mathin\]<br/, `${row}<br`);
+    const r = sanitize(dir);
+    assert.equal(r.code, 1, `${what}:\n${r.out}`);
+    has(r.out, /not in the template's layout/);
+    hasNot(r.out, /Brightwater/);
+  }
 
   // A template without the [mathin] spacer: the scrub still works there, but the field guard read
   // only the spacer layout, saw no row at all, and passed a filled Company with ✓.
@@ -677,7 +706,82 @@ test("the sanitizer refuses a filled field it does not scrub, and short values",
   }
 });
 
+test("every committed sample holds the sanitizer's placeholders, and nothing else", () => {
+  // The sanitizer checks what it writes; nothing checked what is COMMITTED. A real report copied
+  // into tests/ by hand (the thing CLAUDE.md warns against) built, passed CI and was pushed
+  // (2026-11-07 review). Every row of every sample's Project-details block is accounted for:
+  // the three scrubbed fields hold the placeholders, Date and Project Units are kept, the rest
+  // are empty -- and a row this cannot read is a failure, not a skip.
+  const expected: Record<string, string | null> = {
+    "project name": "Example Structure",
+    designer: "Example Engineer",
+    "project notes": "Sample report — synthetic project metadata",
+    date: null, // kept verbatim
+    "project units": null,
+  };
+  const samples = readdirSync(SAMPLES).filter((n) => n.endsWith(".html"));
+  assert.equal(samples.length, 13, "the sample count changed: re-check this test");
+  for (const name of samples) {
+    const html = readFileSync(join(SAMPLES, name), "utf8");
+    const head = /<h3>Project details<\/h3>/i.exec(html);
+    assert.ok(head, `${name}: no Project details block`);
+    const from = head.index + head[0].length;
+    const block = html.slice(from, html.indexOf("</td>", from));
+    const rows = block.split(/<br\s*\/?>/i).filter((r) => r.trim() !== "");
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const m = /^\s*([^:<>\n]{1,60}):\s*\[mathin\]\\text\{[^}]*\}\[mathin\]([\s\S]*)$/.exec(row);
+      assert.ok(m, `${name}: a row the check cannot read: ${JSON.stringify(row.slice(0, 40))}`);
+      const label = m[1].trim().toLowerCase();
+      seen.add(label);
+      if (label in expected) {
+        const want = expected[label];
+        if (want !== null)
+          assert.equal(m[2].trim(), want, `${name}: "${m[1].trim()}" is not the placeholder`);
+      } else {
+        assert.equal(m[2].trim(), "", `${name}: "${m[1].trim()}" holds a value`);
+      }
+    }
+    for (const label of Object.keys(expected))
+      assert.ok(seen.has(label), `${name}: no ${label} row`);
+  }
+});
+
 // ── the transcript redactor ──────────────────────────────────────────────────
+
+test("review 3, group C: the redactor takes every spelling of a private path and address", () => {
+  const redact = join(ROOT, "tests", "controls", "redact-paths.ts");
+  // Invented names only; each line is "x <the private thing> y", and only "x" and "y" may stay.
+  const cases: Record<string, [string, RegExp]> = {
+    tilde: ["~\\Documents\\Acme Steel\\job41.html", /Acme|job41/],
+    userprofile: ["%USERPROFILE%\\OneDrive - Brumby Engineering\\Jobs\\x.html", /Brumby|Jobs/],
+    psEnv: ["$env:USERPROFILE\\Documents\\acme-steel\\x.html", /acme/],
+    psHome: ["$HOME\\Documents\\acme-steel\\x.html", /acme/],
+    noDrive: ["\\Users\\qwertyu\\Documents\\acme-steel\\x.html", /qwertyu|acme/],
+    fileHost: ["file://fileserver7/jobs/job-41/report.html", /fileserver7|job-41/],
+    filePosix: ["file:///srv/clients/acme-steel/report.html", /clients|acme/],
+    vscodeLink: ["[main.ts](file:///d%3A/Work/acme-steel/main.ts)", /Work|acme/],
+    vscodeUri: ["vscode://file/d%3A/Work/acme-steel/main.ts", /Work|acme/],
+    jsonPosix: ['"\\/srv\\/clients\\/acme-steel\\/r.html"', /clients|acme/],
+    percent: ["C%3A%5CUsers%5Cqwertyu%5CDocuments%5Cacme%5Cx.html", /qwertyu|acme/],
+    fullwidthAt: ["kestrel＠brumby-mail.org", /kestrel|brumby/],
+    idnDomain: ["kestrel@brümby-mail.org", /kestrel|brümby/],
+    quotedLocal: ['"kestrel brumby"@brumby-mail.org', /kestrel|brumby/],
+  };
+  for (const [name, [line, secret]] of Object.entries(cases)) {
+    const file = join(work, `redact-${name}.md`);
+    writeFileSync(file, `x ${line} y\n`);
+    const r = run([redact, file, "--user=zorblaxnobody"]);
+    const after = readFileSync(file, "utf8");
+    assert.equal(r.code, 0, `${name}: ${r.out}`);
+    assert.doesNotMatch(after, secret, `${name}: survived as ${JSON.stringify(after)}`);
+    assert.match(
+      after,
+      /^x .* y\n$/,
+      `${name}: prose around it was lost: ${JSON.stringify(after)}`,
+    );
+  }
+});
 
 test("the redactor removes checkout, drive and slug paths, and fails on a residue", () => {
   const redact = join(ROOT, "tests", "controls", "redact-paths.ts");

@@ -36,6 +36,18 @@
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+// The whole HTML entity table, loaded synchronously (MathJax's, already a dependency).
+import "mathjax-full/js/util/entities/all.js";
+import { translate } from "mathjax-full/js/util/Entities.js";
+
+/**
+ * Text as a reader sees it: every named and numeric entity decoded. Used on BOTH sides of the
+ * residue check -- the removed value and the written file. The check used to blank entities in the
+ * value and search the raw file, so a name written as `&#26472;&#20255;` left nothing to look for,
+ * and `M&uuml;ller` in the <title> did not match "Müller" from the field: both passed with ✓
+ * (2026-11-07 review).
+ */
+const asText = (html: string) => translate(html);
 
 /** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
 const readText = (p: string) => readFile(p, "utf8");
@@ -122,6 +134,18 @@ function fieldPattern(label: string, flags = ""): RegExp {
   );
 }
 
+/**
+ * The "Project details" block: from its heading to the end of the cell or block holding it (the
+ * template: `<h3>Project details</h3>Date: …<br>…Project Units: …<br></td>`). null if absent.
+ */
+function projectDetailsBlock(html: string): string | null {
+  const head = /<h[1-6][^>]*>\s*Project details\s*<\/h[1-6]\s*>/i.exec(html);
+  if (!head) return null;
+  const from = head.index + head[0].length;
+  const end = /<\/(?:td|th|div|table|section)\s*>/i.exec(html.slice(from));
+  return html.slice(from, end ? from + end.index : html.length);
+}
+
 let failures = 0;
 
 for (const file of files) {
@@ -192,12 +216,38 @@ for (const file of files) {
       break;
     }
 
-    // The value's TEXT, for the residue check: a multi-line value carries its <br> tags (and maybe
-    // entities), and "br" checked as a word refused every such file -- <br> is everywhere.
-    removed.push(match[2].replace(/<[^>]*>/g, " ").replace(/&[#\w]+;/g, " "));
+    // The value's TEXT, for the residue check: a multi-line value carries its <br> tags, and "br"
+    // checked as a word refused every such file -- <br> is everywhere. Entities DECODED, not
+    // blanked: blanked, a name written as references left no word to look for.
+    removed.push(asText(match[2].replace(/<[^>]*>/g, " ")));
     out = out.replace(pattern, `$1${value}$3`);
   }
   if (refused) {
+    failures++;
+    continue;
+  }
+
+  // Every "Label:" left in the Project-details block, whatever its markup -- `<b>Company</b>:`, a
+  // row without the spacer -- must be one the strict pattern read: a filled row in another shape was
+  // never looked at, and its value was copied into tests/ with ✓ (2026-11-07 review; the #45
+  // class, per field). Read on the SCRUBBED block, so a line inside a removed value ("Ref: 4471"
+  // in the notes) is gone already; any other label the strict pattern did not read is refused.
+  const block = projectDetailsBlock(out);
+  if (block === null) {
+    console.error(`❌ ${name}: no "Project details" block found — refusing to sanitize blind.`);
+    failures++;
+    continue;
+  }
+  const strange = block
+    .split(/<br\s*\/?>/i)
+    .map((row) => asText(row.replace(/<[^>]*>/g, "")).trim())
+    .map((row) => /^([^:\n]{1,60}):/.exec(row)?.[1].trim().toLowerCase())
+    .filter((l): l is string => l !== undefined && !seen.has(l));
+  if (strange.length > 0) {
+    console.error(
+      `❌ ${name}: ${strange.length} row(s) of the project-details block are not in the template's ` +
+        `layout, so their values cannot be checked — refusing.`,
+    );
     failures++;
     continue;
   }
@@ -231,18 +281,21 @@ for (const file of files) {
   // "Including" and would push us into ignoring genuinely identifying words to
   // quiet the false positives. Widening the ignore list to fix a sloppy matcher
   // is how a redaction check ends up unable to fail.
-  const survivors = tokens.filter((t) => wholeWord(t).test(out));
+  // Searched in the written file as TEXT (entities decoded): `M&uuml;ller` is Müller to a reader.
+  const outText = asText(out);
+  const survivors = tokens.filter((t) => wholeWord(t).test(outText));
 
+  // Counted, never printed: the survivors and the removed values ARE the client's data, and printing
+  // them put a project name and a designer in the terminal and every session transcript
+  // (known-issues: "count such fields with a script that prints only filled/empty").
   if (survivors.length > 0) {
-    console.error(
-      `❌ ${name}: ${survivors.length} removed term(s) still present: ${survivors.join(", ")}`,
-    );
+    console.error(`❌ ${name}: ${survivors.length} removed term(s) still present elsewhere.`);
     console.error("   The field was rewritten but the value appears elsewhere in the document.");
     failures++;
     continue;
   }
 
-  const summary = removed.map((v) => JSON.stringify(v.replace(/\s+/g, " ").trim())).join(", ");
+  const summary = `${removed.length} field value(s)`;
   if (checkOnly) {
     console.log(`✓ ${name}: would remove ${summary}; ${tokens.length} token(s) verified absent`);
   } else {

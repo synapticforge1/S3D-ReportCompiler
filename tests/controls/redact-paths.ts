@@ -65,10 +65,13 @@ if (!USER) {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// A path separator as it may appear: forward slash, one backslash, or the
-// doubled backslash of a JSON-encoded string.
-const SEP = String.raw`(?:\\{1,2}|/)`;
-const SEGMENT = String.raw`[^\\/\s"']+`;
+// A path separator as it may appear: forward slash, one backslash, the doubled backslash of a
+// JSON-encoded string, the JSON-escaped slash `\/`, or percent-encoded (`%5C`, `%2F`) as in a
+// `file:` or `vscode:` URI -- those passed whole, "0 path(s) after" (2026-11-07 review).
+const SEP = String.raw`(?:\\{1,2}\/?|\/|%5[Cc]|%2[Ff])`;
+// A segment ends at an encoded separator too: run across `%5C`, a percent-encoded path was one
+// long "segment", and the space-tolerant username part then swallowed the prose after it.
+const SEGMENT = String.raw`(?:(?!%5[Cc]|%2[Ff])[^\\/\s"'])+`;
 
 /**
  * A drive, as every shell on this machine spells it: `D:` (Windows; not preceded
@@ -78,7 +81,7 @@ const SEGMENT = String.raw`[^\\/\s"']+`;
  * Git Bash output is ordinary in these transcripts.
  */
 const driveRe = (letter = "[A-Za-z]") =>
-  String.raw`(?:(?<![A-Za-z0-9])${letter}:|(?<![\w.~-])/(?:mnt/|cygdrive/)?${letter}(?=/))`;
+  String.raw`(?:(?<![A-Za-z0-9])${letter}(?::|%3[Aa])|(?<![\w.~-])/(?:mnt/|cygdrive/)?${letter}(?=/))`;
 const DRIVE = driveRe();
 const rule = (body: string) => new RegExp(`${DRIVE}${SEP}${body}`, "gi");
 
@@ -99,7 +102,8 @@ const UNC =
 // An absolute POSIX path: "/" then two or more path-like segments (no regex metacharacters); a
 // middle segment may hold single spaces ("/srv/Client Jobs/…"), the last one as LAST does.
 const PSEG = String.raw`[\w.~@%+-]+`;
-const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\/(?:${PSEG}(?: ${PSEG})*\/)+(?:${PSEG}(?: ${PSEG})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${PSEG})`;
+// Each "/" may be JSON-escaped (`\/srv\/clients\/…`, as a transcript's JSON holds it).
+const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\\?\/(?:${PSEG}(?: ${PSEG})*\\?\/)+(?:${PSEG}(?: ${PSEG})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${PSEG})`;
 /**
  * The whole of a path below a home folder: the username (which may hold a space) and every
  * segment after it. The home rule used to replace `X:\Users\<name>` alone, and the rest stood --
@@ -179,6 +183,21 @@ const RULES: Array<[RegExp, string]> = [
     : []),
   // A home folder and EVERYTHING below it (HOME_TAIL), in any separator.
   [rule(`Users${SEP}${HOME_TAIL}`), "<home>"],
+  // The same home written without its drive (`\Users\<name>\…`), or through a shell's name for it
+  // -- `~\…`, `%USERPROFILE%\…`, `$env:USERPROFILE\…`, `$HOME/…` -- and everything below. Each
+  // passed whole, folder and client names included (2026-11-07 review).
+  [new RegExp(String.raw`(?<![\w:\\/>%])\\{1,2}Users${SEP}${HOME_TAIL}`, "gi"), "<home>"],
+  [
+    new RegExp(
+      String.raw`(?:%(?:USERPROFILE|HOMEPATH|APPDATA|LOCALAPPDATA|ONEDRIVE|TEMP|TMP)%|\$env:(?:USERPROFILE|HOME|HOMEPATH|APPDATA|LOCALAPPDATA|OneDrive|TEMP|TMP)\b|\$\{?HOME\}?(?![\w]))(?:${SEP}${HOME_TAIL})?`,
+      "gi",
+    ),
+    "<home>",
+  ],
+  [new RegExp(String.raw`(?<![\w.~-])~(?=${SEP})${SEP}${HOME_TAIL}`, "g"), "<home>"],
+  // A file: URI naming a host (`file://server/share/…`): a network path the UNC rule, which never
+  // starts after ":", did not see.
+  [/(?<![\w])file:\/\/(?!\/)[^\s"'<>)\]]+/gi, "file://<unc-path>"],
   // POSIX homes: /home/<user> (Linux), /Users/<user> (macOS), /root -- and everything below.
   [
     new RegExp(
@@ -202,6 +221,9 @@ const RULES: Array<[RegExp, string]> = [
   // "0 drive path(s) after" (2026-11-06 review). Not after a word, ".", ":" or "/" (so not a URL's
   // path or a relative one), and only path-like segments (so not a regex like /^#./).
   [new RegExp(POSIX_PATH, "g"), "<path>"],
+  // Last of all: a local file: or vscode: URI whose path no rule above took (`file:///srv/…`, the
+  // POSIX rule never starting after "/"). One already redacted starts with a placeholder.
+  [/(?<![\w])(file:\/\/\/|vscode:\/\/file\/)(?!<)[^\s"'<>)\]]+/gi, "$1<path>"],
 ];
 
 /**
@@ -210,8 +232,10 @@ const RULES: Array<[RegExp, string]> = [
  * and a transcript holds them -- `git log` prints authors, a config read prints one -- yet this
  * script looked only at the username and paths: an address passed as clean (2026-11-06).
  */
+// Letters of ANY script (an internationalised domain, an accented name), a quoted local part, and
+// the full-width and small "@" (U+FF20, U+FE6B): ASCII-only, each passed (2026-11-07 review).
 const EMAIL =
-  /[A-Za-z0-9._%+-]+(?:@|%40|\\u0040|&#0*64;|&#x0*40;|&commat;)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/gi;
+  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}._%+-]+)(?:@|＠|﹫|%40|\\u0040|&#0*64;|&#x0*40;|&commat;)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/giu;
 
 /**
  * The residue check's email pattern, deliberately LOOSER than {@link EMAIL}: spaces around the
@@ -219,14 +243,14 @@ const EMAIL =
  * never find what the redaction missed -- it was 0 by construction (2026-11-06 review).
  */
 const EMAIL_RESIDUE =
-  /[A-Za-z0-9._%+-]+\s*(?:@|%40|\\u0040|&#0*64;|&#x0*40;|&commat;|[([]at[)\]])\s*[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/gi;
+  /[\p{L}\p{N}._%+"-]+\s*(?:@|＠|﹫|%40|\\u0040|&#0*64;|&#x0*40;|&commat;|[([]at[)\]])\s*[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/giu;
 
 /**
  * Addresses that name no one: the commit trailer's, GitHub's SSH user, and the reserved example
  * and test domains (RFC 2606 / 6761) the test suite writes. Everything else is redacted.
  */
 const isPublicEmail = (e: string) => {
-  const plain = e.replace(/%40|\\u0040/i, "@");
+  const plain = e.replace(/%40|\\u0040|＠|﹫/i, "@");
   return (
     /^(?:noreply@anthropic\.com|git@github\.com)$/i.test(plain) ||
     /@(?:[\w-]+\.)*(?:example\.(?:com|net|org)|example|invalid|test|localhost)$/i.test(plain)
@@ -240,8 +264,17 @@ const isPublicEmail = (e: string) => {
  * `<path>/…` (only this checkout's and workspace's own tails are public); any slug left.
  */
 const drivePaths = (s: string) => [
-  ...(s.match(new RegExp(`${DRIVE}${SEP}`, "g")) ?? []),
+  // Looser than DRIVE: a digit may precede the letter, and every separator spelling counts.
+  ...(s.match(/(?<![A-Za-z])[A-Za-z](?::|%3[Aa])(?:\\|\/|%5[Cc]|%2[Ff])/g) ?? []),
   ...(s.match(/(?<![\w:>])(?:\\\\|\/\/)[A-Za-z0-9_$-]+[\\/]\S/g) ?? []),
+  // A file: or vscode: URI with anything left in it but its scheme and a placeholder.
+  ...(s.match(/(?:file|vscode):\/\/[^\s"'<>)\]]*/gi) ?? []).filter(
+    (u) => !/^(?:file:\/\/\/?|vscode:\/\/file\/)$/i.test(u),
+  ),
+  // A home written through a shell's name for it, or without its drive.
+  ...(s.match(
+    /(?<![\w.~-])~(?:\\|\/)[^\s"'<>]|%(?:USERPROFILE|HOMEPATH|APPDATA|LOCALAPPDATA|ONEDRIVE)%|\$env:(?:USERPROFILE|HOME|HOMEPATH|APPDATA|LOCALAPPDATA|OneDrive)\b|\$\{?HOME\}?(?:\\|\/)|(?<![\w>])(?:\\|\/)Users(?:\\|\/)[^\s"'<>]/gi,
+  ) ?? []),
   // A slug placeholder stands for one folder NAME, so a file below it is not a path tail.
   ...(s.match(
     /<(?:home|path|unc-path)>(?:(?:\\{1,2}|\/)[^\s"'<>]| [^\s"'<>\\/]+(?:\\{1,2}|\/))/g,
@@ -249,7 +282,7 @@ const drivePaths = (s: string) => [
   ...(s.match(/(?<![A-Za-z0-9])[A-Za-z]--[A-Za-z0-9]/g) ?? []),
   // Looser than the POSIX redaction rule (any segment characters), for the same reason as
   // EMAIL_RESIDUE: a check that matches only what the rules replace cannot fail.
-  ...(s.match(/(?<![\w.:/\\>-])\/(?:[^/\s"'<>()]+\/)+[^/\s"'<>()]+/g) ?? []).filter(
+  ...(s.match(/(?<![\w.:/\\>-])\\?\/(?:[^/\s"'<>()]+\/)+[^/\s"'<>()]+/g) ?? []).filter(
     (p) => !/^\/(?:[^/]*\/)*[^/]*[\^$*?|[\]{}]/.test(p), // a regex literal, not a path
   ),
 ];
