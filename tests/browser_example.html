@@ -44,7 +44,7 @@
 import {
   bakeBody, bakeStyle, assembleDocument, mathStyleSheet,
   findLeftoverMath, findBrokenReferences, mathStats, audit, delimSignatures, sortReportNames,
-  resetBakeState, skippedDelims, svgStyleWarnings,
+  resetBakeState, skippedDelims, svgStyleWarnings, cssWarnings, bakeWarnings,
 } from "./report_core.browser.js";
 
 const log = (msg) => { document.getElementById("log").textContent += "\n" + msg; };
@@ -75,9 +75,11 @@ document.getElementById("bake").addEventListener("click", async () => {
     log(`baked ${names[i]}`);
   }
 
-  // The warnings the command line prints.
+  // The warnings the command line prints -- all of them (cssWarnings and bakeWarnings were missing).
   for (const d of skippedDelims) log(`warning: refused degenerate delimiter "${d}"`);
   for (const s of svgStyleWarnings) log(`warning: SVG rule "${s}" could not be hoisted; kept, confined`);
+  for (const r of cssWarnings) log(`warning: CSS "${r}" cannot be scoped to its report; it was left out`);
+  for (const w of bakeWarnings) log(`warning: ${w}`);
 
   // Same guards the command line build uses. An unrecognised delimiter never
   // matches and would otherwise be typeset as prose...

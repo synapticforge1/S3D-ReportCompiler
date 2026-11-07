@@ -271,11 +271,16 @@ looking at.
 
 | Flag | Effect |
 | --- | --- |
-| `--no-keep-html` | discard the baked HTML after rendering, leaving only the PDF |
+| `--keep-html` | keep the baked HTML beside the PDF — the default, accepted so it can be said |
+| `--no-keep-html` | discard the baked HTML after a good build, leaving only the PDF (a failed build keeps it) |
 | `--no-optimize` | skip the object-stream repack (roughly doubles the file size) |
 | `--no-verify` | skip the conservation check — **not advisable** for a document that will be issued |
-| `--version` | print the version and exit |
-| `--help` | print usage and exit |
+| `-v`, `--version` | print the version and exit |
+| `-h`, `-?`, `--help` | print usage and exit |
+
+The output must be a `.pdf` (1.2.0): the file at that path is replaced, so `reports pack.zip`
+would have replaced the zip. The baked HTML beside it never replaces a file of its name that this
+tool did not bake.
 
 Unknown flags are rejected rather than ignored, so a mistyped `--no-optimise` cannot silently do the
 opposite of what you asked. So are a third path and an empty one: an unquoted path with a space
@@ -302,12 +307,19 @@ SkyCiv downloads a report set as one zip. Give the tool the zip itself; nothing 
 3. Only after a **PASS** is the PDF added **into the zip**, named after it (`pack.zip` gets
    `pack.pdf`).
 
-The rest of the zip is copied byte for byte. The updated zip is written beside the original, read
-back and checked: every report entry must be unchanged and the PDF entry identical to the verified
-file. Only then does it replace the original, in one rename. A failed build, or a zip that changed
+Every other entry keeps its compressed data, name, CRC, sizes and directory record exactly, never
+re-encoded; only its local header is rewritten (sizes written in place of a trailing data
+descriptor). The archive comment is kept. The updated zip is written beside the original, read back
+and checked: every report entry must be unchanged and the PDF entry identical to the verified file.
+Only then does it replace the original, in one rename. A failed build, or a zip that changed
 during the build, leaves the zip exactly as it was.
 
-- **Run it again** and the PDF in the zip is replaced, not duplicated.
+- **Run it again** and the PDF in the zip is replaced, not duplicated. The tool finds its own PDF
+  by a mark it writes in the entry's comment, not by name, so a zip renamed since still rebuilds,
+  and a file of yours that merely has the PDF's name is refused, never replaced.
+- **If the PDF passes but cannot be added** (the zip is open elsewhere, or changed meanwhile), the
+  build says so, leaves the zip as it was, keeps the verified PDF as `pack.verified.pdf` and exits 1.
+  The next good run removes that file.
 - **The baked HTML** is kept beside the zip (`pack.html`). `--no-keep-html` removes it. It is never
   put into the zip: it is a `.html`, so the next run would read it as a report. An existing
   `pack.html` that is not a previous bake is the user's file, and the build stops rather than
@@ -475,6 +487,7 @@ obscurely.
 | --- | --- |
 | `extractSourceTokens(sources)` | Every word, number and expected image count the sources contain → `SourceTokens` |
 | `compareAgainstPdf(expected, observed, reportCount)` | Compare against what was found in the PDF → `VerificationResult` with a `failures[]` array |
+| `compareEachReport(sources, pageTexts)` | **Per-report conservation**: the PDF split at the report headings, each report checked against its own pages → `PerReportResult` (`checked: false`, with the reason, when it cannot segment) |
 | `findLeftoverMath(baked)` | **The guard.** Surviving delimiters and TeX commands in a baked document — an empty array is the only acceptable result |
 | `findBrokenReferences(reports)` | **The reference guard.** Each report's `{ source, style, body, prefix }` → `ReferenceCheck`; `broken` lists every `url(#…)` / `href="#…"` the bake broke (one that resolved in its source no longer does). Empty is the only acceptable result: verification counts text and images, so a lost gradient, clip path or marker is otherwise invisible. Run by the CLI and the browser example |
 | `textWords(text)` / `textNumbers(text)` | The tokenizers, exposed so a caller can re-derive expectations independently |
@@ -488,8 +501,8 @@ Node and browsers.
 
 | Export | Description |
 | --- | --- |
-| `readZipReports(zip, ownName)` | The `.html` entries of a zip, unpacked and CRC-checked → `ZipReports` (`reports[]` of `{ name, html }`, and `hasOwn` if `ownName` is in the zip). Throws, naming every problem, on anything else in the zip and on every shape it does not read (see the CLI section) |
-| `zipWithFile(zip, name, file, date)` | The zip with `file` added under `name` (stored), replacing an entry of that name. Every other entry and the comment are copied byte for byte |
+| `readZipReports(zip, ownName)` | The `.html` entries of a zip, unpacked and CRC-checked → `ZipReports` (`reports[]` of `{ name, html }`, and `own`: the name of the PDF an earlier run added, found by its mark, or `null`). Throws, naming every problem, on anything else in the zip, on an unmarked entry named `ownName`, and on every shape it does not read (see the CLI section) |
+| `zipWithFile(zip, name, file, date)` | The zip with `file` added under `name` (stored, marked as this tool's), replacing the PDF an earlier run added. Every other entry's compressed data, name, CRC and sizes are kept, never re-encoded; its local header is rewritten. Throws if an unmarked entry already has `name` |
 | `checkZipUpdate(original, updated, name, file)` | The failures, an empty array on a pass. It proves `updated` is `original` plus `file`: every entry and the comment unchanged, the reports reading back the same, and the added entry byte-identical. Written apart from the writer, so a writer bug cannot vouch for itself |
 
 ### Counters and diagnostics
@@ -498,7 +511,11 @@ Node and browsers.
 | --- | --- |
 | `audit` | What the bake step removed or rewrote: `loadersRemoved`, `visibilityNeutralised`, `heightNeutralised`, `atPageDropped`, `strayTokensDropped`, `bodyTagMissing` |
 | `mathStats` | `converted`, `failed`, `firstFailure` |
+| `bakeRemovals` | The rest of what the bake removes or moves: `activeAttributes` (event handlers, `javascript:` URLs), `metaBaseTags`, `blocklessAtRules`, `atRules`, `bodySheetsMoved`, `noscript` |
 | `svgStyleWarnings` | SVG rules that could not be hoisted |
+| `cssWarnings` | CSS rules that could not be scoped to their report, and were left out |
+| `bakeWarnings` | What the bake declined to guess: a spinner id on an element that holds text (kept), a hidden rule no script reveals (left hidden) |
+| `seenOpeners` | Every opening delimiter met so far — what the guard looks for |
 | `resetBakeState()` | Zero every counter above and empty every diagnostic set (`seenOpeners` and the delimiter sets too). They are cumulative per process: **call it before each batch** when one page or server bakes more than once, or a later batch inherits an earlier one's failures and delimiters |
 | `VERSION`, `MATHJAX_FONTS` | Package version; the CDN base the fonts are inlined from |
 
@@ -509,10 +526,12 @@ Node and browsers.
 | `RUNTIME` / `isBrowser` | `"deno" \| "bun" \| "node" \| "browser"`. Bun is detected before Node, because Bun also sets `process.versions.node` |
 | `findChrome()` | Locate Chrome or Edge, honouring `CHROME_PATH` |
 | `run(cmd, argv)` | Spawn a process to completion, capturing stderr |
+| `runWithTimeout(cmd, argv, timeoutMs, signal?)` | `run`, bounded: past `timeoutMs` (1 to `MAX_TIMEOUT_MS`) or on `signal`, the process tree is killed → `TimedRunResult` with `timedOut` |
 | `cwd()`, `args()`, `env(name)`, `exit(code)` | Process access |
-| `readTextFile`, `readFile`, `writeFile`, `listFiles`, `fileExists` | Filesystem reads and writes |
+| `readTextFile`, `readFile`, `writeFile`, `listFiles`, `listNames`, `fileExists`, `dirExists` | Filesystem reads and writes; `listNames` returns every entry, so a caller can account for what `listFiles` left out |
+| `fileIdentity(file)` | Device and file number, or `null`: two paths with one identity are one file, a hard link included |
 | `mkdirp`, `removeQuietly`, `rename`, `makeTempDir`, `realPath` | Filesystem management |
-| `joinPath`, `baseName`, `toFileUrl` | Path handling |
+| `joinPath`, `baseName`, `resolvePath`, `toFileUrl` | Path handling |
 
 ---
 

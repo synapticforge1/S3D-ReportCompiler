@@ -1340,20 +1340,40 @@ test(
     const input = control("control-custom-delimiters", join(work, "links"));
     const elsewhere = join(work, "links-elsewhere");
     mkdirSync(elsewhere, { recursive: true });
-    // A report that is a symbolic link: compiled, not dropped (it was: 12 of 13, PASS).
-    writeFileSync(join(elsewhere, "e_report.html"), readFileSync(join(input, "d_report.html")));
-    symlinkSync(join(elsewhere, "e_report.html"), join(input, "e_report.html"), "file");
-    const r = run([MAIN, input, join(work, "links-out", "c.pdf")]);
-    assert.equal(r.code, 0, tail(r.out));
-    has(r.out, /Compiling 2 report\(s\)/, /per-report: 2\/2/);
+    // A FILE symlink needs Developer Mode or admin rights on Windows: without them it fails with
+    // EPERM, a reason that has nothing to do with this test (2026-11-06, review 2). Probed once;
+    // the link cases run wherever links can be made, and say so where they cannot.
+    const canSymlink = (() => {
+      const probe = join(elsewhere, "probe");
+      writeFileSync(probe, "");
+      try {
+        symlinkSync(probe, `${probe}.link`, "file");
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    if (canSymlink) {
+      // A report that is a symbolic link: compiled, not dropped (it was: 12 of 13, PASS).
+      writeFileSync(join(elsewhere, "e_report.html"), readFileSync(join(input, "d_report.html")));
+      symlinkSync(join(elsewhere, "e_report.html"), join(input, "e_report.html"), "file");
+      const r = run([MAIN, input, join(work, "links-out", "c.pdf")]);
+      assert.equal(r.code, 0, tail(r.out));
+      has(r.out, /Compiling 2 report\(s\)/, /per-report: 2\/2/);
+    } else {
+      console.log("  (symlink cases skipped: this account cannot create file symlinks)");
+    }
 
     // A broken link or a folder named *.html: refused, named.
     const odd = control("control-custom-delimiters", join(work, "links-odd"));
-    symlinkSync(join(elsewhere, "missing.html"), join(odd, "gone_report.html"), "file");
+    if (canSymlink) {
+      symlinkSync(join(elsewhere, "missing.html"), join(odd, "gone_report.html"), "file");
+    }
     mkdirSync(join(odd, "folder_report.html"));
     const o = run([MAIN, odd, join(work, "links-odd-out", "c.pdf")]);
     assert.equal(o.code, 1, tail(o.out));
-    has(o.out, /Not a readable report file/, /gone_report\.html/, /folder_report\.html/);
+    has(o.out, /Not a readable report file/, /folder_report\.html/);
+    if (canSymlink) has(o.out, /gone_report\.html/);
     hasNot(o.out, /Compiling/);
 
     // An output that is a HARD link to a report: refused (realpath cannot see it).
@@ -1922,12 +1942,38 @@ function testUnzip(zip: Uint8Array): Map<string, Uint8Array> {
   let p = b.readUInt32LE(end + 16);
   for (let i = 0; i < b.readUInt16LE(end + 10); i++) {
     const [n, e, c] = [b.readUInt16LE(p + 28), b.readUInt16LE(p + 30), b.readUInt16LE(p + 32)];
+    const name = b.toString("utf8", p + 46, p + 46 + n);
+    // A Map keeps the LAST of two equal names: a PDF added twice read as one, and "the PDF was
+    // added twice" could not fail (2026-11-06, review 2). Duplicates fail here instead.
+    assert.ok(!out.has(name), `"${name}" appears twice in the zip`);
     const local = b.readUInt32LE(p + 42);
+    // The local header is what a streaming reader sees (and what zipWithFile rewrites): its name,
+    // method and -- without a data descriptor -- CRC and sizes must be the central directory's.
+    assert.equal(b.readUInt32LE(local), 0x04034b50, `${name}: no local header`);
+    assert.equal(
+      b.toString("utf8", local + 30, local + 30 + b.readUInt16LE(local + 26)),
+      name,
+      `${name}: local name`,
+    );
+    assert.equal(b.readUInt16LE(local + 8), b.readUInt16LE(p + 10), `${name}: local method`);
+    if (!(b.readUInt16LE(local + 6) & 8)) {
+      for (const [l, cd] of [
+        [14, 16],
+        [18, 20],
+        [22, 24],
+      ]) {
+        assert.equal(
+          b.readUInt32LE(local + l),
+          b.readUInt32LE(p + cd),
+          `${name}: local header field ${l}`,
+        );
+      }
+    }
     const start = local + 30 + b.readUInt16LE(local + 26) + b.readUInt16LE(local + 28);
     const body = b.subarray(start, start + b.readUInt32LE(p + 20));
     const data = b.readUInt16LE(p + 10) === 8 ? inflateRawSync(body) : body;
     assert.equal(TEST_CRC(data), b.readUInt32LE(p + 16), "CRC");
-    out.set(b.toString("utf8", p + 46, p + 46 + n), new Uint8Array(data));
+    out.set(name, new Uint8Array(data));
     p += 46 + n + e + c;
   }
   return out;
@@ -2089,6 +2135,9 @@ test("a zip that is not a flat set of reports is refused, unchanged, naming why"
     const r = run(args);
     assert.equal(r.code, 1, tail(r.out));
     has(r.out, reason);
+    // "None may touch the zip" -- now asserted: it was only said (2026-11-06, review 2).
+    assert.ok(readFileSync(zipPath).equals(Buffer.from(bad)), `${args.join(" ")} changed the zip`);
+    assert.deepEqual(readdirSync(dir), ["pack.zip"], `${args.join(" ")} left a file beside it`);
   }
   writeFileSync(zipPath, testZip([ok]));
   writeFileSync(join(dir, "pack.html"), "<p>the user's own file</p>");
@@ -2213,6 +2262,14 @@ test("the zip update is checked independently: any change but the PDF is caught"
   const twice: Uint8Array = core.zipWithFile(updated, "PACK.pdf", pdf2, new Date());
   assert.deepEqual(await core.checkZipUpdate(updated, twice, "PACK.pdf", pdf2), []);
   assert.equal(testUnzip(twice).size, 4);
+
+  // The test's own reader can fail: a duplicate name, and a local header that disagrees with the
+  // central directory (review 2: a Map hid the first, the second was never compared).
+  const one = { name: "a.html", data: new TextEncoder().encode("<p>a</p>") };
+  assert.throws(() => testUnzip(testZip([one, one])), /appears twice/);
+  const skew = testZip([one]);
+  skew[14] ^= 1; // the local header's CRC
+  assert.throws(() => testUnzip(skew), /local header field 14/);
 });
 
 test("private paths stay ignored by git", () => {

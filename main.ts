@@ -203,7 +203,9 @@ STRAIGHT FROM SKYCIV'S ZIP
 
   The intermediate HTML is kept beside the zip (pack.html). Run it again and
   the PDF in the zip is replaced. A zip holding anything but a flat set of
-  .html reports is refused, naming what else is in it.
+  .html reports is refused, naming what else is in it. If the PDF passes but
+  cannot be added (the zip is open in another program), it is kept beside the
+  zip as pack.verified.pdf, and the build ends with an error.
 
 IF YOU WANT TO CHOOSE THE PATHS
   Quote anything containing spaces.
@@ -212,7 +214,7 @@ IF YOU WANT TO CHOOSE THE PATHS
       s3d-reportcompiler "C:\\Jobs\\Gate Calcs\\Reports" "C:\\Jobs\\GateCalcs.pdf"
 
   The second argument names the PDF, and the folder above it is created if it
-  does not exist.
+  does not exist. It must end in .pdf: a file already there is replaced.
 
 OPTIONS
   --keep-html     keep the intermediate HTML beside the PDF (the default)
