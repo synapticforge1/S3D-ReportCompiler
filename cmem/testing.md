@@ -326,6 +326,8 @@ tests fail; a direct print showed HEAD giving `svg[data-s3d-scope="r9-"] text` a
 (dump-dom of computed styles):** `font="31px serif"` on `<text>` → 16px (ignored); a bare `text`
 rule under `svg[data-s3d-scope]` beats `.rs0 svg text` (red), under `:where(…)` it loses, as the
 unscoped original does (green).
+🔁 **Superseded 2026-11-07 (#72):** the confinement is gone — an SVG sheet that cannot be hoisted
+exactly now MOVES to its report's scoped sheet; the CSS-scoping test § 5 pins that instead.
 
 **2026-11-06, fourth pass (owner: "fix all"; ledger #48–#51):** 35/35 on `bun test` (52 s) and
 `node --test` on Node 24.21 and 22.18; baked HTML byte-identical (`7f283563…`, `a19e5ad1…`);
@@ -484,6 +486,28 @@ was checked on the real 48 with values stripped (48 accepted), never printing on
   `record`, `finalize`, all green).
 - ⚠️ Probing: a temporary debug copy of the redactor's patterns went stale and misled one run (a
   residue hit read from an old pattern) — re-read the real script's output, not a copy's.
+
+**2026-11-07, the third full-project review (owner: "Fix all in the order you showed from A -
+E"; #72–#76):** 59/59 on `bun test`; Node's legs left to CI (no Node on this shell's PATH).
+Seven new tests — "review 3, group A" (11 sections), "group B" (4), "group C: the redactor …",
+"every committed sample holds the sanitizer's placeholders", "group E: the README's first run" and
+"… every graphics and structure check can fail", "release: an unknown argument is refused" — and
+extensions (the entity control's byte-for-byte bake, the sanitizer's entity and row-shape cases,
+`verify-release --github`, the workflow assertions). **Inverted section by section:** a scratch
+script cut each numbered section into its own copy of the test and ran it in a worktree of the
+previous commit; every section failed there. The entity check was inverted by swapping `lt`/`gt`
+in the bake's table (passed before, fails now); the committed-samples test by planting a filled
+Company in a worktree's sample. All three real sets byte-identical after every group (a
+harness that prints only hashes and allow-listed count lines, never report text).
+- ⚠️ **`git worktree remove --force` on a worktree holding a `node_modules` JUNCTION:** git left
+  the junction, so the repo's `node_modules` survived (checked: `bun install --frozen-lockfile`
+  → "no changes") — but remove the link FIRST (`[IO.Directory]::Delete(<junction>)`, not
+  recursive), then the worktree.
+- ⚠️ **`bun fmt` skips git-ignored files**, so the format canary's planted files must NOT be
+  ignored (measured: "4 problem(s)"); Biome lints them regardless.
+- ⚠️ **Not testable here:** Chrome writing a PDF and exiting non-zero. Bun and Node, as a
+  stand-in "Chrome", fail on its `file://` entry point before a preload (`BUN_OPTIONS=--preload`)
+  runs (measured). `publish.yml`'s new job graph runs first at the next release.
 
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout

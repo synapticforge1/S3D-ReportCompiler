@@ -53,11 +53,13 @@ sources ──► BAKE ──► GUARD ──► RENDER ──► OPTIMIZE ─�
             core     core      runtime    pdf-lib      core+pdfjs
 ```
 
-1. **BAKE** (core) — parse each report's own delimiter config, pre-render the maths to CHTML, strip
-   scripts, remove the spinner, namespace ids (and every reference to them), scope the CSS — the
-   head's sheets and the body's own, `html`/`body` selectors settled against the source's tags —,
-   hoist SVG styles onto presentation attributes where an attribute can say the same and confine
-   the rest to their own `<svg>`, strip event handlers / `javascript:` URLs / `<meta>` / `<base>`,
+1. **BAKE** (core) — read each report as UTF-8 or refuse it (`decodeReport`), parse its own
+   delimiter config (from scripts that run), pre-render the maths to CHTML with a fresh TeX state
+   per report, strip scripts, remove the spinner, namespace ids (and every reference to them),
+   scope the CSS — the head's sheets and the body's own, `html`/`body` selectors settled against
+   the source's tags —, hoist SVG styles onto presentation attributes only where nothing could
+   tell the difference and move the rest to the report's scoped sheet (2026-11-07; they were
+   confined to their own `<svg>`), strip event handlers / `javascript:` URLs / `<meta>` / `<base>`,
    inline the fonts. Output is one hermetic document — its own Content-Security-Policy forbids
    scripts and outside loads (design-decisions §8); then the
    core's `findBrokenReferences` checks every id reference the bake renamed still resolves — the CLI

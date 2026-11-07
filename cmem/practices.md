@@ -366,3 +366,29 @@ the assumption, the old code under the new test.
 **Rule:** after fixing, review the fix as new code in its own pass. For each one: what input would
 make it wrong, and what independent thing (the browser, the registry, the previous version) can say
 so? A test that cannot fail for the reason it names is not a test (§2).
+
+## 17. Ask what the pipeline can ADD, hide or carry over — not only what it can lose
+
+The verification proves every source word and number is PRESENT (verification.md, limit 3). The
+third full-project review (2026-11-07, known-issues #72) found nine silent defects in the core, and
+almost every one was on the other side of that line, where presence cannot see:
+
+| Added / hidden / carried | How it passed |
+|---|---|
+| `\phiM_n` typeset as red text by MathJax's `noundefined` | counted as converted; the guard saw no failure |
+| report 0's `\renewcommand{\phi}{0.9}` printing report 1's `\phi M_n` as `0.9 M_n` | "0.9" is extra; "phi" is a command name |
+| a comment naming `@import` opening a `/*` that swallowed later reports' `display:none` | hidden content PRINTED: extra text |
+| a commented-out script opening the reveal gate | the same |
+| `&lt;`/`&gt;` swapped by the bake | a relation symbol is neither a word nor a number |
+
+Each was found by asking "what could this step put into the document, or take from the report
+before it, that the check would not miss?" — and each was shown by a planted input, not reasoned
+from the code. A library's convenience is the usual source: MathJax's error-to-text packages, its
+definitions that outlive an expression, a lenient UTF-8 decode that makes a bad byte U+FFFD on
+both sides of the check.
+
+**Rule:** for every transform, list what it could ADD, HIDE or CARRY to the next report, and give
+each one a check that does not count words: byte-for-byte against a baseline bake (the entity
+control), a fresh state per report (`resetTexDefinitions`), a refusal at the input
+(`decodeReport`). And invert a new test SECTION BY SECTION against the previous commit — one
+section failing can hide another that would pass.

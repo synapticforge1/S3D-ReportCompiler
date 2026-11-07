@@ -127,6 +127,14 @@ strips scripts, event handlers, `javascript:` URLs, `<meta>` and `<base>`; the d
 Content-Security-Policy forbids every script and every outside load (measured: a counting server
 saw 5 requests during a render before, 0 after); Chrome keeps its sandbox except as root.
 
+🔁 **The BAKE can add too (2026-11-07, known-issues #72; practices §17)** — not only the render.
+What it now prevents: an undefined TeX command typeset as red text (MathJax's `noundefined`, left
+out); one report's TeX definitions changing the next (cleared per report); a CSS comment or
+string that opened a `/*` and hid later rules' `display:none` (CSS comments read as CSS does); the
+reveal gate opened by a commented-out script (only scripts that run); a bad byte read as U+FFFD
+on both sides (`decodeReport` refuses it). And one check that is NOT presence: the entity
+control's bake must equal the untouched sample's, byte for byte — a swapped `<`/`>` is no word.
+
 ## Comparison technique, and why it is that way
 
 PDF text arrives as **positioned fragments**. `REFERENCES CALCULATIONS RESULTS` may extract as one run,
