@@ -648,6 +648,44 @@ test("the sanitizer refuses a filled field it does not scrub, and short values",
     has(r.out, /not in the template's layout/);
     hasNot(r.out, /Brightwater/);
   }
+  //   Review 4: row by row, not label by label -- a second Client row in other markup, a Client
+  //   whose first line is blank, and a line with no colon all passed with ✓.
+  for (const [what, from, to] of [
+    [
+      "second row",
+      /(Company:\s*\[mathin\]\\text\{[^}]*\}\[mathin\]<br)/,
+      "$1><b>Client</b>: Brightwater Holdings<br",
+    ],
+    [
+      "blank first line",
+      /(Client:\s*\[mathin\]\\text\{[^}]*\}\[mathin\])<br/,
+      "$1<br>Brightwater Holdings<br",
+    ],
+    [
+      "no colon",
+      /(Company:\s*\[mathin\]\\text\{[^}]*\}\[mathin\]<br)/,
+      "$1>Brightwater Holdings<br",
+    ],
+  ] as const) {
+    const dir = sanitizerInput(`sanitize-row-${what.replace(/\W/g, "")}`, false);
+    edit(dir, from, to);
+    const r = sanitize(dir);
+    assert.equal(r.code, 1, `${what}:\n${r.out}`);
+    has(r.out, /not in the template's layout/);
+    hasNot(r.out, /Brightwater/);
+  }
+  //   ...and the residue check reads a legacy entity with no ";" and a decomposed letter.
+  for (const [what, title] of [
+    ["legacy entity", "<title>M&uumlller "],
+    ["decomposed", "<title>Müller "],
+  ] as const) {
+    const dir = sanitizerInput(`sanitize-${what.replace(/\W/g, "")}`, false);
+    edit(dir, "]Quentin Vardle<br", "]Müller<br");
+    edit(dir, /<title>/i, title);
+    const r = sanitize(dir);
+    assert.equal(r.code, 1, `${what}:\n${r.out}`);
+    has(r.out, /1 removed term\(s\) still present elsewhere/);
+  }
 
   // A template without the [mathin] spacer: the scrub still works there, but the field guard read
   // only the spacer layout, saw no row at all, and passed a filled Company with ✓.
@@ -746,19 +784,18 @@ test("every committed sample holds the sanitizer's placeholders, and nothing els
     const block = html.slice(from, html.indexOf("</td>", from));
     const rows = block.split(/<br\s*\/?>/i).filter((r) => r.trim() !== "");
     const seen = new Set<string>();
-    for (const row of rows) {
+    // A failure names the file and the row's NUMBER only: a sample that is real client data must
+    // not put its client in the terminal or the CI log (review 4) -- so no row text, no label, and
+    // no assert.equal, whose message shows the actual value.
+    rows.forEach((row, i) => {
       const m = /^\s*([^:<>\n]{1,60}):\s*\[mathin\]\\text\{[^}]*\}\[mathin\]([\s\S]*)$/.exec(row);
-      assert.ok(m, `${name}: a row the check cannot read: ${JSON.stringify(row.slice(0, 40))}`);
+      assert.ok(m, `${name}: row ${i + 1} is one the check cannot read`);
       const label = m[1].trim().toLowerCase();
+      assert.ok(!seen.has(label), `${name}: row ${i + 1} repeats a label`);
       seen.add(label);
-      if (label in expected) {
-        const want = expected[label];
-        if (want !== null)
-          assert.equal(m[2].trim(), want, `${name}: "${m[1].trim()}" is not the placeholder`);
-      } else {
-        assert.equal(m[2].trim(), "", `${name}: "${m[1].trim()}" holds a value`);
-      }
-    }
+      const want = label in expected ? expected[label] : "";
+      assert.ok(want === null || m[2].trim() === want, `${name}: row ${i + 1} holds a value`);
+    });
     for (const label of Object.keys(expected))
       assert.ok(seen.has(label), `${name}: no ${label} row`);
   }
@@ -784,6 +821,18 @@ test("review 3, group C: the redactor takes every spelling of a private path and
     fullwidthAt: ["kestrel＠brumby-mail.org", /kestrel|brumby/],
     idnDomain: ["kestrel@brümby-mail.org", /kestrel|brümby/],
     quotedLocal: ['"kestrel brumby"@brumby-mail.org', /kestrel|brumby/],
+    // Review 4: a quoted path whose last folder name holds a space, a network URI or an IP path,
+    // a clipped address and an address literal.
+    spacedLast: ['cd "D:\\Jobs\\Acme Steel"', /Acme|Steel/],
+    spacedHome: ['"C:\\Users\\qwertyu\\OneDrive - Acme Ltd"', /qwertyu|Acme/],
+    spacedJson: ['"D:\\\\Jobs\\\\Acme Steel\\"', /Acme|Steel/],
+    spacedUnc: ['"\\\\fileserver7\\Acme Jobs"', /fileserver7|Acme/],
+    spacedPosix: ["'/home/qwertyu/Acme Jobs'", /qwertyu|Acme/],
+    smb: ["smb://fileserver7/jobs/acme-steel", /fileserver7|acme/],
+    afp: ["afp://nas7.local/Acme", /nas7|Acme/],
+    ipShare: ["//192.168.1.5/jobs/acme-steel", /192\.168|acme/],
+    clipped: ["kestrel.brumby@brumby-mail.o", /kestrel|brumby/],
+    literal: ["bob@[192.168.1.1]", /bob|192/],
   };
   for (const [name, [line, secret]] of Object.entries(cases)) {
     const file = join(work, `redact-${name}.md`);
@@ -797,6 +846,19 @@ test("review 3, group C: the redactor takes every spelling of a private path and
       /^x .* y\n$/,
       `${name}: prose around it was lost: ${JSON.stringify(after)}`,
     );
+  }
+  //   ...and no more than the path: the prose after a home folder, a code span's closing "`" and
+  //   a sentence's comma stay (review 4: the username ran across spaces to the end of the line).
+  for (const [line, kept] of [
+    ["C:\\Users\\qwertyu and then the rest", " and then the rest"],
+    ["see `D:\\Jobs\\job41` then", "` then"],
+    ["in D:\\Jobs\\job41, then", ", then"],
+  ]) {
+    const file = join(work, "redact-prose.md");
+    writeFileSync(file, `${line}\n`);
+    const r = run([redact, file, "--user=zorblaxnobody"]);
+    assert.equal(r.code, 0, r.out);
+    assert.ok(readFileSync(file, "utf8").includes(kept), `${line}: "${kept}" was redacted`);
   }
 });
 

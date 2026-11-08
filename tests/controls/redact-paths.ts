@@ -71,7 +71,11 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const SEP = String.raw`(?:\\{1,2}\/?|\/|%5[Cc]|%2[Ff])`;
 // A segment ends at an encoded separator too: run across `%5C`, a percent-encoded path was one
 // long "segment", and the space-tolerant username part then swallowed the prose after it.
-const SEGMENT = String.raw`(?:(?!%5[Cc]|%2[Ff])[^\\/\s"'])+`;
+// Not a backtick either: a path in a Markdown code span took the closing "`" and the prose after it.
+const SEGMENT = String.raw`(?:(?!%5[Cc]|%2[Ff])[^\\/\s"'\x60])+`;
+// A last segment does not end in sentence punctuation: "…\job41," kept the comma's sentence whole
+// but took the comma, and "(see …\x)" its ")" (review 4).
+const SEG_END = String.raw`(?<![,.;:)\]}])`;
 
 /**
  * A drive, as every shell on this machine spells it: `D:` (Windows; not preceded
@@ -90,7 +94,7 @@ const rule = (body: string) => new RegExp(`${DRIVE}${SEP}${body}`, "gi");
 // runs across spaces only when it ends in a file extension ("Quarry Job.zip"), so prose after a
 // path is not swallowed -- and a file name with a space no longer leaves its second word behind.
 const MID = `${SEGMENT}(?: ${SEGMENT})*(?=${SEP})`;
-const LAST = String.raw`(?:${SEGMENT}(?: ${SEGMENT})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${SEGMENT})`;
+const LAST = String.raw`(?:${SEGMENT}(?: ${SEGMENT})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${SEGMENT}${SEG_END})`;
 const ANY_PATH = `${DRIVE}(?:${SEP}${MID})*${SEP}${LAST}`;
 // A network path, \\server\share\..., single- or JSON-escaped; not after a word,
 // a ":" or another backslash, so a drive path's own separators never start one. And //server/share
@@ -110,7 +114,20 @@ const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\\?\/(?:${PSEG}(?: ${PSEG})*\\?\/)
  * `<home>\OneDrive - <employer>\Jobs\<client>\…`, a surname after a spaced username -- while the
  * residue check, looking for drive paths only, said "0 drive path(s) after" (2026-11-06 review).
  */
-const HOME_TAIL = `${SEGMENT}(?: ${SEGMENT})*(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
+// The username runs across spaces only where a separator follows it: `C:\Users\<name> and then`
+// took "and then" and the rest of the line as the name (review 4).
+const HOME_TAIL = `${SEGMENT}(?:(?: ${SEGMENT})+(?=${SEP}))?(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
+
+/**
+ * A path written inside quotes, taken to the closing quote: there a last folder name may hold
+ * spaces, and the unquoted rules stop it at the first one -- `cd "D:\Jobs\Acme Steel"` became
+ * `"<path> Steel"`, the employer's name left (review 4). A drive path, a network path, or a POSIX
+ * path under a home or a share; the quote is `"`, `'` or a backtick, JSON-escaped or not.
+ */
+const QUOTED_PATH = new RegExp(
+  String.raw`(["'\x60])((?:${DRIVE}${SEP}|\\{2,4}[A-Za-z0-9_.$-]+\\|\/(?:home|Users|root|srv|mnt|media|Volumes|net|opt|tmp|var)\/)[^"'\x60\n]*?)(?=\\?\1)`,
+  "gi",
+);
 
 /**
  * This checkout, and the folder holding it, in any separator and any drive spelling. A
@@ -159,7 +176,8 @@ const SLUG_END = "(?![A-Za-z0-9_.-])";
 
 // Longest first: the project path extends the home path, so replacing the home
 // path first would strand the remainder.
-const RULES: Array<[RegExp, string]> = [
+type Replacement = string | ((match: string, ...groups: string[]) => string);
+const RULES: Array<[RegExp, Replacement]> = [
   // This checkout and its workspace, found from where this script lives.
   ...(PROJECT
     ? ([[new RegExp(`${PROJECT.path}${END}`, "gi"), "<project>"]] as Array<[RegExp, string]>)
@@ -181,6 +199,19 @@ const RULES: Array<[RegExp, string]> = [
         ] as [RegExp, string],
       ]
     : []),
+  // Any other path in quotes, whole ({@link QUOTED_PATH}): a home, a network path, or a path.
+  [
+    QUOTED_PATH,
+    (_m: string, quote: string, path: string) =>
+      quote +
+      (new RegExp(String.raw`^(?:${DRIVE}${SEP}Users${SEP}|\/(?:home|Users|root)\/)`, "i").test(
+        path,
+      )
+        ? "<home>"
+        : /^\\{2}/.test(path)
+          ? "<unc-path>"
+          : "<path>"),
+  ],
   // A home folder and EVERYTHING below it (HOME_TAIL), in any separator.
   [rule(`Users${SEP}${HOME_TAIL}`), "<home>"],
   // The same home written without its drive (`\Users\<name>\…`), or through a shell's name for it
@@ -213,6 +244,11 @@ const RULES: Array<[RegExp, string]> = [
   [/(?<![A-Za-z0-9])[A-Za-z]--Users-[A-Za-z0-9_.-]+/g, "<home-slug>"],
   // Any other slug of a drive path: one letter, "--", then the flattened rest.
   [/(?<![A-Za-z0-9])[A-Za-z]--[A-Za-z0-9][A-Za-z0-9_.-]*/g, "<path-slug>"],
+  // A share named by a network URI (`smb://nas7/jobs/…`, `afp://…`, `nfs://…`), or a forward-slash
+  // network path to an IP address (`//192.168.1.5/jobs/…`, which the dotless-host rule skips):
+  // each passed whole (review 4).
+  [/(?<![\w])(smb|afp|nfs|cifs|webdav|davs?):\/\/[^\s"'<>)\]\x60]+/gi, "$1://<unc-path>"],
+  [/(?<![\w:/\\>])\/\/\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\/[^\s"'<>)\]\x60]*/g, "<unc-path>"],
   // Last: any network path, then any drive path still standing.
   [new RegExp(UNC, "g"), "<unc-path>"],
   [new RegExp(ANY_PATH, "g"), "<path>"],
@@ -234,16 +270,21 @@ const RULES: Array<[RegExp, string]> = [
  */
 // Letters of ANY script (an internationalised domain, an accented name), a quoted local part, and
 // the full-width and small "@" (U+FF20, U+FE6B): ASCII-only, each passed (2026-11-07 review).
+// The domain may be an address literal (`bob@[192.168.1.1]`), and its last label one letter: a
+// transcript exporter clips long lines, and `…@brumby-mail.o` passed (review 4).
 const EMAIL =
-  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}._%+-]+)(?:@|＠|﹫|%40|\\u0040|&#0*64;|&#x0*40;|&commat;)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/giu;
+  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}._%+-]+)(?:@|＠|﹫|%40|\\u0040|&#0*64;|&#x0*40;|&commat;)(?:\[[0-9A-Fa-f.:]+\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}+)/giu;
 
 /**
  * The residue check's email pattern, deliberately LOOSER than {@link EMAIL}: spaces around the
  * "@", "(at)" / "[at]" spellings. A residue check made of the same pattern as the redaction can
  * never find what the redaction missed -- it was 0 by construction (2026-11-06 review).
  */
+// Its DOMAIN is looser too (review 4: it was the rule's own, so a clipped `…@brumby-mail.o` passed
+// both): any address literal, or a first label holding two letters followed by a dot and anything
+// -- which keeps `react@18.3.1` and `checkout@v5.1.0` (a version, not a domain) out of it.
 const EMAIL_RESIDUE =
-  /[\p{L}\p{N}._%+"-]+\s*(?:@|＠|﹫|%40|\\u0040|&#0*64;|&#x0*40;|&commat;|[([]at[)\]])\s*[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/giu;
+  /[\p{L}\p{N}._%+"-]+\s*(?:@|＠|﹫|%40|\\u0040|&#0*64;|&#x0*40;|&commat;|[([]at[)\]])\s*(?:\[[0-9A-Fa-f.:]+\]|[\p{L}\p{N}-]*\p{L}[\p{L}\p{N}-]*\p{L}[\p{L}\p{N}-]*\.[\p{L}\p{N}.-]*)/giu;
 
 /**
  * Addresses that name no one: the commit trailer's, GitHub's SSH user, and the reserved example
@@ -275,10 +316,15 @@ const drivePaths = (s: string) => [
   ...(s.match(
     /(?<![\w.~-])~(?:\\|\/)[^\s"'<>]|%(?:USERPROFILE|HOMEPATH|APPDATA|LOCALAPPDATA|ONEDRIVE)%|\$env:(?:USERPROFILE|HOME|HOMEPATH|APPDATA|LOCALAPPDATA|OneDrive)\b|\$\{?HOME\}?(?:\\|\/)|(?<![\w>])(?:\\|\/)Users(?:\\|\/)[^\s"'<>]/gi,
   ) ?? []),
-  // A slug placeholder stands for one folder NAME, so a file below it is not a path tail.
+  // A slug placeholder stands for one folder NAME, so a file below it is not a path tail. (A word
+  // after one, before a closing quote, cannot be told from `"git -C <path> status"`; a quoted path
+  // is taken whole instead, {@link QUOTED_PATH}.)
   ...(s.match(
     /<(?:home|path|unc-path)>(?:(?:\\{1,2}|\/)[^\s"'<>]| [^\s"'<>\\/]+(?:\\{1,2}|\/))/g,
   ) ?? []),
+  // A share named by a network URI, or a network path to an IP address.
+  ...(s.match(/(?:smb|afp|nfs|cifs|webdav|davs?):\/\/(?!<)\S|\/\/\d{1,3}(?:\.\d{1,3}){3}[:/]/gi) ??
+    []),
   ...(s.match(/(?<![A-Za-z0-9])[A-Za-z]--[A-Za-z0-9]/g) ?? []),
   // Looser than the POSIX redaction rule (any segment characters), for the same reason as
   // EMAIL_RESIDUE: a check that matches only what the rules replace cannot fail.
@@ -300,8 +346,13 @@ const applied: string[] = [];
 
 for (const [pattern, replacement] of RULES) {
   const hits = (text.match(pattern) ?? []).length;
-  if (hits > 0) applied.push(`${hits} → ${replacement}`);
-  text = text.replace(pattern, replacement);
+  if (hits > 0) {
+    applied.push(`${hits} → ${typeof replacement === "string" ? replacement : "<quoted path>"}`);
+  }
+  text =
+    typeof replacement === "string"
+      ? text.replace(pattern, replacement)
+      : text.replace(pattern, replacement);
 }
 
 let emailHits = 0;

@@ -47,7 +47,21 @@ import { translate } from "mathjax-full/js/util/Entities.js";
  * and `M&uuml;ller` in the <title> did not match "Müller" from the field: both passed with ✓
  * (2026-11-07 review).
  */
-const asText = (html: string) => translate(html);
+const asText = (html: string) =>
+  translate(html)
+    // A legacy entity with no ";" (`M&uumlller`): a browser still decodes the longest name it
+    // knows. Decoding more than a browser would can only find more, the safe direction for a
+    // residue check (2026-11-07 review 4: `&auml` without ";" passed with ✓).
+    .replace(/&([A-Za-z][A-Za-z0-9]*)(?!;)/g, (m, name: string) => {
+      for (let n = name.length; n > 1; n--) {
+        const decoded = translate(`&${name.slice(0, n)};`);
+        if (decoded !== `&${name.slice(0, n)};`) return decoded + name.slice(n);
+      }
+      return m;
+    })
+    // One form for both sides: "Müller" typed decomposed (u + U+0308) did not match "Müller", and
+    // a full-width "Ｍüller" is the same name to a reader.
+    .normalize("NFKC");
 
 /** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
 const readText = (p: string) => readFile(p, "utf8");
@@ -238,14 +252,32 @@ for (const file of files) {
     failures++;
     continue;
   }
-  const strange = block
-    .split(/<br\s*\/?>/i)
-    .map((row) => asText(row.replace(/<[^>]*>/g, "")).trim())
-    .map((row) => /^([^:\n]{1,60}):/.exec(row)?.[1].trim().toLowerCase())
-    .filter((l): l is string => l !== undefined && !seen.has(l));
-  if (strange.length > 0) {
+  // ROW by row, not label by label (2026-11-07 review 4): a second `<b>Client</b>:` row passed
+  // because "client" was a label already read, and so did a Client whose first line was blank
+  // (the rest on the lines after it, which carry no colon), and any line without one. Now every
+  // non-empty row must be one field row, each label once: a scrubbed field holding its
+  // placeholder, a kept field, or any other field EMPTY.
+  const placeholder = new Map(REPLACEMENTS.map((r) => [r.label.toLowerCase(), r.value]));
+  const labelsSeen = new Set<string>();
+  let strange = 0;
+  for (const raw of block.split(/<br\s*\/?>/i)) {
+    const row = asText(raw.replace(/<[^>]*>/g, "")).trim();
+    if (row === "") continue;
+    const m = new RegExp(String.raw`^([^:\n]{1,60}):\s*(?:${SPACER})?\s*([\s\S]*)$`).exec(row);
+    const label = m?.[1].trim().toLowerCase() ?? "";
+    const value = m?.[2].trim() ?? "";
+    const ok =
+      m !== null &&
+      !labelsSeen.has(label) &&
+      (placeholder.has(label)
+        ? value === placeholder.get(label)
+        : KEPT_FIELDS.has(label) || (seen.has(label) && value === ""));
+    labelsSeen.add(label);
+    if (!ok) strange++;
+  }
+  if (strange > 0) {
     console.error(
-      `❌ ${name}: ${strange.length} row(s) of the project-details block are not in the template's ` +
+      `❌ ${name}: ${strange} row(s) of the project-details block are not in the template's ` +
         `layout, so their values cannot be checked — refusing.`,
     );
     failures++;
