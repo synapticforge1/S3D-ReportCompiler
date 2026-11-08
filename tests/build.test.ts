@@ -2567,14 +2567,211 @@ test(
     for (let i = 0; i < 1200 && !existsSync(`${pdf}.renaming`); i++) {
       await new Promise((d) => setTimeout(d, 50));
     }
+    if (!existsSync(`${pdf}.renaming`)) child.kill("SIGKILL"); // not left running (review 5)
     assert.ok(existsSync(`${pdf}.renaming`), `the final rename never started:\n${tail(out)}`);
     child.kill("SIGINT");
     const code = await closed;
     assert.equal(code, 130, tail(out));
-    has(out, /stopped after the last step; this is complete/);
-    hasNot(out, /nothing was finished/);
+    // (Worded since review 5: the hold now lasts to the end of the build.)
+    has(out, /during the last step, which was finished first\. Given its final name:\s+\S*c\.pdf/);
+    hasNot(out, /nothing was given its final name/);
     assert.ok(existsSync(pdf), "the PDF being renamed was lost to the cleanup");
     assert.ok(!existsSync(pdf.replace(/\.pdf$/, ".unverified.pdf")));
+  },
+);
+
+test(
+  "review 5, group B: interrupts and hang-ups end as they say (POSIX)",
+  {
+    timeout: TIMEOUT,
+    skip:
+      process.platform === "win32"
+        ? "a stand-in Chrome is a script run by its shebang; Windows has no SIGHUP"
+        : false,
+  },
+  async () => {
+    // A stand-in Chrome (as in the review-4 test): "pdf" writes a one-page PDF; "slow" first
+    // marks that it started, waits 6 s, then writes it.
+    const { PDFDocument } = await import("pdf-lib");
+    const page = await PDFDocument.create();
+    page.addPage();
+    const fixture = join(work, "r5-page.pdf");
+    writeFileSync(fixture, await page.save());
+    const standin = join(work, "r5-chrome.cjs");
+    writeFileSync(
+      standin,
+      `#!${process.execPath}\nconst fs = require("node:fs");\n` +
+        `const out = process.argv.find((a) => a.startsWith("--print-to-pdf="))?.slice(15);\n` +
+        `const write = () => fs.writeFileSync(out, fs.readFileSync(${JSON.stringify(fixture)}));\n` +
+        `if (process.env.S3D_STANDIN === "slow") {\n` +
+        `  fs.writeFileSync(out + ".chrome-started", "");\n` +
+        `  setTimeout(() => { write(); process.exit(0); }, 6000);\n` +
+        `} else { write(); process.exit(0); }\n`,
+    );
+    chmodSync(standin, 0o755);
+    const input = control("control-custom-delimiters", join(work, "r5-interrupt"));
+
+    /** One build, `signal` sent once `marker` exists; a `preload` patches it first. */
+    const interrupted = async (
+      name: string,
+      mode: string,
+      signal: NodeJS.Signals,
+      marker: (pdf: string) => string,
+      preload?: (pdf: string) => string,
+    ) => {
+      const pdf = join(work, `r5-${name}`, "c.pdf");
+      rmSync(join(work, `r5-${name}`), { recursive: true, force: true });
+      const pre = join(work, `r5-${name}.cjs`);
+      if (preload) writeFileSync(pre, preload(pdf));
+      const child = spawn(
+        process.execPath,
+        [
+          ...(preload ? [process.versions.bun ? "--preload" : "--require", pre] : []),
+          MAIN,
+          input,
+          pdf,
+          "--no-optimize",
+          "--no-verify",
+        ],
+        {
+          cwd: ROOT,
+          env: { ...process.env, CHROME_PATH: standin, S3D_STANDIN: mode },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (out += d));
+      const closed = new Promise<number | null>((done) => child.on("close", (c) => done(c)));
+      for (let i = 0; i < 1200 && !existsSync(marker(pdf)); i++) {
+        await new Promise((d) => setTimeout(d, 50));
+      }
+      const reached = existsSync(marker(pdf));
+      child.kill(reached ? signal : "SIGKILL");
+      const code = await closed;
+      assert.ok(reached, `${name}: the step to interrupt never came:\n${tail(out)}`);
+      return { code, out, pdf, unverified: pdf.replace(/\.pdf$/, ".unverified.pdf") };
+    };
+    const slowly = (match: string, then: string) =>
+      `const fsp = require("node:fs/promises"); const fs = require("node:fs");\n` +
+      `const patch = (name) => { const real = fsp[name]; fsp[name] = async (...a) => {\n` +
+      `  if (${match}) { fs.writeFileSync(MARK, ""); await new Promise((d) => setTimeout(d, 3000)); ${then} }\n` +
+      `  return real(...a); }; };\n`;
+
+    // 1. A final rename that FAILS while an interrupt is held: nothing is called complete, and
+    //    the PDF it was moving is kept, not deleted ("this is complete" and the PDF gone, before).
+    const failed = await interrupted(
+      "rename-fails",
+      "pdf",
+      "SIGINT",
+      (pdf) => `${pdf}.renaming`,
+      (pdf) =>
+        `const MARK = ${JSON.stringify(`${pdf}.renaming`)};\n` +
+        slowly(
+          `String(a[1]).endsWith(${JSON.stringify(pdf)})`,
+          `throw Object.assign(new Error("EBUSY: held by the test"), { code: "EBUSY" });`,
+        ) +
+        `patch("rename"); try { require("node:module").syncBuiltinESMExports(); } catch {}\n`,
+    );
+    assert.equal(failed.code, 130, tail(failed.out));
+    has(failed.out, /during the last step; nothing was given its final name/);
+    hasNot(failed.out, /Given its final name:|this is complete/);
+    assert.ok(
+      !existsSync(failed.pdf) && existsSync(failed.unverified),
+      "the moving PDF was deleted",
+    );
+
+    // 2. An interrupt AFTER the rename, during the cleanup: the named PDF is reported, not
+    //    "nothing was finished".
+    const after = await interrupted(
+      "after-rename",
+      "pdf",
+      "SIGINT",
+      (pdf) => `${pdf}.cleaning`,
+      (pdf) =>
+        `const MARK = ${JSON.stringify(`${pdf}.cleaning`)};\n` +
+        slowly(`String(a[0]).includes("compiled_reports_")`, "") +
+        `patch("rm"); try { require("node:module").syncBuiltinESMExports(); } catch {}\n`,
+    );
+    assert.equal(after.code, 130, tail(after.out));
+    has(after.out, /Given its final name:\s+\S*c\.pdf/);
+    assert.ok(existsSync(after.pdf));
+
+    // 3–4. A hang-up, or an interrupt, while Chrome renders: Chrome is stopped and waited for, so
+    //      no PDF appears after the build has ended (SIGHUP was not handled, and Chrome's own
+    //      process group outlived the build's).
+    for (const signal of ["SIGHUP", "SIGINT"] as const) {
+      const r = await interrupted(
+        `render-${signal}`,
+        "slow",
+        signal,
+        (pdf) => `${pdf.replace(/\.pdf$/, ".unverified.pdf")}.chrome-started`,
+      );
+      assert.equal(r.code, 130, `${signal}:\n${tail(r.out)}`);
+      has(r.out, new RegExp(`Interrupted \\(${signal}\\): nothing was given its final name`));
+      await new Promise((d) => setTimeout(d, 7000)); // past the stand-in's own 6 s
+      assert.ok(!existsSync(r.unverified), `${signal}: Chrome wrote its PDF after the build ended`);
+    }
+  },
+);
+
+test(
+  "review 5, group B: report names, a folder in the way, the old font cache",
+  {
+    timeout: TIMEOUT,
+  },
+  async () => {
+    // 1. `.shtml`, `.mhtml`, `.mht` are refused by name, as `.htm` is.
+    const dir = control("control-custom-delimiters", join(work, "r5-names"));
+    const report = readdirSync(dir).find((n) => n.endsWith(".html")) ?? "";
+    for (const ext of ["shtml", "mhtml", "mht"]) {
+      writeFileSync(join(dir, `member_9_report.${ext}`), readFileSync(join(dir, report)));
+    }
+    const names = run([MAIN, dir, join(work, "r5-names-out", "c.pdf")]);
+    assert.equal(names.code, 1, names.out);
+    has(names.out, /member_9_report\.shtml/, /member_9_report\.mhtml/, /member_9_report\.mht\b/);
+
+    // 2. A folder at <out>.unverified.pdf is refused by name in a folder build, as in a zip build --
+    //    not blamed on Chrome.
+    const out = join(work, "r5-folder-out");
+    mkdirSync(join(out, "c.unverified.pdf"), { recursive: true });
+    const input = control("control-custom-delimiters", join(work, "r5-folder"));
+    const f = run([MAIN, input, join(out, "c.pdf")]);
+    assert.equal(f.code, 1, f.out);
+    has(f.out, /A folder is where the build must write a file/, /c\.unverified\.pdf/);
+    hasNot(f.out, /Chrome produced no PDF/);
+
+    // 3. An earlier release's flat font cache is kept when the new cache cannot be written: it was
+    //    deleted regardless, and the next offline build failed. The fonts come from the checkout's
+    //    cache; the new cache's folder is blocked by a FILE of its name; the network fails.
+    const fontsRoot = join(ROOT, ".mathjax-fonts");
+    const versionDir = readdirSync(fontsRoot, { withFileTypes: true }).find(
+      (e) => e.isDirectory() && /mathjax@/.test(e.name) && !e.name.startsWith("test-hook_"),
+    );
+    assert.ok(versionDir, "no versioned font cache in the checkout to copy (run a build first)");
+    const cwd = join(work, "r5-fonts");
+    mkdirSync(join(cwd, ".mathjax-fonts"), { recursive: true });
+    const flat = readdirSync(join(fontsRoot, versionDir.name)).filter((n) => n.endsWith(".woff"));
+    for (const n of flat) {
+      writeFileSync(
+        join(cwd, ".mathjax-fonts", n),
+        readFileSync(join(fontsRoot, versionDir.name, n)),
+      );
+    }
+    // The cache folder the TEST HOOK's fonts use (S3D_FONT_ORIGIN keeps them apart), blocked.
+    writeFileSync(join(cwd, ".mathjax-fonts", `test-hook_${versionDir.name}`), "not a folder");
+    const sample = control("control-custom-delimiters", join(work, "r5-fonts-in"));
+    const r = await withFakeJsr(json({}, 500), (origin) =>
+      runAsync([MAIN, sample, join(cwd, "o", "c.pdf")], {
+        cwd,
+        env: { ...process.env, S3D_FONT_ORIGIN: origin },
+      }),
+    );
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /used from the earlier release's cache, which is kept/);
+    hasNot(r.out, /fonts were downloaded/);
+    const left = readdirSync(join(cwd, ".mathjax-fonts")).filter((n) => n.endsWith(".woff"));
+    assert.equal(left.length, flat.length, "the earlier release's fonts were deleted");
   },
 );
 

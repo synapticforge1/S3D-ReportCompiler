@@ -436,13 +436,14 @@ if (zipPath === null && !/\.pdf$/i.test(outputPdf)) {
 // A folder where the build must write a file could not be replaced: Chrome's write failed
 // ("Access is denied"), the run ended in a stack trace blaming Chrome, and a stray "<folder>.html"
 // was left beside it.
-for (const path of zipPath === null
-  ? [outputPdf]
-  : [`${outputPdf.replace(/\.pdf$/i, "")}.unverified.pdf`, zipKeptPdf]) {
+// The unverified name in a folder build too (review 5): a folder there was blamed on Chrome, with
+// the CHROME_PATH launcher hint.
+const unverifiedPath = `${outputPdf.replace(/\.pdf$/i, "")}.unverified.pdf`;
+for (const path of zipPath === null ? [outputPdf, unverifiedPath] : [unverifiedPath, zipKeptPdf]) {
   if (await rt.dirExists(path)) {
     console.error(`A folder is where the build must write a file:\n  ${path}\n`);
     console.error(
-      zipPath === null
+      zipPath === null && path === outputPdf
         ? `The second argument names the PDF itself, e.g. "${rt.joinPath(path, "combined_report.pdf")}".`
         : "Move or rename that folder, then re-run.",
     );
@@ -525,22 +526,26 @@ async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
 
   // A cache that cannot be written is said as such (it used to surface as "check the network") --
   // and costs only the cache: the font was downloaded and checked, so the build uses it. It used to
-  // fail the build whose fonts had all arrived (review 4).
-  const keep = async (bytes: Uint8Array) => {
+  // fail the build whose fonts had all arrived (review 4). True once the font is in the cache.
+  const keep = async (bytes: Uint8Array, from: "downloaded" | "old cache"): Promise<boolean> => {
     const partial = `${cached}.partial`;
     try {
       await rt.mkdirp(cacheDir);
       await rt.writeFile(partial, bytes);
       await rt.rename(partial, cached);
+      return true;
     } catch (e) {
       await rt.removeQuietly(partial);
       if (!fontCacheWarned) {
         fontCacheWarned = true;
         console.warn(
-          `  warning: the font cache could not be written (${cacheDir}: ${(e as Error).message});` +
-            " the fonts were downloaded and are used, and the next build downloads them again",
+          `  warning: the font cache could not be written (${cacheDir}: ${(e as Error).message}); ` +
+            (from === "downloaded"
+              ? "the fonts were downloaded and are used, and the next build downloads them again"
+              : "the fonts are used from the earlier release's cache, which is kept"),
         );
       }
+      return false;
     }
   };
 
@@ -557,8 +562,9 @@ async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
     try {
       const bytes = await rt.readFile(legacy);
       if (isFont(bytes)) {
-        await keep(bytes);
-        await rt.removeQuietly(legacy);
+        // Removed only once it is in the new cache: removed regardless, a cache that could not be
+        // written lost the earlier release's fonts, and the next offline build failed (review 5).
+        if (await keep(bytes, "old cache")) await rt.removeQuietly(legacy);
         return bytes;
       }
     } catch {
@@ -587,7 +593,7 @@ async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
         `Nothing was cached.`,
     );
   }
-  await keep(bytes);
+  await keep(bytes, "downloaded");
   return bytes;
 }
 
@@ -795,7 +801,11 @@ if (zipPath !== null) {
   }
   // A report saved as `.htm` is still a report: left out, the package lacked it with PASS (12 of 13
   // compiled), where the zip path refuses it (2026-11-07 review 4).
-  const htm = (await rt.listNames(htmlDir)).filter((n) => /\.(?:htm|xhtml)$/i.test(n));
+  // `.shtml`, `.mhtml` / `.mht` (a browser's "save as single file") too: each was left out the same
+  // way, with PASS (review 5).
+  const htm = (await rt.listNames(htmlDir)).filter((n) =>
+    /\.(?:htm|xhtml|shtml|mhtml|mht)$/i.test(n),
+  );
   if (htm.length > 0) {
     console.error(`Not compiled, and not a report name this tool reads (.html):`);
     for (const n of htm) console.error(`  ${rt.joinPath(htmlDir, n)}`);
@@ -1191,27 +1201,62 @@ let zipPartial: string | null = null;
 // depending on which finished first (2026-11-06 review).
 const interrupt = new AbortController();
 /**
- * The file a final rename is giving its name to, while one runs ({@link finalRename}), else null.
- * An interrupt then waits for it: cleaning up beside a rename in progress removed the PDF it was
- * moving, or said "nothing was finished" of a zip already replaced (review 4).
+ * From the first final rename on ({@link finalRename}), an interrupt is HELD: the build finishes
+ * and then exits 130, naming what was given its final name ({@link finalNames}). The hold covered
+ * the rename call alone, so an interrupt during the cleanup after it said "nothing was finished"
+ * of a PDF already named, and one during a rename that then FAILED said "this is complete" and
+ * deleted the verified PDF (2026-11-07 review 5).
  */
-let finishing: string | null = null;
-let afterRename: (() => void) | null = null;
+let finalStage = false;
+/** The signal held during the final stage, acted on when the build ends. */
+let heldSignal: string | null = null;
+/** Each path a final rename gave its name to, in order. */
+const finalNames: string[] = [];
+/** Chrome's run while it lasts: an interrupt waits for it to stop before cleaning up. */
+let rendering: Promise<unknown> | null = null;
+// Removed SYNCHRONOUSLY on an interrupt, then exit: an asynchronous cleanup let the build go on
+// beside it -- reading back, repacking and rewriting the unverified PDF it had just removed, or
+// writing a partial zip it had not been told of (review 5).
+const { rmSync } = await import("node:fs");
+const removeNow = (path: string, recursive = false) => {
+  try {
+    rmSync(path, { recursive, force: true, maxRetries: 3 });
+  } catch {
+    // best effort, as removeQuietly
+  }
+};
 if (typeof process !== "undefined" && typeof process.once === "function") {
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  // SIGHUP (the terminal closed, a dropped SSH session) and SIGQUIT too, on POSIX: Chrome runs in
+  // a process group of its own there, so a hang-up of the build's group no longer reaches it, and
+  // it wrote its PDF after the build had died (review 5). Windows has neither signal.
+  const signals =
+    process.platform === "win32"
+      ? (["SIGINT", "SIGTERM"] as const)
+      : (["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const);
+  for (const signal of signals) {
     process.once(signal, () => {
-      interrupt.abort();
-      const cleanUp = (what: string) => {
-        console.error(`\nInterrupted (${signal}): ${what} Cleaning up...`);
-        void Promise.all([
-          rt.removeQuietly(workDir, true),
-          zipPartial === null ? undefined : rt.removeQuietly(zipPartial),
-          rt.removeQuietly(candidatePdf),
-        ]).finally(() => rt.exit(130));
+      interrupt.abort(); // stops Chrome, if it runs
+      if (finalStage) {
+        if (heldSignal === null) {
+          heldSignal = signal;
+          console.error(`\nInterrupted (${signal}): finishing the last step first...`);
+        }
+        return;
+      }
+      const cleanUp = () => {
+        console.error(
+          `\nInterrupted (${signal}): nothing was given its final name. Cleaning up...`,
+        );
+        removeNow(workDir, true);
+        if (zipPartial !== null) removeNow(zipPartial);
+        removeNow(candidatePdf);
+        rt.exit(130);
       };
-      if (finishing === null) return cleanUp("nothing was finished.");
-      const done = finishing;
-      afterRename = () => cleanUp(`stopped after the last step; this is complete:\n  ${done}\n`);
+      // While Chrome runs, wait for it to stop (it was just told to), so it cannot write the PDF
+      // after the cleanup; bounded, in case it will not die.
+      if (rendering === null) cleanUp();
+      else
+        void Promise.race([rendering, new Promise((d) => setTimeout(d, 10_000))]).finally(cleanUp);
     });
   }
 }
@@ -1226,19 +1271,15 @@ async function haltIfInterrupted(): Promise<void> {
   if (interrupt.signal.aborted) await new Promise(() => {});
 }
 
-/** `rt.rename(from, to)`, with an interrupt that arrives meanwhile held until it is done. */
+/**
+ * `rt.rename(from, to)`, a step that gives something its final name: from here on an interrupt is
+ * held to the end of the build ({@link finalStage}), and `to` is recorded once the rename is DONE.
+ */
 async function finalRename(from: string, to: string): Promise<void> {
   await haltIfInterrupted();
-  finishing = to;
-  try {
-    await rt.rename(from, to);
-  } finally {
-    finishing = null;
-    if (afterRename !== null) {
-      afterRename();
-      await new Promise(() => {}); // the cleanup exits 130
-    }
-  }
+  finalStage = true;
+  await rt.rename(from, to);
+  finalNames.push(to);
 }
 
 // Set inside the try and acted on after the finally: rt.exit() is process.exit(),
@@ -1332,7 +1373,8 @@ try {
   console.log(`  html:     ${(htmlBytes.length / 1e6).toFixed(2)} MB, self-contained`);
 
   // The old PDF was removed, and proved gone, before the bake was written.
-  const result = await rt.runWithTimeout(
+  const htmlUrl = await rt.toFileUrl(htmlPath);
+  rendering = rt.runWithTimeout(
     chrome,
     [
       "--headless=new",
@@ -1353,11 +1395,13 @@ try {
       "--run-all-compositor-stages-before-draw",
       "--no-pdf-header-footer",
       `--print-to-pdf=${candidatePdf}`,
-      await rt.toFileUrl(htmlPath),
+      htmlUrl,
     ],
     chromeTimeoutMs,
     interrupt.signal,
   );
+  const result = (await rendering) as Awaited<ReturnType<typeof rt.runWithTimeout>>;
+  rendering = null;
   // An interrupt is handled by its signal handler (cleanup, then exit 130); this flow stops here.
   await haltIfInterrupted();
   if (result.timedOut) {
@@ -1515,6 +1559,18 @@ try {
 } finally {
   await rt.removeQuietly(workDir, true);
   if (zipPartial !== null) await rt.removeQuietly(zipPartial);
+}
+
+// An interrupt held through the final stage: the build has finished; say what it named, and exit
+// 130 as any interrupted build does.
+if (heldSignal !== null) {
+  console.error(
+    finalNames.length > 0
+      ? `\nInterrupted (${heldSignal}) during the last step, which was finished first. ` +
+          `Given its final name:\n${finalNames.map((n) => `  ${n}`).join("\n")}`
+      : `\nInterrupted (${heldSignal}) during the last step; nothing was given its final name.`,
+  );
+  rt.exit(130);
 }
 
 if (verificationFailed || zipFailed || buildFailed) rt.exit(1);

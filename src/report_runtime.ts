@@ -367,6 +367,15 @@ export async function runWithTimeout(
       child.stderr?.destroy();
       resolve(r);
     };
+    /** What is left of the process's own group, killed (POSIX; its group outlives its leader). */
+    function reapGroup() {
+      if (windows || child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // the group is already gone
+      }
+    }
     function stop() {
       if (killed) return;
       killed = true;
@@ -409,17 +418,16 @@ export async function runWithTimeout(
       // process group on POSIX, where the group outlives its leader (review 4: left running).
       // Windows keeps no tree once the root is gone; its helpers end with the browser.
       grace = setTimeout(() => {
-        if (!windows && child.pid !== undefined) {
-          try {
-            process.kill(-child.pid, "SIGKILL");
-          } catch {
-            // the group is already gone
-          }
-        }
+        reapGroup();
         settle({ code: exited ?? -1, stderr, timedOut: false });
       }, EXIT_GRACE_MS);
     });
-    child.on("close", (code) => settle({ code: code ?? -1, stderr, timedOut }));
+    // On a close as well (review 5): a member that never held stderr -- a launcher's browser that
+    // redirects its own -- outlived a prompt close, free to write after the build had moved on.
+    child.on("close", (code) => {
+      if (!killed) reapGroup();
+      settle({ code: code ?? -1, stderr, timedOut });
+    });
   });
 }
 
