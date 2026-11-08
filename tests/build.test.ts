@@ -1134,7 +1134,13 @@ test("MathJax limitations: entities, non-breaking spaces, ids", { timeout: TIMEO
 
 test("CSS scoping, SVG sheets, attributes and entities, as a browser reads them", async () => {
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
-  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  // What each selector MATCHES: the weight-only `:is(…, *)` that keep a removed root's weight
+  // since review 5 are taken out here (that weight is the review-5 test's subject).
+  const flat = (s: string) =>
+    s
+      .replace(/:is\((?:#|\.)?s3d-w, \*\)/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
   const scope = (css: string) => flat(core.scopeCss(css, ".rs9", "r9-"));
 
   // 1. The whole leading chain of html / body / :root is the wrapper. `html body p` used to
@@ -1316,7 +1322,12 @@ test("a second batch starts clean, and the reference guard is the core's", async
 
 test("full review, group A: no wrong content passes -- maths, body, tags, CSS, labels", async () => {
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
-  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  // What selectors match, without review 5's weight-only `:is(…, *)` (the review-5 test's subject).
+  const flat = (s: string) =>
+    s
+      .replace(/:is\((?:#|\.)?s3d-w, \*\)/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
   const cfg = (inline: string, display = "") =>
     `<script type="text/x-mathjax-config">MathJax.Hub.Config({tex2jax:{${inline}${display}}});</script>`;
   const page = (head: string, body: string) =>
@@ -2822,21 +2833,24 @@ test("review 4, group E: the browser example, driven in Chrome", { timeout: TIME
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-  const profile = mkdtempSync(join(tmpdir(), "s3d-cdp-"));
-  const browser = spawn(
-    chrome,
-    [
-      "--headless=new",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profile}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      ...(process.platform !== "win32" && process.getuid?.() === 0 ? ["--no-sandbox"] : []),
-      "about:blank",
-    ],
-    { stdio: "ignore", detached: process.platform !== "win32" },
-  );
+  // Started inside the try, so a failure starting them still closes the server (review 5).
+  let profile = "";
+  let browser: ReturnType<typeof spawn> | undefined;
   try {
+    profile = mkdtempSync(join(tmpdir(), "s3d-cdp-"));
+    browser = spawn(
+      chrome,
+      [
+        "--headless=new",
+        "--remote-debugging-port=0",
+        `--user-data-dir=${profile}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+        ...(process.platform !== "win32" && process.getuid?.() === 0 ? ["--no-sandbox"] : []),
+        "about:blank",
+      ],
+      { stdio: "ignore", detached: process.platform !== "win32" },
+    );
     const portFile = join(profile, "DevToolsActivePort");
     for (let i = 0; i < 300 && !existsSync(portFile); i++)
       await new Promise((d) => setTimeout(d, 100));
@@ -2922,19 +2936,21 @@ test("review 4, group E: the browser example, driven in Chrome", { timeout: TIME
     await logUntil(/rebuild the bundle: bun run bundle:browser/);
     ws.close();
   } finally {
-    if (process.platform === "win32") {
-      spawnSync("taskkill", ["/pid", String(browser.pid), "/T", "/F"], { stdio: "ignore" });
-    } else if (browser.pid !== undefined) {
-      try {
-        process.kill(-browser.pid, "SIGKILL");
-      } catch {
-        // gone
+    if (browser?.pid !== undefined) {
+      if (process.platform === "win32") {
+        spawnSync("taskkill", ["/pid", String(browser.pid), "/T", "/F"], { stdio: "ignore" });
+      } else {
+        try {
+          process.kill(-browser.pid, "SIGKILL");
+        } catch {
+          // gone
+        }
       }
     }
     server.closeAllConnections?.();
     await new Promise((done) => server.close(done));
     await new Promise((d) => setTimeout(d, 500));
-    rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
+    if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
   }
 });
 
@@ -2958,6 +2974,56 @@ function unicodeFailures(expressions: string[]): number[] {
   assert.equal(r.code, 0, r.out);
   return JSON.parse(r.out.trim().split("\n").at(-1) ?? "[]");
 }
+
+test(
+  "review 5, group E: the two inspection controls run, and say only what they should",
+  { timeout: TIMEOUT },
+  () => {
+    // 1. verify-pdf-text prints counts, and page text only when asked (`--show-text`): page 1 of
+    //    a real build is a client's project details, and it printed them unasked.
+    const built = build(control("control-custom-delimiters", join(work, "r5-pdftext")));
+    assert.equal(built.code, 0, tail(built.out));
+    const tool = join(CONTROLS, "verify-pdf-text.ts");
+    const quiet = run([tool, built.pdf]);
+    assert.equal(quiet.code, 0, quiet.out);
+    has(quiet.out, /pages: \d+/, /total extracted chars: \d+/, /report headings found: \d+/);
+    hasNot(quiet.out, /page 1 sample/);
+    const shown = run([tool, built.pdf, "--show-text"]);
+    has(shown.out, /--- page 1 sample ---/);
+
+    // 2. export-transcript: user and assistant text kept; reasoning left out; base64 data and
+    //    images replaced; a long tool result clipped.
+    const log = join(work, "r5-session.jsonl");
+    const md = join(work, "r5-session.md");
+    const msg = (type: string, content: unknown) => JSON.stringify({ type, message: { content } });
+    writeFileSync(
+      log,
+      [
+        msg("user", "Please check member 12."),
+        msg("assistant", [
+          { type: "thinking", thinking: "PRIVATE REASONING 4471" },
+          { type: "text", text: "Checked." },
+          { type: "tool_use", name: "Read", input: { file: "a.html" } },
+        ]),
+        msg("user", [
+          { type: "tool_result", content: `${"word ".repeat(400)} ${"QUJD".repeat(100)}` },
+          { type: "image", source: { data: "QUJD" } },
+        ]),
+        "not json",
+      ].join("\n"),
+    );
+    const ex = run([join(CONTROLS, "export-transcript.ts"), log, md]);
+    assert.equal(ex.code, 0, ex.out);
+    has(ex.out, /turns:\s+3/);
+    const text = readFileSync(md, "utf8");
+    assert.match(text, /Please check member 12\./);
+    assert.match(text, /\*\*→ Read\*\*/);
+    assert.doesNotMatch(text, /PRIVATE REASONING/, "reasoning was exported");
+    assert.match(text, /more characters omitted/, "a long result was not clipped");
+    assert.doesNotMatch(text, /(?:QUJD){20}/, "base64 data was exported");
+    assert.match(text, /image omitted/);
+  },
+);
 
 test("review 5, group A: the cascade the source had, kept", async () => {
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
@@ -3560,6 +3626,9 @@ test(
       } finally {
         await release();
       }
+    } else {
+      // Said, not silent (review 5): as root a read-only folder cannot stop the removal.
+      console.log("  (the locked <zip>.verified.pdf case skipped: running as root)");
     }
 
     // 2. A folder report that is not UTF-8 is refused, named -- not decoded to U+FFFD on both sides.

@@ -544,6 +544,26 @@ the sanitizer; the local transcripts' residue counts equal or lower under the ne
 - ⚠️ The review-3 stderr test detaches its helper into its own process group, so it cannot see a
   group reap: the new test's helper shares the parent's group, as Chrome's helpers do.
 
+**2026-11-07/08, the fifth full-project review (owner: "I agree fix all", then "fix D first, then
+do E and C"; #82–#86):** 68 tests — 66 pass and 2 skip on Windows (the two POSIX ones, which pass
+in WSL). The first review whose fix CHANGED the real sets' baked HTML (A's restored selector
+weight), proved two ways with scratch harnesses that print only counts: the new bake equals the old
+once the weight-only `:is(…, *)` selectors are removed (all three sets), and the PDFs carry the same
+text at the same positions on every page (pdf.js text items with x, y; samples 100/100, the 48 set
+380/380). `bun run runtimes`: six runtimes, one document, `487321f24fb9`.
+- ⚠️ **Run the WHOLE suite after a group whose output changes.** Group A was committed after its
+  own tests and their neighbours passed; two older tests that pinned scoped selector strings broke
+  and were found only by the full run in E. They now compare with the weight-only selectors removed
+  (what a selector matches), leaving weight to the review-5 test.
+- ⚠️ **Process-wide state needs a fresh process in a test.** MathJax's `\unicode` font cache lives
+  as long as the process: a review-5 section poisoned a later review-4 check. Both now bake their
+  `\unicode` reports in a child process (`unicodeFailures`).
+- **WSL from this shell:** pass shell text as a FILE (`wsl.exe -- bash <script>`), run from
+  PowerShell — Git Bash rewrites `/mnt/c/…` arguments into Windows paths, and `bash -lc '…$VAR…'`
+  lost its variables on the way.
+- **Inverting a workflow gate:** plant each regression into the REAL `publish.yml` (restored in a
+  `finally`) and run the workflow test — 11 regressions, each fails it, the real file passes.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in

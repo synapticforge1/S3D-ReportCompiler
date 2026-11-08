@@ -4,9 +4,11 @@
 // precursor to the verification now built into main.ts (readPdf), kept
 // because it is the simplest way to inspect an arbitrary PDF.
 //
-//   bun tests/controls/verify-pdf-text.ts [file.pdf]
+//   bun tests/controls/verify-pdf-text.ts [file.pdf] [--show-text]
 //
-// Defaults to the build output.
+// Defaults to the build output. Prints counts only; `--show-text` adds a sample of page 1's text --
+// asked for by name, since page 1 of a real build is a client report's project details (review 5:
+// it printed them into the terminal, and every session transcript, unasked).
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -16,8 +18,10 @@ import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 // A relative argument resolves against the working directory, as before; an
 // absolute Windows path now works too (the old `new URL(arg, "file://<cwd>/")`
 // read `C:` as a URL scheme).
-const target = process.argv[2]
-  ? pathToFileURL(resolve(process.argv[2]))
+const showText = process.argv.includes("--show-text");
+const file = process.argv.slice(2).find((a) => !a.startsWith("--"));
+const target = file
+  ? pathToFileURL(resolve(file))
   : new URL("../CompiledPDF/combined_report.pdf", import.meta.url);
 
 const doc = await pdfjs.getDocument({
@@ -40,7 +44,7 @@ for (let p = 1; p <= doc.numPages; p++) {
   const m = text.match(/MEMBER\s*#\s*(\d+)\s*DESIGN REPORT/i);
   if (m) headings.push(`p${p}: MEMBER #${m[1]}`);
 
-  if (p === 1) console.log(`--- page 1 sample ---\n${text.slice(0, 400)}\n---`);
+  if (p === 1 && showText) console.log(`--- page 1 sample ---\n${text.slice(0, 400)}\n---`);
 }
 
 console.log("total extracted chars:", totalChars);
