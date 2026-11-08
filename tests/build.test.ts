@@ -158,7 +158,9 @@ test("hidden content in one report: set-wide conservation fails", { timeout: TIM
   );
   has(
     r.out,
-    /missing:\s+171 word\(s\), 114 number\(s\)/,
+    // Every token of the report is missing (it is hidden whole): 214 / 116 since 2026-11-08,
+    // when words of two letters, symbols and whole number tokens are counted (class B; 171 / 114).
+    /missing:\s+214 word\(s\), 116 number\(s\)/,
     /1 blank page\(s\)/,
     /VERIFICATION FAILED/,
     /- content missing from the PDF/,
@@ -3113,6 +3115,147 @@ test(
     assert.match(text, /more characters omitted/, "a long result was not clipped");
     assert.doesNotMatch(text, /(?:QUJD){20}/, "base64 data was exported");
     assert.match(text, /image omitted/);
+  },
+);
+
+test("class B: the verification checks values whole, not substrings", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const heading = "MEMBER # 1 DESIGN REPORT";
+  const src = (body: string) => `<html><body><h2>${heading}</h2>${body}</body></html>`;
+  /** What compareEachReport finds missing when the PDF page reads `pdf`. */
+  const missing = (body: string, pdf: string) => {
+    const r = core.compareEachReport([src(body)], [`${heading} ${pdf}`]).reports[0];
+    return [...r.missingWords, ...r.missingNumbers];
+  };
+
+  // 1. A number is found only WHOLE: not inside a longer one, nor joined across cells.
+  for (const [body, pdf, lost] of [
+    ["phi = 0.9", "phi = 0.95", "0.9"],
+    ["P = 125 kN", "P = 1250 kN", "125"],
+    ["L = 25", "L = 125", "25"],
+    ["F = 1,250", "F = 250", "1,250"],
+    ["total 125", "total 12 5", "125"],
+  ]) {
+    assert.ok(missing(body, pdf).includes(lost), `${body} → ${pdf}: passed`);
+  }
+  // 2. Signs, separators and exponents are part of the number; a symbol is checked as one.
+  for (const [body, pdf, lost] of [
+    ["M = -12.5", "M = 12.5", "-12.5"],
+    ["N = 1,000", "N = 1.000", "1,000"],
+    ["e = 1.5e-3", "e = 1.5e3", "1.5e-3"],
+    ["A = 4 mm²", "A = 4 mm³", "²"],
+  ]) {
+    assert.ok(missing(body, pdf).includes(lost), `${body} → ${pdf}: passed`);
+  }
+  //    ...and a correct one is still found: `−` (U+2212) is "-", a binary minus is no sign.
+  assert.deepEqual(missing("M = -12.5", "M = −12.5"), []);
+  assert.deepEqual(missing("[mathin]M_{p}-0.7[mathin]", "M p − 0.7"), []);
+  // 3. Two-letter words, any script, and the glyph a TeX command prints.
+  for (const [body, pdf, lost] of [
+    ["Check: OK", "Check: NG", "ok"],
+    ["load 12 kN", "load 12 mm", "kn"],
+    ["[mathin]\\lambda_p = 3[mathin]", "φ p = 3", "λ"],
+    ["x &le; 3", "x ≥ 3", "≤"],
+  ]) {
+    assert.ok(missing(body, pdf).includes(lost), `${body} → ${pdf}: passed`);
+  }
+  //    A command name is not a word, but the same word in prose still is.
+  assert.ok(
+    missing("<p>Max Moment</p>$$\\max(a)$$", "Moment").includes("max"),
+    "prose Max unchecked",
+  );
+  assert.deepEqual(missing("$$\\max(a)$$", "max(a)"), []);
+  // 4. Maths left as prose is unrendered LaTeX, whatever delimiter the bake failed to read.
+  const residue = core.compareAgainstPdf(
+    { words: new Set(), numbers: new Set(), expectedImages: 0 },
+    {
+      text: `${heading} F_y = 50 + k_{2}`,
+      pages: 1,
+      imagePaints: 0,
+      diagramTitlePages: [],
+      diagramAxisPages: [],
+      headingPages: [1],
+      blankPages: [],
+    },
+    1,
+  );
+  assert.ok(residue.failures.includes("unrendered LaTeX in the PDF"), "TeX residue passed");
+  // 5. A definition with a token name blanks only its own `#N`, not every later `#7`.
+  const bars = core.extractSourceTokens([src("$$\\newcommand\\Mn{M_n}$$ Use #7 bars and #9 ties")]);
+  assert.ok(bars.numbers.has("7") && bars.numbers.has("9"), "later #N went unchecked");
+  // 6. An id two reports' bakes share resolves to the first: the later reference is broken.
+  const svg = `<svg><clipPath id="clip"></clipPath><rect clip-path="url(#clip)"/></svg>`;
+  const shared = core.findBrokenReferences([
+    { source: svg, style: "", body: svg, prefix: "r0-" },
+    { source: svg, style: "", body: svg, prefix: "r1-" },
+  ]);
+  assert.deepEqual(shared.broken, [{ report: 1, target: "clip" }], "a shared id passed");
+  const spaced = core.findBrokenReferences([
+    {
+      source: `<svg><use href=" #g"/></svg>`,
+      style: "",
+      body: `<svg><use href=" #g"/></svg>`,
+      prefix: "r0-",
+    },
+  ]);
+  assert.equal(spaced.references, 1, `href=" #g" was not counted`);
+  // 7. Entities as a browser reads them: legacy names and numbers without ";", Latin-1 letters.
+  assert.equal(core.decodeEntities("2 &times 3 &#53 caf&eacute;"), "2 × 3 5 café");
+  // 8. What a browser never draws is never expected: a <template>, an SVG's <title> and <desc>.
+  const inert = core.extractSourceTokens([
+    src(
+      "<template>Zorblaxian 41</template><svg><title>Tooltipword</title><desc>Descword</desc></svg>",
+    ),
+  ]);
+  for (const w of ["zorblaxian", "tooltipword", "descword"]) {
+    assert.ok(!inert.words.has(w), `${w} was expected`);
+  }
+  // 9. Pages before the first report's heading are its own.
+  const early = core.compareEachReport([src("<p>Zorblaxian</p>")], ["Zorblaxian", `${heading}`])
+    .reports[0];
+  assert.deepEqual(
+    early.missingWords,
+    [],
+    "content before the heading was attributed to no report",
+  );
+});
+
+test(
+  "class B: what the PDF draws -- invisible and white text, cut images, cut diagrams",
+  { timeout: TIMEOUT },
+  () => {
+    // Built from a committed sample with one thing planted; each must FAIL, for its own reason.
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    for (const [what, plant, failure] of [
+      [
+        "transparent text",
+        `<p style="color:transparent">Zorblaxian 4471</p>`,
+        /text drawn invisibly/,
+      ],
+      ["white text", `<p style="color:#fff">Zorblaxian 4471</p>`, /text drawn in white/],
+      // The totals agree (one image hidden, one painted twice), so only where it is drawn shows it.
+      [
+        "a cut image, totals agreeing",
+        `<img style="display:none" src="data:image/png;base64,${png}"><img style="display:block;width:200px;height:1600px" src="data:image/png;base64,${png}">`,
+        /an image was cut by a page break/,
+      ],
+      // A second diagram title with no caption after it, on the page of the real diagram.
+      ["a diagram title with no caption", `<p>Displacements z-axis</p>`, /diagram cut on page/],
+    ] as const) {
+      const dir = join(work, `classB-${what.replace(/\W+/g, "-")}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "member_0_report.html"),
+        what.startsWith("a diagram")
+          ? sample.replace(/(Position\s*along\s*member[\s\S]*?<\/svg>)/i, `$1${plant}`)
+          : sample.replace(/<\/body>/i, `${plant}</body>`),
+      );
+      const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+      assert.equal(r.code, 1, `${what}:\n${tail(r.out)}`);
+      has(r.out, failure);
+    }
   },
 );
 

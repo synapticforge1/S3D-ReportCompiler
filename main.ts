@@ -649,13 +649,76 @@ async function inlineFonts(css: string, cacheDir: string): Promise<string> {
  * Tracks drawing as well as text, because a page holding only a diagram has no
  * extractable text and calling it blank would fail a correct build.
  */
-async function readPdf(pdfPath: string): Promise<PdfObservations & { pageTexts: string[] }> {
+/**
+ * A page's text as a reader sees it: items that touch on one line are joined (a word or number
+ * cut into kerned pieces, a maths expression drawn glyph by glyph), and items that stand APART --
+ * a gap of more than 0.15 of the text's height, or a raise or drop of more than 0.3 of it (a
+ * superscript, a subscript) -- are separated by a space; a new line by a line break. Joined with
+ * nothing at all, two table cells "12" and "5", or the axis ticks "0 2 4 6", read as "125" and
+ * "0246", and a value check could not tell them from the numbers they are not (2026-11-08, class
+ * B). Measured on the samples: kerned pieces touch (gap 0), word gaps and cells are 0.2–5 heights.
+ */
+function pageText(items: unknown[]): string {
+  type Item = { str: string; transform: number[]; width: number; height: number; hasEOL?: boolean };
+  let out = "";
+  let prev: { x: number; y: number; w: number; h: number } | null = null;
+  for (const raw of items) {
+    const it = raw as Partial<Item>;
+    if (typeof it.str !== "string" || !Array.isArray(it.transform)) continue;
+    const x = it.transform[4];
+    const y = it.transform[5];
+    const h = Math.abs(it.transform[3]) || it.height || 1;
+    if (prev !== null && it.str !== "") {
+      const size = Math.max(h, prev.h);
+      const dy = Math.abs(y - prev.y);
+      if (dy > size) out += "\n";
+      else if (
+        dy > 0.3 * size ||
+        x - (prev.x + prev.w) > 0.15 * size ||
+        // A change of size: a subscript set smaller, touching its base (`λ` then `rf`).
+        Math.abs(h - prev.h) > 0.2 * size
+      ) {
+        out += " ";
+      }
+    }
+    out += it.str;
+    if (it.str !== "") prev = { x, y, w: it.width ?? 0, h };
+    if (it.hasEOL) {
+      out += "\n";
+      prev = null;
+    }
+  }
+  return out;
+}
+
+/** What {@link readPdf} observes beyond the exported {@link PdfObservations} (kept apart, so that type does not change). */
+type PdfDetail = {
+  pageTexts: string[];
+  /** Images drawn on each page, in page order. */
+  imagesPerPage: number[];
+  /** Pages with an image cut by the page break (drawn past the page's edge). */
+  cutImagePages: Set<number>;
+  /** Pages with text drawn invisibly (rendering mode 3, or fill alpha 0). */
+  invisibleTextPages: Set<number>;
+  /** Pages with text drawn in white. */
+  whiteTextPages: Set<number>;
+  /** Pages where a diagram's title had no caption before the page ended. */
+  cutDiagramPages: number[];
+};
+
+async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const doc = await pdfjs.getDocument({ data: await rt.readFile(pdfPath) }).promise;
+  let openDiagrams = 0;
 
   // Each page's text, in order, for the per-report check (compareEachReport): kept beside the
   // public observations rather than added to them, so the exported type does not change.
-  const obs: PdfObservations & { pageTexts: string[] } = {
+  const obs: PdfObservations & PdfDetail = {
+    imagesPerPage: [],
+    cutImagePages: new Set(),
+    invisibleTextPages: new Set(),
+    whiteTextPages: new Set(),
+    cutDiagramPages: [],
     pageTexts: [],
     text: "",
     pages: doc.numPages,
@@ -673,17 +736,76 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & { pageTexts: 
     // extractable text, and calling that "blank" would fail the build for a
     // page that is perfectly correct.
     let drew = false;
-    for (const fn of (await page.getOperatorList()).fnArray) {
-      if (fn === pdfjs.OPS.paintImageXObject) {
+    // The graphics state, as far as these checks need it (class B, 2026-11-08): the transform, to
+    // place each image on the page; the text rendering mode and fill alpha, to know text drawn
+    // invisibly -- it is still in the text layer, so a value printed in mode 3 or at alpha 0
+    // passed the word check unseen.
+    type Gs = { m: number[]; mode: number; alpha: number; white: boolean };
+    const stack: Gs[] = [];
+    let gs: Gs = { m: [1, 0, 0, 1, 0, 0], mode: 0, alpha: 1, white: false };
+    /** Whether a fill colour is white: pdf.js gives it as "#rrggbb", or as numbers. */
+    const isWhite = (args: unknown[]) =>
+      typeof args[0] === "string"
+        ? /^#f{6}$/i.test(args[0])
+        : args.length > 0 && args.every((v) => Number(v) >= 254 || Number(v) === 1);
+    const mul = (a: number[], b: number[]) => [
+      a[0] * b[0] + a[1] * b[2],
+      a[0] * b[1] + a[1] * b[3],
+      a[2] * b[0] + a[3] * b[2],
+      a[2] * b[1] + a[3] * b[3],
+      a[4] * b[0] + a[5] * b[2] + b[4],
+      a[4] * b[1] + a[5] * b[3] + b[5],
+    ];
+    const [, , pageW, pageH] = page.view as number[];
+    const ops = await page.getOperatorList();
+    let imagesHere = 0;
+    const SHOW_TEXT = new Set([
+      pdfjs.OPS.showText,
+      pdfjs.OPS.showSpacedText,
+      pdfjs.OPS.nextLineShowText,
+      pdfjs.OPS.nextLineSetSpacingShowText,
+    ]);
+    ops.fnArray.forEach((fn: number, i: number) => {
+      const args = ops.argsArray[i] as unknown[];
+      if (fn === pdfjs.OPS.save) stack.push({ ...gs });
+      else if (fn === pdfjs.OPS.restore) gs = stack.pop() ?? gs;
+      else if (fn === pdfjs.OPS.transform) gs = { ...gs, m: mul(args as number[], gs.m) };
+      else if (fn === pdfjs.OPS.setTextRenderingMode) gs = { ...gs, mode: Number(args[0]) };
+      else if (fn === pdfjs.OPS.setFillRGBColor || fn === pdfjs.OPS.setFillGray) {
+        gs = { ...gs, white: isWhite(args) };
+      } else if (fn === pdfjs.OPS.setGState) {
+        for (const [key, value] of (args[0] as [string, unknown][]) ?? []) {
+          if (key === "ca") gs = { ...gs, alpha: Number(value) };
+        }
+      } else if (SHOW_TEXT.has(fn)) {
+        if (gs.mode % 4 === 3 || gs.alpha === 0) obs.invisibleTextPages.add(p);
+        if (gs.white && gs.mode % 4 !== 3 && gs.alpha !== 0) obs.whiteTextPages.add(p);
+      } else if (fn === pdfjs.OPS.paintImageXObject) {
         obs.imagePaints++;
+        imagesHere++;
         drew = true;
+        // The image is the unit square under the transform. One that runs past the page's edge
+        // is cut by the page break: the whole image is drawn on each page and each shows part.
+        // A count could not see it when a lost image elsewhere made the totals agree (class B).
+        const m = gs.m;
+        const xs = [m[4], m[0] + m[4], m[2] + m[4], m[0] + m[2] + m[4]];
+        const ys = [m[5], m[1] + m[5], m[3] + m[5], m[1] + m[3] + m[5]];
+        if (
+          Math.min(...ys) < -1 ||
+          Math.max(...ys) > pageH + 1 ||
+          Math.min(...xs) < -1 ||
+          Math.max(...xs) > pageW + 1
+        ) {
+          obs.cutImagePages.add(p);
+        }
       } else if (fn === pdfjs.OPS.constructPath) {
         drew = true;
       }
-    }
+    });
+    obs.imagesPerPage.push(imagesHere);
 
     // Items are text runs or marked-content markers; only the former have text.
-    const text = (await page.getTextContent()).items.map((i) => ("str" in i ? i.str : "")).join("");
+    const text = pageText((await page.getTextContent()).items);
 
     obs.text += `${text}\n`;
     obs.pageTexts.push(text);
@@ -697,6 +819,17 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & { pageTexts: 
     // everything is fine.
     if (/Displacements\s*z-axis/i.test(text)) obs.diagramTitlePages.push(p);
     if (/Position\s*along\s*member/i.test(text)) obs.diagramAxisPages.push(p);
+    // Paired in reading order, not by page: each title opens a diagram, its caption closes it,
+    // and one still open at the page's end was cut. By page, two titles and one caption on a page
+    // hid the second diagram's split (class B).
+    for (const m of text.matchAll(/Displacements\s*z-axis|Position\s*along\s*member/gi)) {
+      if (/^Displacements/i.test(m[0])) openDiagrams++;
+      else if (openDiagrams > 0) openDiagrams--;
+    }
+    if (openDiagrams > 0) {
+      obs.cutDiagramPages.push(p);
+      openDiagrams = 0;
+    }
 
     // Report headings are template-specific too, but this one fails loudly:
     // no match means the count will not equal the number of sources.
@@ -1504,6 +1637,45 @@ try {
       }
       check.failures.push(
         `content missing from its own report: ${short.map((r) => entries[r.report]).join(", ")}`,
+      );
+    }
+    // Review class B (2026-11-08). Each of these used to pass behind a check that read totals or
+    // pages: an image cut by a page break (seen by where it is drawn, so a lost image elsewhere
+    // cannot cancel it); each report's own images; a diagram's title without its caption before
+    // the page ends, in reading order; text drawn invisibly.
+    if (observed.cutImagePages.size > 0) {
+      check.failures.push(
+        `an image was cut by a page break on page(s) ${[...observed.cutImagePages].join(", ")}`,
+      );
+    }
+    if (observed.headingPages.length === entries.length) {
+      const starts = observed.headingPages;
+      sources.forEach((source, i) => {
+        const end = i + 1 < starts.length ? starts[i + 1] - 1 : observed.pages;
+        // The first report owns the pages before its heading too (as compareEachReport reads it).
+        const from = i === 0 ? 0 : starts[i] - 1;
+        const drawn = observed.imagesPerPage.slice(from, end).reduce((a, b) => a + b, 0);
+        const want = extractSourceTokens([source]).expectedImages;
+        if (drawn !== want) {
+          check.failures.push(`${entries[i]}: ${drawn} image paint(s), ${want} image(s) expected`);
+        }
+      });
+    }
+    if (observed.cutDiagramPages.length > 0) {
+      check.failures.push(`diagram cut on page(s) ${observed.cutDiagramPages.join(", ")}`);
+    }
+    // White text on a white page reads as nothing, yet passes every text check. No report of the
+    // three real sets draws text in white (measured 2026-11-08), so it FAILS, the loud direction:
+    // a template with white text on a coloured band would fail here, never pass unseen. Text
+    // covered by an opaque box cannot be told from the PDF (verification.md's limits).
+    if (observed.whiteTextPages.size > 0) {
+      check.failures.push(
+        `text drawn in white on page(s) ${[...observed.whiteTextPages].join(", ")} -- unreadable on a white page`,
+      );
+    }
+    if (observed.invisibleTextPages.size > 0) {
+      check.failures.push(
+        `text drawn invisibly on page(s) ${[...observed.invisibleTextPages].join(", ")}`,
       );
     }
     console.log(

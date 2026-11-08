@@ -23,7 +23,7 @@ rather than the folder the control just built.
 | Script | Injects | Expected |
 |---|---|---|
 | `control-unknown-delimiter.ts` | `@@..@@` with the tex2jax config removed | guard refuses; `87 expressions, 0 failed` then `270 TeX command(s)` (250 before 2026-11-06, when the fallback lost its bare `$`), **no PDF**. The generator throws if either edit does not apply (since 2026-11-06; it used to print "config removed: false" and go on) |
-| `control-hidden-content.ts` | `#calculations { display: none }` in a **single** report | `171 words, 114 numbers missing` (172 / 119 on the samples of an earlier date), 1 blank page, exit 1 |
+| `control-hidden-content.ts` | `#calculations { display: none }` in a **single** report | `214 words, 116 numbers missing` — every token of the hidden report (171 / 114 until 2026-11-08, when two-letter words, symbols and whole number tokens began to count; 172 / 119 earlier still), 1 blank page, exit 1 |
 | `control-custom-delimiters-colliding.ts` | `{{..}}` — collides with LaTeX braces | guard refuses; truncated expressions leave LaTeX behind |
 | `control-hidden-row-two-reports.ts` | one table row hidden in the second of two identical reports | since 2026-10-28: per-report check `b_report.html: 5 word(s) … internal, forces, absolute, force, bending`, exit 1 — the set-wide check alone still reports 0 missing |
 

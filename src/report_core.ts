@@ -2741,7 +2741,43 @@ export function findLeftoverMath(baked: string): string[] {
 // expected in the PDF and missed, which fails loudly rather than passing.
 const GREEK =
   "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu Nu Xi Omicron Pi Rho - Sigma Tau Upsilon Phi Chi Psi Omega";
+/**
+ * HTML's Latin-1 entity names, in code-point order from U+00A0 -- the accented letters a report's
+ * text can hold (`&eacute;` was read as the word "eacute", a false FAIL; 2026-11-08, class B).
+ * The verification's own list (design-decisions §9), not the bake's.
+ */
+const LATIN1_NAMES = (
+  "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn " +
+  "sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave " +
+  "Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml " +
+  "ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN " +
+  "szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave " +
+  "iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute " +
+  "ucirc uuml yacute thorn yuml"
+).split(" ");
+
+/** The names a browser still decodes with no ";" -- HTML's legacy set: Latin-1, and these. */
+const LEGACY_ENTITIES = new Set([
+  ...LATIN1_NAMES,
+  ..."amp lt gt quot AMP LT GT QUOT COPY REG".split(" "),
+]);
+
 const ENTITIES: Record<string, string> = {
+  ...Object.fromEntries(LATIN1_NAMES.map((n, i) => [n, String.fromCodePoint(0xa0 + i)])),
+  AMP: "&",
+  LT: "<",
+  GT: ">",
+  QUOT: '"',
+  COPY: "©",
+  REG: "®",
+  shy: "",
+  ensp: " ",
+  emsp: " ",
+  thinsp: " ",
+  zwj: "",
+  zwnj: "",
+  lrm: "",
+  rlm: "",
   nbsp: " ",
   amp: "&",
   lt: "<",
@@ -2809,8 +2845,27 @@ const ENTITIES: Record<string, string> = {
  */
 export function decodeEntities(s: string): string {
   return s.replace(
-    /&(?:#[xX]([0-9a-fA-F]+)|#(\d+)|([A-Za-z][A-Za-z0-9]*));/g,
-    (m, hex: string | undefined, dec: string | undefined, name: string | undefined) => {
+    /&(?:#[xX]([0-9a-fA-F]+);?|#(\d+);?|([A-Za-z][A-Za-z0-9]*);|([A-Za-z][A-Za-z0-9]*))/g,
+    (
+      m,
+      hex: string | undefined,
+      dec: string | undefined,
+      name: string | undefined,
+      bare: string | undefined,
+    ) => {
+      // As a browser reads them (2026-11-08, class B): a numeric reference needs no ";", and a
+      // LEGACY name with none is still decoded -- its longest legacy prefix, the rest kept
+      // (`&timesx` is "×x"). Read as text, `&times` and `&#53` were words and numbers no PDF
+      // holds, a false FAIL.
+      if (bare !== undefined) {
+        for (let n = bare.length; n > 1; n--) {
+          const head = bare.slice(0, n);
+          if (LEGACY_ENTITIES.has(head) && Object.hasOwn(ENTITIES, head)) {
+            return ENTITIES[head] + bare.slice(n);
+          }
+        }
+        return m;
+      }
       if (name !== undefined) return Object.hasOwn(ENTITIES, name) ? ENTITIES[name] : m;
       const code = hex !== undefined ? parseInt(hex, 16) : Number(dec);
       return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
@@ -2821,19 +2876,139 @@ export function decodeEntities(s: string): string {
 }
 
 /**
- * Lower-cased words of three letters or more.
- *
- * Three is deliberate: PDF extraction breaks short runs on kerning, so shorter
- * tokens would produce false alarms.
+ * Text normalised for comparison, the same way on both sides: the minus sign and the dashes a
+ * value is written with read as "-", and the Latin ligatures a PDF text layer can hold (`ﬁ`) as
+ * their letters. Nothing else changes -- `²` stays `²` (NFKC would make `mm²` and `mm2` alike).
  */
-export function textWords(text: string): Set<string> {
-  return new Set((text.match(/[A-Za-z]{3,}/g) ?? []).map((w) => w.toLowerCase()));
+function normalizeText(text: string): string {
+  return (
+    text
+      .replace(/[−‐‑‒–﹣－]/g, "-")
+      // The multiplication dot: a report writes `·` (U+00B7) in its maths, MathJax prints `⋅`.
+      .replace(/·/g, "⋅")
+      .replace(/[ﬀ-ﬆ]/g, (c) => c.normalize("NFKC"))
+  );
 }
 
-/** Distinct numeric literals, integer or decimal. */
-export function textNumbers(text: string): Set<string> {
-  return new Set(text.match(/\d+\.\d+|\d+/g) ?? []);
+/**
+ * Lower-cased words of two letters or more, in any script, plus every non-ASCII symbol on its own
+ * (`λ`, `≤`, `²`, `°`, `×`): what a reader sees that a value depends on. Words of three ASCII
+ * letters were all that was checked, so `OK` → `NG`, `kN` → `mm`, `λ` → `φ` and `mm²` → `mm³`
+ * passed unseen (2026-11-08, class B). Two letters is safe now that the PDF text is read with its
+ * gaps ({@link compareAgainstPdf}); one letter is a variable name.
+ */
+export function textWords(text: string): Set<string> {
+  const t = normalizeText(text);
+  // Words lower-cased; a symbol (below) keeps its case.
+  const words = (t.match(/\p{L}{2,}/gu) ?? []).map((w) => w.toLowerCase());
+  // A symbol: anything but an ASCII character, a decimal digit, a space or an invisible format
+  // character -- so `²` (category No, not a digit) is one, and so is every non-ASCII LETTER on its
+  // own: a single `λ` is no two-letter word, but λ → φ changes the quantity.
+  const symbols = t.match(/[^\p{Nd}\s\p{Cf}\p{ASCII}]/gu) ?? [];
+  return new Set([...words, ...symbols]);
 }
+
+/**
+ * The number tokens of a text, each WHOLE: its sign (a "-" with nothing alphanumeric before it),
+ * thousands separators (`1,000`), decimal part, a leading-point decimal (`.5`) and exponent
+ * (`1.5e-3`). Split at signs and separators, `-12.5` → `12.5`, `1,000` → `1.000` and `1.5e-3` →
+ * `1.5e3` all passed (2026-11-08, class B).
+ */
+export function textNumbers(text: string): Set<string> {
+  return new Set(normalizeText(text).match(NUMBER_TOKEN) ?? []);
+}
+
+/** One number token ({@link textNumbers}). */
+const NUMBER_TOKEN =
+  /(?:(?<![\p{L}\p{N}\])}.,])-)?(?<![\d.]|\d,)(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?![\d]|\.\d|,\d{3}|[eE][-+]?\d)/gu;
+
+/**
+ * Where `token` (a {@link textNumbers} token) stands WHOLE in `text`: no digit, point or separator
+ * joined to either side of it, so `0.9` is not found in `0.95`, `125` not in `1250`, `250` not in
+ * `1,250`. A sign is part of a signed token; an unsigned one may follow a "-" (`5-3`).
+ */
+function hasNumber(text: string, token: string): boolean {
+  const body = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const before = token.startsWith("-") ? "" : String.raw`(?<![\d.]|\d,)`;
+  return new RegExp(`${before}${body}(?![\\d]|\\.\\d|,\\d{3}|[eE][-+]?\\d)`, "u").test(text);
+}
+
+/**
+ * Where `word` (a {@link textWords} token) stands in `text`: a word with no letter joined to it
+ * (`kip` is not found in `kips`), a symbol anywhere. One space may stand between two of its
+ * letters: maths draws a multi-letter subscript glyph by glyph (`λ_{rf}` prints "r f").
+ */
+function hasWord(text: string, word: string, exact: string): boolean {
+  // A symbol in the text as printed, case and all: `Δ` is not `δ`.
+  if ([...word].length === 1 || !/\p{L}/u.test(word)) return exact.includes(word);
+  const body = [...word].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s?");
+  return new RegExp(`(?<!\\p{L})${body}(?!\\p{L})`, "u").test(text);
+}
+
+/**
+ * The glyph each TeX command the reports' maths uses prints as, so the verification expects it:
+ * `\lambda` → λ. Read from the RAW source by the verification's own table (design-decisions §9),
+ * as MathJax 3's CHTML writes it (measured on the samples: `\phi` is U+03D5, `\varphi` U+03C6).
+ */
+const TEX_GLYPHS: Record<string, string> = {
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  delta: "δ",
+  epsilon: "ϵ",
+  varepsilon: "ε",
+  zeta: "ζ",
+  eta: "η",
+  theta: "θ",
+  vartheta: "ϑ",
+  iota: "ι",
+  kappa: "κ",
+  lambda: "λ",
+  mu: "μ",
+  nu: "ν",
+  xi: "ξ",
+  pi: "π",
+  rho: "ρ",
+  sigma: "σ",
+  tau: "τ",
+  upsilon: "υ",
+  phi: "ϕ",
+  varphi: "φ",
+  chi: "χ",
+  psi: "ψ",
+  omega: "ω",
+  Gamma: "Γ",
+  Delta: "Δ",
+  Theta: "Θ",
+  Lambda: "Λ",
+  Xi: "Ξ",
+  Pi: "Π",
+  Sigma: "Σ",
+  Upsilon: "Υ",
+  Phi: "Φ",
+  Psi: "Ψ",
+  Omega: "Ω",
+  le: "≤",
+  leq: "≤",
+  ge: "≥",
+  geq: "≥",
+  ne: "≠",
+  neq: "≠",
+  approx: "≈",
+  times: "×",
+  cdot: "⋅",
+  pm: "±",
+  infty: "∞",
+  sqrt: "√",
+  rightarrow: "→",
+  to: "→",
+  leftarrow: "←",
+  Rightarrow: "⇒",
+  sum: "∑",
+  prod: "∏",
+  int: "∫",
+  partial: "∂",
+};
 
 /** Everything the source reports contain that the finished PDF must still have. */
 export type SourceTokens = {
@@ -2942,21 +3117,36 @@ const TEX_DEFINITIONS =
 
 /**
  * `text` with each definition's `#1` parameters blanked ({@link TEX_DEFINITIONS}) -- the same
- * length, so nothing else moves. Through the end of the definition's last group: one for `\def`
- * (`\def\x#1{…}`), three for an environment, four for `\DeclarePairedDelimiterX`, two for the rest
- * (a token name overshoots by one group, which can only blank another `#1`).
+ * length, so nothing else moves. Through the end of the definition's last group, counted EXACTLY:
+ * the name is a group only when braced (`\newcommand{\x}{…}` two, `\newcommand\x{…}` one; `\def`
+ * one; an environment three; `\DeclarePairedDelimiterX` three or four). And never past the group
+ * that encloses the definition, nor 2,000 characters: with a token name the old count overshot by
+ * one group, and with no group after it blanked every `#7` to the end of the report -- US bar
+ * sizes ("#4 bars") went unchecked (2026-11-08, class B).
  */
 function blankTexParameters(text: string): string {
   let out = text;
   for (const m of text.matchAll(TEX_DEFINITIONS)) {
-    const want = /def$/.test(m[0]) ? 1 : /environment$/.test(m[0]) ? 3 : /X$/.test(m[0]) ? 4 : 2;
+    let k = (m.index ?? 0) + m[0].length;
+    const braced = /^\s*\{/.test(text.slice(k));
+    const named = braced ? 1 : 0;
+    const want = /def$/.test(m[0])
+      ? 1
+      : /environment$/.test(m[0])
+        ? 3
+        : /X$/.test(m[0])
+          ? 3 + named
+          : 1 + named;
     let groups = 0;
     let depth = 0;
-    let k = (m.index ?? 0) + m[0].length;
-    for (; k < text.length && groups < want; k++) {
+    const limit = Math.min(text.length, k + 2000);
+    for (; k < limit && groups < want; k++) {
       if (text[k] === "\\") k++;
       else if (text[k] === "{") depth++;
-      else if (text[k] === "}" && depth > 0 && --depth === 0) groups++;
+      else if (text[k] === "}") {
+        if (depth === 0) break; // the enclosing group ends: the definition went no further
+        if (--depth === 0) groups++;
+      }
     }
     const from = m.index ?? 0;
     out =
@@ -3081,7 +3271,9 @@ function readerVisible(html: string): string {
       i = end;
       continue;
     }
-    const element = /^<(script|noscript|style)(?=[\s/>])/.exec(lower.slice(lt, lt + 12));
+    // A <template>'s content is inert too: never drawn, so never expected (2026-11-08, class B:
+    // it was a false FAIL).
+    const element = /^<(script|noscript|style|template)(?=[\s/>])/.exec(lower.slice(lt, lt + 12));
     if (element) {
       const name = element[1];
       let at = sourceTagEnd(html, lt);
@@ -3198,7 +3390,6 @@ function bodyStartBefore(html: string, bodyAt: number): string {
 export function extractSourceTokens(sources: string[]): SourceTokens {
   const words = new Set<string>();
   const numbers = new Set<string>();
-  const texCommands = new Set<string>();
   let expectedImages = 0;
 
   for (const raw of sources) {
@@ -3220,6 +3411,12 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
       html = `${before} ${after}`;
     }
 
+    // An SVG's <title> (a tooltip) and <desc> are never drawn: not expected (class B). Outside an
+    // <svg>, `desc` is no element of HTML's and its text IS drawn, so only inside one.
+    html = html.replace(/<svg(?=[\s/>])[\s\S]*?<\/svg\s*>/gi, (svg) =>
+      svg.replace(/<(title|desc)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^"'>])*>[\s\S]*?<\/\1\s*>/gi, " "),
+    );
+
     // Only embedded images are counted. Deriving the figure count by subtracting
     // the spinner would mean trusting this function's loader-removal regex to
     // match the baker's, and this check is worthless if it can agree with the
@@ -3237,20 +3434,24 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
     // does not leave the rest of the tag behind as text.
     const text = dropNonPrintingTex(decodeEntities(html.replace(SOURCE_TAG, " ")));
 
-    // `\\` first, so `\\color` is a line break and the word "color", not the command \color.
-    for (const [, name] of text.matchAll(/\\\\|\\([a-zA-Z]{2,})/g)) {
-      if (name !== undefined) texCommands.add(name.toLowerCase());
-    }
-    for (const n of textNumbers(text)) numbers.add(n);
-    for (const w of textWords(text)) words.add(w);
+    // Command and delimiter names are notation, not content: a reader never sees "dfrac". They
+    // are blanked WHERE THEY ARE COMMANDS -- `\\` first, so `\\color` is a line break and the word
+    // "color" -- and a command that prints a glyph leaves that glyph to expect (`\lambda` → λ).
+    // Deleted from the whole report's words, one `$$\max(a)$$` stopped a "Max Moment" heading
+    // being checked, and `\lambda` → φ passed (2026-11-08, class B).
+    const prose = text
+      .replace(/\[(?:mathin|math)\]/gi, " ")
+      .replace(/\\\\|\\([a-zA-Z]+)/g, (_m, name?: string) =>
+        name !== undefined && Object.hasOwn(TEX_GLYPHS, name) ? ` ${TEX_GLYPHS[name]} ` : " ",
+      );
+    // Numbers from the text as written: a sign needs nothing before it but a space or an operator,
+    // so `M_{p}-0.7` keeps its BINARY minus (the `}` before it).
+    for (const n of textNumbers(prose)) numbers.add(n);
+    // Words with each sub- or superscript as its own token, as it is printed: `F_yS` is F, y and S
+    // (not the "word" yS), `M_{nz}` is M and nz.
+    const scripts = prose.replace(/[_^]\{([^{}]*)\}/g, " $1 ").replace(/[_^]([^\s{\\])/g, " $1 ");
+    for (const w of textWords(scripts)) words.add(w);
   }
-
-  // Command and delimiter names are notation, not content: a reader never sees
-  // "dfrac". This costs a little coverage, because some command names are also
-  // ordinary words -- "text", "left", "right", "delta" stop being checked as
-  // prose. That is the right trade: the alternative is failing a correct build.
-  for (const noise of ["mathin", "math"]) texCommands.add(noise);
-  for (const c of texCommands) words.delete(c);
 
   return { words, numbers, expectedImages };
 }
@@ -3295,18 +3496,29 @@ export function compareAgainstPdf(
   // sets would report both as missing. Reducing each side to a normalised
   // stream and searching by substring survives concatenation and fragmentation
   // alike; it can only under-report absence, which is the safe direction.
-  const letters = pdf.text.toLowerCase().replace(/[^a-z]/g, "");
-  const digits = pdf.text.replace(/\s+/g, "");
+  // Tokens WHOLE, in the text as read with its gaps (the caller reads each item's position and
+  // puts a space where items stand apart): searched as substrings of a stream with every space
+  // and non-letter removed, `0.9` was found in `0.95`, `125` in `1250`, and two table cells "12"
+  // and "5" read as "125" -- a value check that under-reports absence is the LENIENT direction,
+  // not the safe one (2026-11-08, class B: 30% of the samples' numbers would have passed deleted).
+  const text = normalizeText(pdf.text);
+  const lower = text.toLowerCase();
 
-  const missingWords = [...src.words].filter((w) => !letters.includes(w));
-  const missingNumbers = [...src.numbers].filter((n) => !digits.includes(n));
+  const missingWords = [...src.words].filter((w) => !hasWord(lower, w, text));
+  const missingNumbers = [...src.numbers].filter((n) => !hasNumber(text, n));
 
   // The two bracket delimiters are named explicitly, but the real protection is
   // the backslash-command pattern: it catches unrendered TeX whatever delimiter
   // was wrapped around it, including one this code has never heard of.
   // The standard TeX delimiters too: `\(a+b=12.5\)` typeset as prose has no backslash COMMAND.
+  // And TeX's own sub- and superscript marks, which printed maths never shows (`F_y`, `k_{2}`,
+  // `10^{-3}`): maths left as prose behind a delimiter the BAKE could not read (`inlineMath: D`, a
+  // variable) carries no command and no delimiter this knows -- and the bake-side guard reads the
+  // delimiters the bake read, so it missed it too (2026-11-08, class B; design-decisions §9).
   const leftoverLatex =
-    pdf.text.match(/\\[a-zA-Z]{2,}|\[math\]|\[mathin\]|\\\(|\\\)|\\\[|\\\]|\$\$/g) ?? [];
+    pdf.text.match(
+      /\\[a-zA-Z]{2,}|\[math\]|\[mathin\]|\\\(|\\\)|\\\[|\\\]|\$\$|[\p{L}\p{N})\]}][_^]\{|(?<![\p{L}\p{N}_])\p{L}[_^][\p{L}\p{N}](?![\p{L}\p{N}_])/gu,
+    ) ?? [];
   const splitDiagrams = pdf.diagramTitlePages.filter((p) => !pdf.diagramAxisPages.includes(p));
 
   const failures: string[] = [];
@@ -3393,16 +3605,20 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
   }
 
   const reports = sources.map((source, i) => {
+    // The first report owns every page before its heading too: a report's own content printed
+    // before the heading (a note at the top of its body, pushed onto a page of its own) belonged
+    // to no segment, and -- searched as a substring -- passed only because "ref" was inside
+    // "REFERENCES" (2026-11-08, class B).
     const segment = pageTexts
-      .slice(starts[i], i + 1 < starts.length ? starts[i + 1] : pageTexts.length)
+      .slice(i === 0 ? 0 : starts[i], i + 1 < starts.length ? starts[i + 1] : pageTexts.length)
       .join("\n");
     const own = extractSourceTokens([source]);
-    const letters = segment.toLowerCase().replace(/[^a-z]/g, "");
-    const digits = segment.replace(/\s+/g, "");
+    const text = normalizeText(segment);
+    const lower = text.toLowerCase();
     return {
       report: i,
-      missingWords: [...own.words].filter((w) => !letters.includes(w)),
-      missingNumbers: [...own.numbers].filter((n) => !digits.includes(n)),
+      missingWords: [...own.words].filter((w) => !hasWord(lower, w, text)),
+      missingNumbers: [...own.numbers].filter((n) => !hasNumber(text, n)),
     };
   });
   return { checked: true, reason: "", reports };
@@ -3485,7 +3701,12 @@ function drawnText(html: string): string {
  * inside start tags only, one after another, each value whole: prose ("id = 4") is not an
  * attribute, and neither is "id = 4" inside another attribute's value.
  */
-function referenceScan(html: string): { refs: number; unresolved: Set<string> } {
+function referenceScan(html: string): {
+  refs: number;
+  unresolved: Set<string>;
+  ids: Set<string>;
+  resolved: Set<string>;
+} {
   const text = drawnText(html);
   const attrs = (tag: string): [string, string][] =>
     [
@@ -3515,11 +3736,18 @@ function referenceScan(html: string): { refs: number; unresolved: Set<string> } 
     ...[...text.matchAll(/url\(\s*(?:"|'|&quot;|&#34;|&#39;|&apos;)?#([^"')\s&]+)/gi)].map((m) =>
       fragment(m[1]),
     ),
+    // Trimmed first, as a browser parses a URL: `href=" #g"` is a reference to g (class B).
     ...named("href", "xlink:href")
+      .map((v) => v.trim())
       .filter((v) => /^#./.test(v))
       .map((v) => fragment(v.slice(1))),
   ];
-  return { refs: targets.length, unresolved: new Set(targets.filter((t) => !ids.has(t))) };
+  return {
+    refs: targets.length,
+    unresolved: new Set(targets.filter((t) => !ids.has(t))),
+    ids,
+    resolved: new Set(targets.filter((t) => ids.has(t))),
+  };
 }
 
 /**
@@ -3551,6 +3779,10 @@ export function findBrokenReferences(reports: BakedReport[]): ReferenceCheck {
   let references = 0;
   let unresolved = 0;
   const broken: { report: number; target: string }[] = [];
+  // The ids every earlier report's bake defines: in the ONE combined document an id two reports
+  // share resolves to the first, so a later report's reference to it reaches the wrong element --
+  // resolved within its own report, and passed (2026-11-08, class B).
+  const earlier = new Set<string>();
   reports.forEach((r, i) => {
     const baked = referenceScan(`${r.style}\n${r.body}`);
     const excused = new Set<string>();
@@ -3558,6 +3790,8 @@ export function findBrokenReferences(reports: BakedReport[]): ReferenceCheck {
     references += baked.refs;
     unresolved += baked.unresolved.size;
     for (const t of baked.unresolved) if (!excused.has(t)) broken.push({ report: i, target: t });
+    for (const t of baked.resolved) if (earlier.has(t)) broken.push({ report: i, target: t });
+    for (const id of baked.ids) earlier.add(id);
   });
   return { references, unresolved, broken };
 }

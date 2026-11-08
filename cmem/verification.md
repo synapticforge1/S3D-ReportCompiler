@@ -26,7 +26,7 @@ Run automatically as the last step; `--no-verify` skips it (**never on a release
 | **STRUCTURE** | every report contributed content, no page is blank |
 
 ```
-  checked:  174 words, 660 numbers from 48 source(s)
+  checked:  216 words, 685 numbers from 48 source(s)
   missing:  0 word(s), 0 number(s)
   per-report: 48/48 reports hold all their own words and numbers
   graphics: 48 image paint(s), 48 expected; 48 diagram(s) checked, intact
@@ -34,8 +34,9 @@ Run automatically as the last step; `--no-verify` skips it (**never on a release
   PASS
 ```
 
-**All 660 distinct numeric values are conserved.** For engineering calculations that is the check that
-counts.
+**All 685 distinct numeric values are conserved, each as a whole token** (2026-11-08; 660 before,
+when signs and separators split numbers and a value was found inside a longer one). For engineering
+calculations that is the check that counts.
 
 ## How the tricky parts work
 
@@ -72,8 +73,10 @@ fails the same way: loudly, with the setting named as missing. That is the safe 
 to the table, with a test, rather than loosening the check.
 
 **Split detection without rendering.** An image straddling a page break is **painted on both pages**
-(clipped), so a paint count above the expected count means a split. The diagram carries its title at the
-top and its axis caption at the bottom — landing on different pages means it was cut in half.
+(clipped), so a paint count above the expected count means a split — and, since 2026-11-08, its
+drawn box runs past the page's edge, which is checked directly (a count let a lost image cancel a
+split one). The diagram carries its title at the top and its axis caption at the bottom; they are
+paired in reading order, so a title whose caption lands on a later page means it was cut in half.
 
 **Independence.** It re-reads the sources **and the PDF** from disk and re-derives expected content with
 its own extraction, sharing no code with the transforms. When this was quietly violated — the verifier
@@ -93,8 +96,8 @@ hidden in one of two identical reports, the other supplying the same tokens).
 
 **Now also PER REPORT** (`compareEachReport`, roadmap task 7). The PDF is cut into whole pages at
 the report headings — report i owns the pages from the one carrying its `MEMBER # n DESIGN REPORT`
-up to the one carrying the next — and each report's own words and numbers must appear in its own
-pages. Whole pages, because each report prints its tab strip and code line BEFORE its heading
+up to the one carrying the next (the first report also owns any pages before its heading, since
+2026-11-08) — and each report's own words and numbers must appear in its own pages. Whole pages, because each report prints its tab strip and code line BEFORE its heading
 (a first version cut at the heading itself and failed the correct samples on the last report: every
 earlier report's opening had silently been credited to its predecessor — the set-union gap again,
 inside the fix), and every report starts on a new page (`.report-sheet { break-after: page }`).
@@ -140,18 +143,44 @@ control's bake must equal the untouched sample's, byte for byte — a swapped `<
 PDF text arrives as **positioned fragments**. `REFERENCES CALCULATIONS RESULTS` may extract as one run,
 and a single word may arrive in pieces. Comparing token sets reported real content as missing.
 
-Both sides are therefore reduced to a normalised stream and searched by **substring**, which survives
-concatenation and fragmentation alike. This can only **under-report** absence — the safe direction for a
-check whose job is to prove nothing was lost.
+🔁 **Until 2026-11-08 both sides were reduced to a stream with every space and non-letter removed and
+searched by SUBSTRING** — said here to "only under-report absence, the safe direction". For a
+VALUE check that is the lenient direction (class review B): `0.9` was found in `0.95`, `125` in
+`1250`, `250` in `1,250`, two table cells "12" and "5" read as "125"; signs, separators and
+exponents were not part of a number (`-12.5` → `12.5`, `1,000` → `1.000`); words were three ASCII
+letters or more, so `OK` → `NG`, `kN` → `mm`, `λ` → `φ` and `mm²` → `mm³` went unchecked. Measured on
+the samples: 30% of the numbers and 15% of the words would still have been "found" with every
+occurrence deleted. Now (1% and 0%, the 1% being an unsigned number after a minus, `5-3`):
+- **The PDF text is read with its gaps** (`main.ts` `pageText`): pdf.js items that touch on one
+  line are joined (kerned pieces, maths glyph by glyph); items apart by more than 0.15 of the text
+  height, raised or dropped by more than 0.3 of it, or of another SIZE (a subscript) are separated
+  by a space.
+- **Tokens are matched WHOLE**: a number with no digit, point or separator joined to it; a word
+  with no letter joined to it (one space may stand between its letters — maths draws `λ_{rf}`'s
+  subscript as "r f").
+- **Number tokens keep** their sign (a "-" with nothing alphanumeric before it, so `M_{p}-0.7` is a
+  binary minus), thousands separators, decimal part and exponent; `−` and the dashes read as "-".
+- **Words are two letters or more, in any script; every non-ASCII character is a symbol** (`λ`,
+  `≤`, `²`, `°`), matched case and all (`Δ` is not `δ`); a command that prints a glyph expects it
+  (`\lambda` → λ, `\phi` → U+03D5 as MathJax writes it); a command name is blanked only where it is
+  a command, so prose "Max" is still checked beside a `\max`.
+
+All three real sets pass under it (2026-11-08). What it adds on the PDF side (`main.ts`): an image
+cut by a page break, seen by where it is DRAWN (past the page's edge — a count let a lost image
+cancel a split one); each report's own image count; a diagram's title without its caption in
+reading order; text drawn invisibly (render mode 3 or fill alpha 0); text drawn in WHITE (none in
+the real sets — a template with white text on a band would fail here, the loud direction); TeX
+sub/superscript marks left in the printed text (`F_y`, `k_{2}`), whatever delimiter the bake missed.
+⚠️ Still NOT seen: text covered by an opaque box, and a diagram's drawing (only its labels are text).
 
 Two extraction rules that were bugs first:
 
 - ⚠️ **`<` is a relational operator inside mathematics** — `30.483<\lambda_{rf}`. A `<[^>]+>` tag
   stripper consumes from there to the next `>` and swallows real numbers, making the check **falsely
   lenient**. The stripper requires a letter after `<`.
-- **TeX command names are notation, not content** — a reader never sees `dfrac`. They are excluded,
-  which costs a little coverage since `text`, `left`, `right` and `delta` are also ordinary words. The
-  alternative is failing a correct build.
+- **TeX command names are notation, not content** — a reader never sees `dfrac`. They are blanked
+  WHERE THEY ARE COMMANDS (since 2026-11-08; they used to be deleted from the whole report's words,
+  so one `\max` stopped a "Max Moment" heading being checked).
 
 ## Negative controls
 
