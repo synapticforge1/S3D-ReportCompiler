@@ -563,6 +563,17 @@ text at the same positions on every page (pdf.js text items with x, y; samples 1
   lost its variables on the way.
 - **Inverting a workflow gate:** plant each regression into the REAL `publish.yml` (restored in a
   `finally`) and run the workflow test — 11 regressions, each fails it, the real file passes.
+- **A privacy rule is measured on the local transcripts before it is kept** (counts only, the
+  redactor's own `--check`, old against new): the first email rule redacted `"\"@scope/…"` and
+  `@v5` (74 false residues), and the first name-learning pass read prose between slashes (path
+  residues 44 → 106). Each was found this way, narrowed, and re-measured. To see WHAT matched
+  without seeing the text, print shapes (letters → `a`/`A`, digits → `9`).
+- ⚠️ **Writing test input from the shell mangles backslashes**: `printf '%s\\acme'` and a
+  `bun -e` template both turned `\a` into an escape, and the redactor looked broken twice. Write
+  inputs from a script file (`writeFileSync`), never through a shell string.
+- **A redactor test that depends on the disk** builds its folder under the test's work directory
+  and writes the path with the platform's separator, so it runs on Windows and on Linux CI — the
+  first version passed on Windows and failed in WSL (the POSIX rule lacked the learned names).
 
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout

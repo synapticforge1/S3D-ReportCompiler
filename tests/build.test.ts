@@ -915,6 +915,38 @@ test("review 3, group C: the redactor takes every spelling of a private path and
     assert.equal(r.code, 0, r.out);
     assert.ok(readFileSync(file, "utf8").includes(kept), `${line}: "${kept}" was redacted`);
   }
+  //   An unquoted path ending in a spaced, lowercase folder name: taken whole when the same file
+  //   shows where the name ends (quoted, or with a file below it), or when that folder EXISTS on
+  //   this machine -- the redactor runs where the transcript was made (owner, 2026-11-08: "fix the
+  //   last item noted"). Prose after a path whose words name no folder stays.
+  for (const [what, text, secret] of [
+    ["quoted elsewhere", 'cd "D:\\Jobs\\acme steel"\nthen D:\\Jobs\\acme steel\n', /acme|steel/],
+    [
+      "a file below it",
+      "D:\\Jobs\\acme steel\\calc.html\nand D:\\Jobs\\acme steel\n",
+      /acme|steel/,
+    ],
+    [
+      "a spaced username",
+      "C:\\Users\\kestrel brumby\\x.txt\nwhoami C:\\Users\\kestrel brumby\n",
+      /kestrel|brumby/,
+    ],
+  ] as const) {
+    const file = join(work, "redact-learned.md");
+    writeFileSync(file, text);
+    const r = run([redact, file, "--user=zorblaxnobody"]);
+    assert.equal(r.code, 0, `${what}: ${r.out}`);
+    assert.doesNotMatch(readFileSync(file, "utf8"), secret, `${what}: left part of the name`);
+  }
+  const onDiskDir = join(work, "redact-disk");
+  mkdirSync(join(onDiskDir, "acme steel"), { recursive: true });
+  const once = join(work, "redact-once.md");
+  const sep = process.platform === "win32" ? "\\" : "/";
+  writeFileSync(once, `ls ${onDiskDir}${sep}acme steel\nand ${onDiskDir}${sep}job41 today\n`);
+  const o = run([redact, once, "--user=zorblaxnobody"]);
+  const onceText = readFileSync(once, "utf8");
+  assert.doesNotMatch(onceText, /steel/, `a folder on disk, named once, left a word:\n${o.out}`);
+  assert.match(onceText, /today/, "prose after a path was taken as a folder name");
   //   A username that survives is reported by LINE, not with the 70 characters around it, which
   //   were the very text it protects (review 5).
   const left = join(work, "redact-left.md");

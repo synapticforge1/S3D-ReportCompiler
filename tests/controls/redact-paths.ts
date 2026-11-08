@@ -36,7 +36,17 @@
 // Exit codes: 0 clean · 1 the username, a drive path or an email SURVIVES (written
 // anyway unless --check, so the residue is visible; a chained commit must stop).
 
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+
+/** Whether `path` exists on this machine; any error is "no". */
+const onDisk = (path: string): boolean => {
+  try {
+    return existsSync(path);
+  } catch {
+    return false;
+  }
+};
 import { fileURLToPath } from "node:url";
 
 /** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
@@ -64,6 +74,15 @@ if (!USER) {
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// The label is derived here rather than by testing `typeof target` later: args[0]
+// is typed `string`, so control-flow analysis narrows `target` to string at any
+// later use and the URL branch of a ternary becomes `never`.
+const defaultTarget = new URL("../../cmem/transcript/session-transcript.md", import.meta.url);
+const target = args[0] ?? defaultTarget;
+const targetLabel = args[0] ?? defaultTarget.href;
+// Read before the rules are built: they learn this file's own folder names ({@link KNOWN_NAME}).
+const original = await readText(target);
 
 // A path separator as it may appear: forward slash, one backslash, the doubled backslash of a
 // JSON-encoded string, the JSON-escaped slash `\/`, or percent-encoded (`%5C`, `%2F`) as in a
@@ -106,7 +125,92 @@ const USERS = ci("Users");
 const NOT_DRIVE = "(?![A-Za-z](?::|%3[Aa]))";
 const CONT = String.raw`(?: +${NOT_DRIVE}(?![a-z\u00DF-\u00FF])${SEGMENT})`;
 const MID = `${SEGMENT}(?: +${NOT_DRIVE}${SEGMENT})*(?=${SEP})`;
-const LAST = String.raw`(?:${SEGMENT}${CONT}*?\.[A-Za-z0-9]{1,8}(?![\w.])|${SEGMENT}${CONT}*${SEG_END})`;
+
+/**
+ * Folder names with spaces that THIS FILE shows where their end can be told: inside a path, with a
+ * separator after them (`D:\Jobs\acme steel\calc.html`), or as a segment of a quoted path
+ * (`cd "D:\Jobs\acme steel"`). An unquoted path ENDING in such a name, its later word lowercase,
+ * cannot be told from prose on its own -- `D:\Jobs\acme steel` left "steel" (review 5, the limit
+ * left documented, then fixed on request: owner, 2026-11-08). But a transcript names a folder more
+ * than once; learned here, the name is taken whole wherever it ends a path, and the residue check
+ * counts any of its words left after a placeholder.
+ */
+function learnSpacedNames(source: string): string[] {
+  const names = new Set<string>();
+  // A NAME: a few words of a folder's, not the command text a quoted string also holds
+  // (`"/tmp/x && echo done"`) -- no shell character, at most five words.
+  const add = (n: string) => {
+    const name = n.trim();
+    const words = name.split(/ +/);
+    if (
+      words.length >= 2 &&
+      words.length <= 5 &&
+      name.length <= 80 &&
+      /\p{L}/u.test(name) &&
+      !/[&|;<>$`=(){}[\]*?!#^~"@≠§%+]/.test(name) &&
+      // A folder's words, not a sentence's or a command's: none starts with "-", none ends in
+      // sentence punctuation.
+      words.every((w) => !/^-|[.,:;]$/.test(w))
+    ) {
+      names.add(name);
+    }
+  };
+  // Inside a PATH only -- one that starts at a drive, a network root or "/" -- never between any
+  // two slashes of prose (`and/or the rest / of it`).
+  const ROOTED = String.raw`(?:(?<![A-Za-z0-9])[A-Za-z]:|(?<![\w:\\>])\\{2}[A-Za-z0-9_.$-]+|(?<![\w.:/\\>-])(?=\/))`;
+  for (const m of source.matchAll(
+    new RegExp(`${ROOTED}((?:${SEP}${SEGMENT}(?: +${NOT_DRIVE}${SEGMENT})*)+)(?=${SEP})`, "g"),
+  )) {
+    for (const seg of m[1].split(/\\{1,2}\/?|\/|%5[Cc]|%2[Ff]/)) add(seg);
+  }
+  // A quoted string that is a path and nothing else (no command around it).
+  for (const m of source.matchAll(
+    /(["'\x60“‘])((?:[A-Za-z]:|\\\\|~|%\w+%|\$\w+|\/\w)[^\n&|;<>]*?)(?=\\?["'\x60”’](?![A-Za-zÀ-ɏ]))/g,
+  )) {
+    for (const seg of m[2].split(/\\{1,2}|\//)) add(seg);
+  }
+  // Named only ONCE, unquoted, at a path's end, a spaced name leaves no sign in the text -- but the
+  // transcript is redacted on the machine it came from, where the folder is. So the disk decides:
+  // `D:\Jobs\acme steel` is one path if `D:\Jobs\acme steel` exists (and `D:\Jobs\acme` is then not
+  // the whole of it). The longest existing run of up to six following words wins; nothing that
+  // does not exist is learned, so prose after a path stays prose.
+  // A drive path, or an absolute POSIX one (as on Linux and macOS, CI included).
+  const pathWithWords = new RegExp(
+    String.raw`((?:(?<![A-Za-z0-9])[A-Za-z]:(?:\\{1,2}|\/)|(?<![\w.:/\\>-])\/)(?:${SEGMENT}(?:\\{1,2}|\/))*)(${SEGMENT})((?: +[^\s\\/"'\x60<>|*?]+){1,6})`,
+    "g",
+  );
+  for (const m of source.matchAll(pathWithWords)) {
+    const dir = m[1].replace(/\\{1,2}/g, "/");
+    const words = m[3].trim().split(/ +/);
+    for (let k = words.length; k >= 1; k--) {
+      const name = `${m[2]} ${words.slice(0, k).join(" ")}`.replace(/[,.;:)\]]+$/, "");
+      if (onDisk(`${dir}${name}`)) {
+        add(name);
+        break;
+      }
+    }
+  }
+  // Longest first, so a name is never cut at a shorter one it begins with.
+  return [...names].sort((a, b) => b.length - a.length);
+}
+const KNOWN_NAMES = learnSpacedNames(original);
+/** One of {@link KNOWN_NAMES}, whole, where a path's last segment starts (any case). */
+const KNOWN_NAME = KNOWN_NAMES.length
+  ? String.raw`(?:${KNOWN_NAMES.map((n) => ci(escapeRe(n))).join("|")})(?![^\\/\s"'\x60,.;:)\]])`
+  : "(?!)";
+/** Every part of a known name after one of its spaces, for the residue check. */
+const KNOWN_TAILS = [
+  ...new Set(
+    KNOWN_NAMES.flatMap((n) =>
+      [...n.matchAll(/ +/g)].map((m) => n.slice((m.index ?? 0) + m[0].length)),
+    ),
+  ),
+]
+  .filter(Boolean)
+  .sort((a, b) => b.length - a.length)
+  .map(escapeRe)
+  .join("|");
+const LAST = String.raw`(?:${KNOWN_NAME}|${SEGMENT}${CONT}*?\.[A-Za-z0-9]{1,8}(?![\w.])|${SEGMENT}${CONT}*${SEG_END})`;
 const ANY_PATH = `${DRIVE}(?:${SEP}${MID})*${SEP}${LAST}`;
 // A network path, \\server\share\..., single- or JSON-escaped; not after a word,
 // a ":" or another backslash, so a drive path's own separators never start one. And //server/share
@@ -119,7 +223,8 @@ const UNC =
 // middle segment may hold single spaces ("/srv/Client Jobs/…"), the last one as LAST does.
 const PSEG = String.raw`[\w.~@%+-]+`;
 // Each "/" may be JSON-escaped (`\/srv\/clients\/…`, as a transcript's JSON holds it).
-const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\\?\/(?:${PSEG}(?: ${PSEG})*\\?\/)+(?:${PSEG}(?: ${PSEG})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${PSEG})`;
+// Its last segment may be a learned spaced name ({@link KNOWN_NAME}), as a drive path's may.
+const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\\?\/(?:${PSEG}(?: ${PSEG})*\\?\/)+(?:${KNOWN_NAME}|${PSEG}(?: ${PSEG})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${PSEG})`;
 /**
  * The whole of a path below a home folder: the username (which may hold a space) and every
  * segment after it. The home rule used to replace `X:\Users\<name>` alone, and the rest stood --
@@ -129,7 +234,7 @@ const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\\?\/(?:${PSEG}(?: ${PSEG})*\\?\/)
 // The username runs across spaces where a separator follows it, or -- at the end -- into
 // capitalised words ({@link CONT}): `C:\Users\<name> and then` took "and then" as the name (review
 // 4), and a spaced `C:\Users\Kestrel Brumby` at a line's end then left "Brumby" (review 5).
-const HOME_TAIL = `${SEGMENT}(?:(?: +${NOT_DRIVE}${SEGMENT})+(?=${SEP})|${CONT}+)?(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
+const HOME_TAIL = `(?:${KNOWN_NAME}|${SEGMENT}(?:(?: +${NOT_DRIVE}${SEGMENT})+(?=${SEP})|${CONT}+)?)(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
 
 /** Host suffixes that name a private network, never a public site. */
 const INTRANET_TLD = String.raw`(?:corp|local|lan|internal|intranet|home|lab|localdomain|ad)(?![\w.-])`;
@@ -392,6 +497,13 @@ const drivePaths = (s: string) => [
   ...(s.match(
     /<(?:home|path|unc-path)>(?:(?:\\{1,2}|\/)[^\s"'<>]| [^\s"'<>\\/]+(?:\\{1,2}|\/))/g,
   ) ?? []),
+  // The later words of a folder name this file shows elsewhere ({@link KNOWN_NAMES}), left after a
+  // placeholder: `<path> steel` where the file also wrote `…\acme steel\…`.
+  ...(KNOWN_TAILS
+    ? (s.match(
+        new RegExp(String.raw`<(?:home|path|unc-path)> +(?:${KNOWN_TAILS})(?![\p{L}\p{N}])`, "giu"),
+      ) ?? [])
+    : []),
   // A share named by a network URI, or a network path to an IP address or an intranet host.
   ...(s.match(/(?:smb|afp|nfs|cifs|webdav|davs?):\/\/(?!<)\S|\/\/\d{1,3}(?:\.\d{1,3}){3}[:/]/gi) ??
     []),
@@ -409,14 +521,6 @@ const drivePaths = (s: string) => [
   ),
 ];
 
-// The label is derived here rather than by testing `typeof target` later: args[0]
-// is typed `string`, so control-flow analysis narrows `target` to string at any
-// later use and the URL branch of a ternary becomes `never`.
-const defaultTarget = new URL("../../cmem/transcript/session-transcript.md", import.meta.url);
-const target = args[0] ?? defaultTarget;
-const targetLabel = args[0] ?? defaultTarget.href;
-
-const original = await readText(target);
 let text = original;
 const applied: string[] = [];
 
