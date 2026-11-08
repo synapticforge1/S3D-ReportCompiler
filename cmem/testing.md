@@ -512,6 +512,38 @@ harness that prints only hashes and allow-listed count lines, never report text)
   `847de49`, all 7 jobs); `publish.yml`'s new job graph in the 1.3.0 release (run 42397518507,
   every job green).
 
+**2026-11-07, the fourth full-project review (owner: "A-E", then "yes" to testing what was left
+reasoned; #77–#81):** 63 tests — 62 pass and 1 skip on Windows (`bun test`); the skipped one
+passes in WSL. New: ".htm is refused by name", "review 4, groups A and B" (9 sections), "group E:
+the runtime's exits, with a stand-in Chrome (POSIX)", "group E: the browser example, driven in
+Chrome"; extended: the sanitizer's row and residue cases, the committed-samples test (row numbers
+only), the redactor's cases, `verify-release --github` (a path-aware fake GitHub), the release's
+test-hook fence, the workflow assertions (read as code). **Inverted** four ways, each against the
+code before its fix: the A/B sections by the section-cutting script in a worktree; the sanitizer,
+the redactor and the workflow by probe scripts (each case planted, run on both trees); the POSIX
+test by reverting each fix alone in a WSL clone (the interrupt section reached by cutting
+sections 2–3 from a copy); the browser test by removing each of the page's three fixes in turn.
+All three real sets byte-identical (`37792fe3…`, `ae70d5e0…`, `8c1a8887…`); the real 48 still pass
+the sanitizer; the local transcripts' residue counts equal or lower under the new redactor.
+- **A stand-in "Chrome" works on POSIX:** a script whose shebang is the test runtime's own
+  `process.execPath`, given Chrome's arguments (it writes the PDF `--print-to-pdf=` names, or
+  none, or exits 1). Windows does not honour a shebang, so that test is skipped there — the
+  "not testable here" above holds for Windows only.
+- **Slowing a rename for an interrupt test:** a preload (`bun --preload`, `node --require`) that
+  wraps `require("node:fs/promises").rename` — the runtime's `import("node:fs/promises")` sees it
+  (measured on Bun; Node through `syncBuiltinESMExports()`) — marks the start in a file, waits 3 s.
+- **Driving the browser example:** headless Chrome with `--remote-debugging-port=0`; the port read
+  from `DevToolsActivePort` in its profile; a page target's WebSocket (global in Bun and Node 22+);
+  wait for `document.readyState === "complete"` before clicking — the log's static "Ready." is
+  there before the module has run (the first try clicked too early).
+- **Running the POSIX test locally:** in WSL, a scratch clone in the WSL home (not `/mnt/…`: the
+  checkout's `node_modules` holds the Windows build of the native canvas), `bun install
+  --frozen-lockfile`, the checkout's `.mathjax-fonts/` copied in, then `bun test … -t "stand-in
+  Chrome"`. WSL's Bun matches the project's (1.4.4 since 2026-11-07; it had been 1.4.3). Delete
+  the clone after.
+- ⚠️ The review-3 stderr test detaches its helper into its own process group, so it cannot see a
+  group reap: the new test's helper shares the parent's group, as Chrome's helpers do.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in
@@ -718,6 +750,12 @@ for one report, `0 scripts` in the output, and a rendered preview.
 
 Verified in headless Chrome with `--allow-file-access-from-files` and `--dump-dom`: the baked HTML
 rendered inside an iframe with the MEMBER heading present, matching the server-side numbers exactly.
+
+Since review 4 (2026-11-07) this is also a test, "group E: the browser example, driven in Chrome":
+it serves the page, a freshly built bundle and two reports on 127.0.0.1 and clicks **Bake** over
+the DevTools protocol — a good bake fills the preview, one that throws is logged and empties it,
+and a stale bundle (no `decodeReport`) logs "rebuild the bundle". The local bundle the manual steps
+above use is git-ignored and goes stale between pulls: the page now says so.
 
 ## Inspecting the output by hand
 
