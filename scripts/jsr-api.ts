@@ -21,7 +21,7 @@ export type Look = { info: VersionInfo } | { missing: true } | { error: string }
 export const NPM_NAME = "@synapticforge1/s3d-reportcompiler";
 
 /** A version's npm record, as far as these scripts read it: does npm hold a provenance statement? */
-type NpmInfo = { provenance: boolean };
+type NpmInfo = { provenance: boolean; gitHead: string };
 
 /** One look at npm, three answers like {@link Look}. */
 export type NpmLook = { info: NpmInfo } | { missing: true } | { error: string };
@@ -136,7 +136,11 @@ export const usingTestApi = (): boolean => apiBase() !== REAL_API;
  * would otherwise come from a fake (review 4).
  */
 export const testHooksSet = (): string[] =>
-  ["S3D_JSR_API", "S3D_NPM_API", "S3D_GITHUB_API"].filter((name) => !!process.env[name]);
+  // The timing hooks too (review 5): left set in a shell, they shrank the release's wait to
+  // milliseconds, and a fine release was reported "not on JSR yet".
+  ["S3D_JSR_API", "S3D_NPM_API", "S3D_GITHUB_API", "S3D_JSR_TIMEOUT_MS", "S3D_JSR_RETRY_MS"].filter(
+    (name) => !!process.env[name],
+  );
 
 export const JSR_TIMEOUT_MS = envMs("S3D_JSR_TIMEOUT_MS", 20_000);
 export const JSR_RETRY_MS = envMs("S3D_JSR_RETRY_MS", 15_000);
@@ -178,6 +182,43 @@ export async function lookupVersion(packageName: string, version: string): Promi
 }
 
 /**
+ * Whether npm has, or EVER had, `version` of `packageName`: `{ taken }`, or `{ error }`. npm never
+ * lets a version number be used twice, an unpublished one included, and its package document keeps
+ * every number it ever saw in `time`. A release asks before JSR's immutable step: JSR published
+ * whatever npm could no longer take, and the npm job then failed with JSR already set (2026-11-07
+ * review 5). A package npm has never seen (404) has taken nothing.
+ */
+export async function lookupNpmTaken(
+  packageName: string,
+  version: string,
+): Promise<{ taken: boolean } | { error: string }> {
+  const url = `${npmBase()}/${packageName.replace("/", "%2f")}`;
+  if (npmBase() !== REAL_NPM)
+    console.error(`  ⚠️ S3D_NPM_API is set: asking ${url}, NOT npm (test hook)`);
+  try {
+    const res = await fetch(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(JSR_TIMEOUT_MS),
+    });
+    if (res.status === 404) {
+      await res.body?.cancel();
+      return { taken: false };
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      return { error: `HTTP ${res.status}` };
+    }
+    const body = (await res.json().catch(() => null)) as { time?: unknown } | null;
+    if (body === null || typeof body !== "object" || typeof body.time !== "object" || !body.time) {
+      return { error: "HTTP 200 without the package's version history" };
+    }
+    return { taken: Object.hasOwn(body.time, version) };
+  } catch (e) {
+    return { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
+  }
+}
+
+/**
  * Look a version up on npm once, the same three ways as {@link lookupVersion}. Provenance is what
  * npm records for a trusted (OIDC) publish: `dist.attestations.provenance` on the version (present
  * on 1.1.4–1.1.7, absent on 1.1.0, published by hand; read 2026-11-06).
@@ -201,12 +242,19 @@ export async function lookupNpmVersion(packageName: string, version: string): Pr
     }
     const body = (await res.json().catch(() => null)) as {
       version?: string;
+      gitHead?: unknown;
       dist?: { attestations?: { provenance?: unknown } };
     } | null;
     if (body === null || typeof body !== "object" || body.version !== version) {
       return { error: "HTTP 200 without this version's record" };
     }
-    return { info: { provenance: Boolean(body.dist?.attestations?.provenance) } };
+    return {
+      info: {
+        provenance: Boolean(body.dist?.attestations?.provenance),
+        // The commit the publishing checkout was at, as npm recorded it ("" when it recorded none).
+        gitHead: typeof body.gitHead === "string" ? body.gitHead : "",
+      },
+    };
   } catch (e) {
     return { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
   }

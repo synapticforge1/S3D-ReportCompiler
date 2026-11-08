@@ -40,7 +40,7 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { lookupVersion, testHooksSet, usingTestApi } from "./jsr-api.ts";
+import { lookupNpmTaken, lookupVersion, NPM_NAME, testHooksSet, usingTestApi } from "./jsr-api.ts";
 
 const manifest = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url), "utf8")) as {
   name: string;
@@ -289,6 +289,17 @@ if (diffCode !== 0) {
   if (usingTestApi() || hooks.length > 0) {
     console.error(
       `\n❌ ${hooks.join(", ") || "S3D_JSR_API"} is set — a release never runs against a test registry. Unset it.`,
+    );
+    refuse(1);
+  }
+  // npm must still be able to take the number: it never reuses one, even an unpublished one, and
+  // JSR used to get a version npm could not (review 5). Answered or refused, as JSR's is.
+  const npm = await lookupNpmTaken(NPM_NAME, version);
+  if ("error" in npm || npm.taken) {
+    console.error(
+      "error" in npm
+        ? `\n❌ Could not ask npm whether ${version} can still be published (${npm.error}). Re-run when it answers.`
+        : `\n❌ ${NPM_NAME}@${version} is, or once was, on npm — npm never takes a number twice. Bump instead.`,
     );
     refuse(1);
   }

@@ -78,7 +78,9 @@ jobs:
           if [ "$EVENT" = "workflow_dispatch" ]; then
             REL=$(gh api "repos/${GITHUB_REPOSITORY}/commits/release/${TAG}" --jq .sha 2>/dev/null || true)
             [[ "$REL" =~ ^[0-9a-f]{40}$ ]] || REL="" # a 404 answers with a body, not a SHA
-            if [ -z "$REL" ]; then echo "::error::No release/${TAG} branch: JSR's commit was never recorded — refusing."; exit 1; fi
+            # Either cause, said as either: a GitHub 5xx or rate limit reads the same as no branch
+            # here, and was reported as "never recorded" (review 5). Refused both ways.
+            if [ -z "$REL" ]; then echo "::error::No release/${TAG} branch could be read — JSR's commit was never recorded, or GitHub did not answer (re-run to tell); refusing."; exit 1; fi
             if [ "$REL" != "$NOW" ]; then
               echo "::error::${TAG} points at ${NOW}, but JSR got ${REL} (release/${TAG}) — move the tag back, or release a new version; refusing."
               exit 1
@@ -158,9 +160,18 @@ jobs:
         with:
           deno-version: v2.x
 
+      # Checked, not trusted: an empty value makes setup-deno float `2.x` again in `publish`,
+      # silently (its default), so a step id or output renamed, or `deno --version` reworded, would
+      # have undone the pin unseen (review 5).
       - name: The Deno version, for the publish job
         id: deno
-        run: echo "version=$(deno --version | head -n 1 | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+        run: |
+          V=$(deno --version | head -n 1 | cut -d ' ' -f 2)
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not read the Deno version ('${V}') — refusing: publish would float."
+            exit 1
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -193,6 +204,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      uploaded: ${{ steps.jsr.outputs.uploaded }}
 
     steps:
       - name: Checkout
@@ -275,10 +288,28 @@ jobs:
             echo "::error::JSR answered ${CODE} for ${PKG}@${VERSION} (only 404, 'not published', lets this run publish) — refusing."
             exit 1
           fi
-          echo "✅ ${TAG} = ${SHA}, jsr.json ${VERSION}, not on JSR yet"
+          # npm must still be able to take this number: it never reuses one, even an unpublished
+          # one (its package document keeps every number in `time`). JSR used to publish a version
+          # npm could not take, and the npm job then failed with JSR already immutable (review 5).
+          NPM_PKG="@synapticforge1/s3d-reportcompiler"
+          TAKEN=$(curl -s -w '\n%{http_code}' "https://registry.npmjs.org/${NPM_PKG/\//%2f}" \
+            | V="$VERSION" bun -e 'const t = (await Bun.stdin.text()).split("\n"); const code = t.pop(); let a = "?"; if (code === "404") a = "no"; else if (code === "200") { try { const d = JSON.parse(t.join("\n")); a = d.time && typeof d.time === "object" ? (Object.hasOwn(d.time, process.env.V) ? "yes" : "no") : "?"; } catch {} } console.log(a)')
+          if [ "$TAKEN" != "no" ]; then
+            echo "::error::npm has, had, or would not say whether it had ${NPM_PKG}@${VERSION} ('${TAKEN}') — refusing before JSR."
+            exit 1
+          fi
+          echo "✅ ${TAG} = ${SHA}, jsr.json ${VERSION}, not on JSR yet, and npm can take it"
 
+      # `uploaded`: from here this run's commit may be on JSR -- `deno publish` uploads, THEN polls
+      # and signs, and a failure in those leaves the version published with the job failed. `record`
+      # and `npm-build` follow on this as well as on success (each checks JSR has the version), so a
+      # version is never stranded on JSR with no release branch and no npm copy (review 5; the #75
+      # class). If JSR is slow to show it, re-run `record` alone: it keeps this attempt's outputs.
       - name: Publish to JSR
-        run: deno publish
+        id: jsr
+        run: |
+          echo "uploaded=true" >> "$GITHUB_OUTPUT"
+          deno publish
 
   # Informational, in its own job: inside `publish` its two-minute poll kept the job running after
   # `deno publish`, and `record` (the release branch npm-only recovery needs) waited on it.
@@ -356,7 +387,10 @@ jobs:
   # (2026-11-06 review). This job installs nothing; it is the one that may push.
   record:
     needs: [ci-green, publish]
-    if: github.event_name == 'push' && needs.publish.result == 'success'
+    # On success, or when this run's upload was attempted and the publish job failed after it.
+    if: >-
+      !cancelled() && github.event_name == 'push' &&
+      (needs.publish.result == 'success' || needs.publish.outputs.uploaded == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -365,6 +399,21 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.ci-green.outputs.sha }}
+      # Only what JSR has is recorded: after a failed publish job, the upload may not have landed.
+      # Polled -- JSR shows a new version after a short delay. No answer, no branch.
+      - name: JSR has the version
+        env:
+          TAG: ${{ needs.ci-green.outputs.tag }}
+        run: |
+          PKG=$(node -p "require('./jsr.json').name"); SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}; NAME=${PKG#*/}
+          for i in $(seq 1 20); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://api.jsr.io/scopes/${SCOPE}/packages/${NAME}/versions/${TAG#v}")
+            if [ "$CODE" = "200" ]; then echo "✅ JSR has ${PKG}@${TAG#v}"; exit 0; fi
+            echo "  attempt ${i}/20: JSR answered ${CODE}"
+            sleep 15
+          done
+          echo "::error::JSR does not show ${PKG}@${TAG#v} after 5 minutes — nothing recorded. Re-run this job once it does."
+          exit 1
       - name: Create the release branch at the commit JSR got
         env:
           TAG: ${{ needs.ci-green.outputs.tag }}
@@ -390,8 +439,10 @@ jobs:
     # After a successful JSR publish on a tag push; or alone, on "Run workflow" with a tag -- and
     # in both cases only after ci-green passed for the commit (the dispatch path used to skip it:
     # no CI, no main check, no JSR check).
+    # (Or after an attempted upload whose job then failed: `npm` checks JSR has the version.)
     if: >-
       !cancelled() && needs.ci-green.result == 'success' && (needs.publish.result == 'success' ||
+      needs.publish.outputs.uploaded == 'true' ||
       (github.event_name == 'workflow_dispatch' && needs.publish.result == 'skipped'))
     runs-on: ubuntu-latest
     permissions:
@@ -409,11 +460,35 @@ jobs:
         with:
           bun-version: 1.4.4
 
+      # For the proof below, as in ci.yml's npm job.
+      - name: Setup Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+
+      - name: Install fnm (v1.39.0, digest-checked)
+        run: |
+          curl -fsSL -o /tmp/fnm.zip https://github.com/Schniz/fnm/releases/download/v1.39.0/fnm-linux.zip
+          echo "7807664f39d39fc518da1c35ba0181e4b3267603c4b1dedeb4b5fc6ae440a224  /tmp/fnm.zip" | sha256sum -c -
+          mkdir -p "$HOME/.fnm" && unzip -o -q /tmp/fnm.zip -d "$HOME/.fnm" && chmod +x "$HOME/.fnm/fnm"
+          echo "$HOME/.fnm" >> "$GITHUB_PATH"
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
       - name: Build the npm package
         run: bun run npm:build
+
+      # The tarball npm will publish, proven HERE, before it is kept: CI proved a separate build, so
+      # nothing checked the one that ships (review 5). No token is held in this job; JSR has this
+      # version by now, so the export list is compared with JSR's own npm build of it.
+      - name: Prove the package on every runtime
+        run: bun scripts/npm-prove.ts --deno --install-node
 
       - name: Keep the package for the publish job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -493,7 +568,7 @@ jobs:
       # meanwhile must not get its new commit onto npm under the old one's version. On "Run
       # workflow" (npm only, for a version already on JSR) JSR must have the version: it used to
       # publish any tag's commit to npm, on JSR or not.
-      - name: Pinned — the tag still points at this commit; on dispatch, JSR has the version
+      - name: Pinned — the tag still points at this commit, and JSR has the version
         env:
           TAG: ${{ needs.ci-green.outputs.tag }}
           SHA: ${{ needs.ci-green.outputs.sha }}
@@ -505,13 +580,15 @@ jobs:
             echo "::error::${TAG} now points at '${NOW}', not ${SHA} — refusing to publish."
             exit 1
           fi
+          # On EVERY run, not "Run workflow" alone: a publish job that failed after its upload lets
+          # this job run, and npm must never get a version JSR does not have (review 5).
+          PKG=$(node -p "require('./jsr.json').name"); SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}; NAME=${PKG#*/}
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://api.jsr.io/scopes/${SCOPE}/packages/${NAME}/versions/${VERSION}")
+          if [ "$CODE" != "200" ]; then
+            echo "::error::JSR answered ${CODE} for ${PKG}@${VERSION}: npm only ever publishes a version JSR has — refusing."
+            exit 1
+          fi
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            PKG=$(node -p "require('./jsr.json').name"); SCOPE=${PKG%/*}; SCOPE=${SCOPE#@}; NAME=${PKG#*/}
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://api.jsr.io/scopes/${SCOPE}/packages/${NAME}/versions/${VERSION}")
-            if [ "$CODE" != "200" ]; then
-              echo "::error::JSR answered ${CODE} for ${PKG}@${VERSION}: npm-only publishing is for a version already on JSR — refusing."
-              exit 1
-            fi
             # ...and JSR got THIS commit: the release branch the JSR run recorded must name it. Only
             # "JSR has the version" and "the tag points here today" were checked, so a tag moved
             # after JSR published (a cancelled run, a retried release) put another commit on npm

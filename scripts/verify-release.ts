@@ -69,6 +69,8 @@ if (unknownFlags.length > 0 || args.length > 1 || (args[0] && !/^\d+\.\d+\.\d+$/
 }
 const wait = argv.includes("--wait");
 const checkNpm = argv.includes("--npm");
+/** The commit npm recorded for the version, read by {@link npmVerdict} ("" for none). */
+let npmGitHead = "";
 const checkGithub = argv.includes("--github");
 const version = args[0] ?? jsrJson.version;
 
@@ -199,8 +201,20 @@ async function githubVerdict(): Promise<number> {
       );
       return 5;
     }
+    // With --npm: npm's copy is of the same commit -- the one npm recorded as `gitHead`. `--npm`
+    // checked provenance alone, and the npm job accepts "already on npm" with no commit recorded
+    // (review 5). None recorded is no verdict of sameness, so it fails too.
+    if (checkNpm && npmGitHead !== atBranch.sha) {
+      console.error(
+        npmGitHead === ""
+          ? `\n❌ npm records no commit for ${version}, so its copy cannot be shown to be JSR's (${atBranch.sha.slice(0, 12)}).`
+          : `\n❌ npm's ${version} is from ${npmGitHead}, but JSR got ${atBranch.sha} (release/${tag}): the registries differ.`,
+      );
+      return 5;
+    }
     console.log(
-      `✅ the GitHub release ${tag} exists, at the commit JSR got (${atTag.sha.slice(0, 12)}).`,
+      `✅ the GitHub release ${tag} exists, at the commit JSR got (${atTag.sha.slice(0, 12)})` +
+        `${checkNpm ? ", and npm's copy is of it" : ""}.`,
     );
     return 0;
   }
@@ -237,6 +251,7 @@ async function npmVerdict(): Promise<number> {
       await new Promise((r) => setTimeout(r, JSR_RETRY_MS));
     }
   }
+  if ("info" in n) npmGitHead = n.info.gitHead;
   if ("info" in n && n.info.provenance) {
     console.log(`✅ ${version} is on npm WITH provenance.`);
     return 0;
