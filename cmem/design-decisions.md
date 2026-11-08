@@ -127,7 +127,18 @@ and after — so they are rules for the next template, each pinned by a test:
 - **Every sheet of the page is the report's sheet**: the head's, and a `<style>` in the body outside
   any `<svg>` (moved there by `bakeBody`; left in the body it applied to every report).
 - **`html` / `body` / `:root` are the wrapper**, the whole leading chain of them (`html body p` is
-  `.rs7 p`). A qualifier on one is decided against the SOURCE's own tag, because the wrapper carries
+  `.rs7 p` in what it matches), and so is a top-level `:scope`, an `:is()`/`:where()` of them, and
+  — for `* > .x` — `body`. 🔁 **The removed compounds keep their WEIGHT** (2026-11-07, review 5,
+  #82): every scoped selector gains exactly the wrapper's one class, so the report's rules keep
+  their order of weight — a removed `body` used to take its type weight with it, and `body
+  .x{display:none}` lost to a later `.x{display:block}`. The weight goes back as weight-only
+  selectors that match everything — `:is(#s3d-w, *)` an id, `:is(.s3d-w, *)` a class, `:is(s3d-w,
+  *)` a type (an `:is()` weighs its heaviest argument; `*` makes it match) — computed by
+  `specificity()` (CSS Selectors 4: `:where()` nothing, `:is()`/`:not()`/`:has()` their heaviest
+  argument), less whatever qualifier is kept. `:where()` and `*` weighed nothing and still do. The
+  first scoping change in a review to alter the real sets' baked HTML: by these selectors alone
+  (identical once removed), and every page of the samples' and the 48 set's PDFs has the same text
+  at the same positions. A qualifier on one is decided against the SOURCE's own tag, because the wrapper carries
   none of its attributes: classes, ids and attribute selectors that hold are dropped, any that fails
   drops the rule (it never applied); attribute values compare as HTML compares them in selectors
   (`lang`, `dir`, `type` … caselessly; `class`, `id` not; `i` / `s` honoured — Chrome, measured).
@@ -163,6 +174,24 @@ and after — so they are rules for the next template, each pinned by a test:
 - **Comments are CSS's**: `/*` inside a string is text, an unclosed one ends its own sheet, and
   they go before the block-less at-rules are removed (a comment that mentions `@import` used to
   delete rules up to the next `;`).
+- **A sheet is what the parser makes a sheet** (reviews 4–5, #77, #82): an SVG `<style>` is read as
+  SVG parses it — CDATA a wrapper, `<!-- -->` a comment, entities characters, by the bake's own
+  decoder (MathJax's table, not the verifier's, §9) — and refused if it holds markup; a `<style>`
+  before `<head>` is the head's; one inside `<template>`, `<textarea>`, `<title>` and the other
+  raw-text elements is none (`blankInert`). A diagram holding `<foreignObject>` is moved, never
+  hoisted (HTML takes no presentation attribute), and another diagram's MOVED sheet is a rival.
+- **Page-wide names**: `@layer` names are made the report's own (`r7-a`) and its statement form
+  `@layer a, b;` is kept; the names `@font-face`, `@keyframes`, `@counter-style` and `@property`
+  define are NOT renamed (that means rewriting every use) — two reports defining one differently
+  are named in a warning instead.
+- **What prints is what the source shows**: content a report put inside `<head>` (or before
+  `<body>` with no `</head>`) is drawn, as a browser draws it — baked and expected (`drawnBeforeBody`
+  / `bodyStartBefore`, written apart, §9). The reveal gate opens only what the report's own script
+  could: never an `!important` hide.
+- **TeX state across reports**, beyond the definitions above: mathtools' paired delimiters and
+  `\mathtoolsset` options are reset too; `\unicode`'s font cache cannot be (private to MathJax's
+  module), so a `\unicode` after an earlier report changed it — by `\unicode[…]` or an alias — is
+  refused. That cache lives as long as the PROCESS: tests that check it bake in a child process.
 
 ---
 
