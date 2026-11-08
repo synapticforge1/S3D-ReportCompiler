@@ -186,7 +186,10 @@ inside its clipping box); TeX sub/superscript marks in their braced form left in
 ⚠️ Still NOT seen: text covered by an opaque box, or grey on grey; a diagram's drawing (only its
 labels are text) and an image's pixels; a one-letter unit (`12 m` → `12 N` — a single letter is in
 every report, so alone it proves nothing). A number broken across two lines fails (lines are never
-joined, else table rows would be) — the loud direction.
+joined, else table rows would be) — the loud direction. 🔒 **Each of these is to be FIXED, not kept
+(owner, 2026-11-08: "We need fixes not limits")**, along with re-check 2's gaps (one occurrence of a
+value is enough; text under 2 pt; ASCII operators and `%`; light grey on the page): the plan and
+order are roadmap task 18.
 
 Two extraction rules that were bugs first:
 

@@ -575,6 +575,38 @@ text at the same positions on every page (pdf.js text items with x, y; samples 1
   and writes the path with the platform's separator, so it runs on Windows and on Linux CI — the
   first version passed on Windows and failed in WSL (the POSIX rule lacked the learned names).
 
+**2026-11-08, the class-by-class review, class B (roadmap task 18; #87 `3555326`, #88 `8b5a113`):**
+71 tests, all passing on Bun on Windows (the 2 POSIX ones skip there). Three class-B tests: "class B:
+the verification checks values whole" (9 sections), "class B, iteration 2: lists, signs, units,
+split tokens, printed names" (6), and the end-to-end "what the PDF draws" (8 planted cases: transparent,
+white, faint and near-white text; a cut, a clipped and a tiny image; a diagram title with no caption).
+All three real sets PASS with the baked HTML unchanged (`487321f2…`, `da92578d…`, `f0922226…`);
+`bun run runtimes` one document, `487321f24fb9`.
+- **Inverting a multi-section unit test:** a scratch harness runs each numbered `  // N.` section
+  ALONE inside a worktree of the commit before (`git worktree add --detach <dir> HEAD`, its
+  `node_modules` a junction to the repo's). One failing assertion stops a test, so a whole-test run
+  proves only the first section. Every section must fail there. The end-to-end cases are inverted by
+  running the old `main.ts` on the planted folders: all exit 0 there. To remove the worktree, delete
+  the junction first (`[System.IO.Directory]::Delete`), then `git worktree remove --force`;
+  `git -C <worktree>` from this shell trips git's ownership check (a temp folder), so use the main
+  repo.
+- **Vacuity, the check that started class B:** for each source token, delete every occurrence from
+  the PDF text and see whether it is still "found". It was 30% of the samples' numbers and 15% of
+  the words before #87, then 1% and 0%. ⚠️ It deletes EVERY occurrence; re-check 2 found that
+  deleting ONE still passes 64% of member_0's numbers (task 18 item 8). Measure both ways.
+- **What Chrome writes, measured from its PDFs (pdf.js 6 operator lists):**
+  - text is drawn at alpha 0.87;
+  - `opacity` is a transparency group (`beginGroup`) whose `ca` multiplies the alpha set inside it;
+  - a clip arrives as `clip`/`eoClip` BEFORE the `constructPath` it clips to, whose `args[2]` is
+    the path's min/max box in the space of the current transform;
+  - an image is the unit square under the transform;
+  - the PDFs are TAGGED (Table/TR/TD/TH/H3 in the structure tree, marked content on the text);
+  - `page.objs.get(name)` gives an image's decoded pixels (the sample's: 370×400 RGB).
+  Separate numbers on one line stand at least 4.3 text heights apart in the samples' PDF and the
+  48 set's (a counts-only probe).
+- ⚠️ A test helper that builds a report with a heading also expects the heading's own tokens (the
+  "1" of `MEMBER # 1`): leave the heading out when asserting a body's exact numbers.
+
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout
 (`/home/…`), its Claude slug (`-home-…`) and POSIX homes passed through untouched. The CI gate in
