@@ -793,14 +793,123 @@ function settleQualifier(
   return rest;
 }
 
+/** Where the identifier starting at `i` ends (escapes and non-ASCII letters included). */
+function identEnd(s: string, i: number): number {
+  let k = i;
+  while (k < s.length) {
+    if (s[k] === "\\") k += 2;
+    else if (/[\w-]/.test(s[k]) || s.charCodeAt(k) > 0x7f) k++;
+    else break;
+  }
+  return k;
+}
+
 /**
- * Scope one selector to a report's wrapper. `html`/`body`/`:root` map onto the
- * wrapper itself, since it stands in for the document once many share a page --
- * the whole leading chain of them (`html body p` is `<wrapper> p`), with any
- * qualifier settled against the source's own tag ({@link settleQualifier}).
- * Returns "" for a selector that can match nothing.
+ * A selector's specificity, [ids, classes, types], as CSS Selectors 4 counts it: `:where()` weighs
+ * nothing; `:is()`, `:not()`, `:has()` (and `:matches()`, `:-webkit-any()`) weigh their heaviest
+ * argument; `:nth-child(… of S)` one class plus S; any other pseudo-class one class; a
+ * pseudo-element and a type one type each; `*` nothing. For {@link scopeSelector} and
+ * {@link competingRule}, which must keep a rule's weight where the cascade decides.
  */
-function scopeSelector(selector: string, scope: string, prefix: string, roots?: RootTags): string {
+function specificity(selector: string): [number, number, number] {
+  const out: [number, number, number] = [0, 0, 0];
+  const add = (w: [number, number, number]) => {
+    out[0] += w[0];
+    out[1] += w[1];
+    out[2] += w[2];
+  };
+  const heaviest = (list: string): [number, number, number] =>
+    splitSelectorList(list)
+      .map((x) => specificity(x))
+      .reduce<[number, number, number]>(
+        (best, w) =>
+          w[0] > best[0] ||
+          (w[0] === best[0] && (w[1] > best[1] || (w[1] === best[1] && w[2] > best[2])))
+            ? w
+            : best,
+        [0, 0, 0],
+      );
+  let i = 0;
+  while (i < selector.length) {
+    const ch = selector[i];
+    if (ch === "#") {
+      out[0]++;
+      i = identEnd(selector, i + 1);
+    } else if (ch === ".") {
+      out[1]++;
+      i = identEnd(selector, i + 1);
+    } else if (ch === "[") {
+      out[1]++;
+      const end = closeOf(selector, i);
+      i = end < 0 ? selector.length : end;
+    } else if (ch === '"' || ch === "'") {
+      i = closeQuote(selector, i);
+    } else if (ch === ":") {
+      const element = selector[i + 1] === ":";
+      const start = i + (element ? 2 : 1);
+      const end = identEnd(selector, start);
+      const name = selector.slice(start, end).toLowerCase();
+      let args: string | null = null;
+      i = end;
+      if (selector[i] === "(") {
+        const close = closeOf(selector, i);
+        args = selector.slice(i + 1, close < 0 ? selector.length : close - 1);
+        i = close < 0 ? selector.length : close;
+      }
+      if (element || ["before", "after", "first-line", "first-letter"].includes(name)) out[2]++;
+      else if (name === "where") {
+        // nothing
+      } else if (["is", "not", "has", "matches", "-webkit-any", "-moz-any"].includes(name)) {
+        if (args !== null) add(heaviest(args));
+      } else if ((name === "nth-child" || name === "nth-last-child") && args !== null) {
+        out[1]++;
+        const of = /\sof\s([\s\S]*)$/i.exec(args);
+        if (of) add(heaviest(of[1]));
+      } else out[1]++;
+    } else if (/[A-Za-z_\\]/.test(ch) || ch.charCodeAt(0) > 0x7f) {
+      const end = identEnd(selector, i);
+      // `ns|type`: the namespace prefix is not a type of its own.
+      if (selector[end] === "|" && selector[end + 1] !== "=") i = end + 1;
+      else {
+        out[2]++;
+        i = end;
+      }
+    } else i++;
+  }
+  return out;
+}
+
+/**
+ * Selectors that weigh `w` and match every element: what restores the weight of a compound the
+ * scoping removed. `:is(#s3d-w, *)` weighs one id (an `:is()` weighs its heaviest argument) and,
+ * through `*`, matches anything.
+ */
+const weightOnly = (w: [number, number, number]): string =>
+  ":is(#s3d-w, *)".repeat(Math.max(0, w[0])) +
+  ":is(.s3d-w, *)".repeat(Math.max(0, w[1])) +
+  ":is(s3d-w, *)".repeat(Math.max(0, w[2]));
+
+/**
+ * Scope one selector to a report's wrapper. `html`/`body`/`:root` (and a top-level `:scope`, the
+ * same root) map onto the wrapper itself, since it stands in for the document once many share a
+ * page -- the whole leading chain of them (`html body p` is `<wrapper> p`), with any qualifier
+ * settled against the source's own tag ({@link settleQualifier}). Returns "" for a selector that
+ * can match nothing.
+ *
+ * WEIGHT: every scoped selector gains exactly the wrapper's one class, so rules keep their order of
+ * weight. A removed root compound used to take its own weight with it -- `body .x` became `.rs0 .x`,
+ * no heavier than a plain `.x` -- and cascade winners flipped: `body .x{display:none}` lost to a
+ * later `.x{display:block}`, and the hidden content printed (2026-11-07 review 5). Its weight is now
+ * put back by {@link weightOnly}. `weightless` is for a root reached through `:where()` or `*`,
+ * which weighed nothing in the source.
+ */
+function scopeSelector(
+  selector: string,
+  scope: string,
+  prefix: string,
+  roots?: RootTags,
+  weightless = false,
+): string {
   let s = selector.trim();
   if (!s) return "";
 
@@ -808,25 +917,33 @@ function scopeSelector(selector: string, scope: string, prefix: string, roots?: 
   // > .x` are their alternatives, each mapped as below; `* > .x` also matched <body>'s children,
   // which are the wrapper's. Kept as written, each needed a <body> or an element inside the wrapper,
   // so what the rule hid printed.
-  const fn = /^:(?:is|where)\(/i.exec(s);
+  const fn = /^:(is|where)\(/i.exec(s);
   if (fn) {
     const close = closeOf(s, fn[0].length - 1);
     const items =
       close < 0 ? [] : splitSelectorList(s.slice(fn[0].length, close - 1)).map((t) => t.trim());
-    if (items.length > 0 && items.every((t) => /^(?:html|body|:root)$/i.test(t))) {
+    if (items.length > 0 && items.every((t) => /^(?:html|body|:root|:scope)$/i.test(t))) {
       const after = s.slice(close);
-      return [...new Set(items.map((t) => scopeSelector(t + after, scope, prefix, roots)))]
+      // `:is()` weighs its argument (a root's own weight); `:where()` weighs nothing.
+      const light = weightless || fn[1].toLowerCase() === "where";
+      return [...new Set(items.map((t) => scopeSelector(t + after, scope, prefix, roots, light)))]
         .filter(Boolean)
         .join(", ");
     }
   }
   const star = /^\*(?:\|\*)?(\s*>\s*|\s+)(?=\S)/.exec(s);
   if (star) {
-    const asBody = scopeSelector(`body${star[1]}${s.slice(star[0].length)}`, scope, prefix, roots);
+    const asBody = scopeSelector(
+      `body${star[1]}${s.slice(star[0].length)}`,
+      scope,
+      prefix,
+      roots,
+      true,
+    );
     const asAny = `${scope} ${namespaceIds(s, prefix)}`;
     return asBody ? `${asAny}, ${asBody}` : asAny;
   }
-  if (/[(,]\s*(?:html|body|:root)(?![\w-])/i.test(s)) {
+  if (/[(,]\s*(?:html|body|:root|:scope)(?![\w-])/i.test(s)) {
     bakeWarnings.add(
       `CSS "${selector}" names the page root inside a selector function; it was scoped as written`,
     );
@@ -836,8 +953,11 @@ function scopeSelector(selector: string, scope: string, prefix: string, roots?: 
   let combinator = " ";
   let rooted = false;
   let lastRole: RootRole | null = null;
+  const whole = s;
   for (;;) {
-    const m = /^(html|body|:root)(?![\w-])/i.exec(s);
+    // A top-level `:scope` is the document's root, as `:root` is (review 5: `:scope .hide` was
+    // scoped to `.rs0 :scope .hide`, which matched nothing).
+    const m = /^(html|body|:root|:scope)(?![\w-])/i.exec(s);
     if (!m) break;
     rooted = true;
     const role: RootRole = m[1].toLowerCase() === "body" ? "body" : "html";
@@ -862,7 +982,13 @@ function scopeSelector(selector: string, scope: string, prefix: string, roots?: 
 
   const rest = namespaceIds(s, prefix);
   if (!rooted) return `${scope} ${rest}`;
-  const root = `${scope}${namespaceIds(qualifier, prefix)}`;
+  // The weight the removed root compounds carried, less what their kept qualifier still carries.
+  const consumed = specificity(whole.slice(0, whole.length - s.length));
+  const kept = specificity(qualifier);
+  const filler = weightless
+    ? ""
+    : weightOnly([consumed[0] - kept[0], consumed[1] - kept[1], consumed[2] - kept[2]]);
+  const root = `${scope}${namespaceIds(qualifier, prefix)}${filler}`;
   return rest ? `${root}${combinator}${rest}` : root;
 }
 
@@ -1300,7 +1426,8 @@ function hoistPlan(svg: string): { ok: boolean; rules: [string, string, string[]
  * `<svg>`, so diagram 1's `.lbl{display:none}` no longer hid diagram 2's labels (2026-11-07).
  */
 function svgSheetsToMove(src: string): Set<string> {
-  const page = stripUndrawn(src);
+  // Keyed by the diagram's text with inert content blanked ({@link blankInert}), as both callers read it.
+  const page = blankInert(stripUndrawn(src));
   const svgs = outerSvgs(page);
   const outside = (i: number) => `${page.slice(0, svgs[i].start)} ${page.slice(svgs[i].end)}`;
   // The report's own sheets outside every <svg>, comments gone: the rules a hoist competes with.
@@ -1338,6 +1465,13 @@ function svgSheetsToMove(src: string): Set<string> {
       move.add(i);
       return;
     }
+    // Inside <foreignObject> the elements are HTML, where a presentation attribute does nothing:
+    // hoisted, `span{display:none}` stopped hiding its span (2026-11-07 review 5).
+    if (/<foreignObject(?![^\s/>])/i.test(page.slice(svgs[i].start, svgs[i].end))) {
+      svgStyleWarnings.add("a diagram holding <foreignObject>");
+      move.add(i);
+      return;
+    }
     const rest = outside(i);
     for (const [element] of plan.rules) {
       if (startTagRe(element, "i").test(rest)) {
@@ -1371,8 +1505,7 @@ function svgSheetsToMove(src: string): Set<string> {
 
 /**
  * A rule of `css` that could match `element` and sets one of `props` with no more weight than a
- * bare type selector -- built only of `*`, at most one type selector and combinators, `:where()`
- * weighing nothing -- or null. Such a rule lost to the diagram's sheet in the source and would beat
+ * bare type selector -- by {@link specificity}: no id, no class, at most one type -- or null. Such a rule lost to the diagram's sheet in the source and would beat
  * the same declaration as a presentation attribute.
  */
 function competingRule(css: string, element: string, props: string[]): string | null {
@@ -1386,14 +1519,22 @@ function competingRule(css: string, element: string, props: string[]): string | 
     for (const selector of splitSelectorList(m[1].replace(/^[\s\S]*;/, ""))) {
       const s = selector.trim();
       if (!s || s.startsWith("@")) continue;
-      const parts = s
-        .replace(/:where\((?:[^()]|\([^()]*\))*\)/gi, "")
-        .split(/[\s>+~]+/)
-        .filter(Boolean);
-      if (parts.some((p) => /[.#[:]/.test(p))) continue; // a class, id, attribute or pseudo: more weight
-      if (parts.filter((p) => p !== "*" && p !== "*|*").length > 1) continue; // two types: more
-      const last = (parts.at(-1) ?? "*").replace(/^\*\|/, "").toLowerCase();
-      if (last === "*" || last === element.toLowerCase()) return s;
+      // Weighed as the cascade weighs it ({@link specificity}): more than one type is heavier.
+      // Any `:` used to count as heavier, so `:is(text)` / `:not(rect)` -- one type's weight --
+      // were skipped, and a hoisted `display:none` lost to them (2026-11-07 review 5).
+      const [ids, classes, types] = specificity(s);
+      if (ids > 0 || classes > 0 || types > 1) continue;
+      // The subject's own type, read at the top level: another element's name cannot match. One
+      // written inside a function (`:is(text)`, `:not(rect)`) is taken as a rival -- moving a
+      // sheet that could have been hoisted is the safe side.
+      let from = 0;
+      for (let k = 0, depth = 0; k < s.length; k++) {
+        if (s[k] === "(" || s[k] === "[") depth++;
+        else if (s[k] === ")" || s[k] === "]") depth--;
+        else if (depth === 0 && /[\s>+~]/.test(s[k])) from = k + 1;
+      }
+      const type = /^(?:(?:[\w-]+|\*)\|)?([A-Za-z][\w-]*)/.exec(s.slice(from))?.[1]?.toLowerCase();
+      if (type === undefined || type === element.toLowerCase()) return s;
     }
   }
   return null;
@@ -1401,6 +1542,38 @@ function competingRule(css: string, element: string, props: string[]): string | 
 
 /** `<style ...>` blocks, capturing the attributes and the sheet. */
 const STYLE_BLOCK = new RegExp(STYLE_ELEMENT, "gi");
+
+/** An element whose content is never markup a browser applies: a template's, or raw text. */
+const INERT_ELEMENT = new RegExp(
+  String.raw`(<(template|textarea|title|xmp|noembed|noframes)(?![^\s/>])${TAG_ATTRS}>)([\s\S]*?)(<\/\2\s*>)`,
+  "gi",
+);
+
+/**
+ * `html` with the content of every inert element ({@link INERT_ELEMENT}) blanked to spaces, the
+ * same length, so offsets still hold. A `<style>` inside `<template>`, `<textarea>` or `<title>`
+ * is no sheet -- it is inert, or text -- yet the bake applied it: a template's `p{display:none}`
+ * hid the report's values, and a textarea's lost its text (2026-11-07 review 5).
+ */
+function blankInert(html: string): string {
+  return html.replace(
+    INERT_ELEMENT,
+    (_m, open: string, _name: string, inner: string, close: string) =>
+      `${open}${" ".repeat(inner.length)}${close}`,
+  );
+}
+
+/** `text` with each match of `re` (global) OUTSIDE inert elements replaced by `fn`. */
+function outsideInert(text: string, re: RegExp, fn: () => string): string {
+  let out = "";
+  let at = 0;
+  for (const m of blankInert(text).matchAll(re)) {
+    const i = m.index ?? 0;
+    out += text.slice(at, i) + fn();
+    at = i + m[0].length;
+  }
+  return out + text.slice(at);
+}
 
 /**
  * The CSS an `<svg>`'s `<style>` holds, read as the parser reads it there. Inside an `<svg>` a
@@ -1412,13 +1585,29 @@ const STYLE_BLOCK = new RegExp(STYLE_ELEMENT, "gi");
  * where the sheet holds an element or an unclosed CDATA section (it swallows the page's rest).
  */
 function svgSheetText(sheet: string): string {
+  // The bake's own decoding, not the verifier's decodeEntities (design-decisions §9; review 5): the
+  // whole HTML table, case-sensitively (MathJax's, as for TeX), numeric references, and the legacy
+  // names a parser reads without ";" (`&gt` in a selector). An unknown name stays as written.
+  const decode = (s: string) =>
+    s.replace(
+      /&(?:#[xX]([0-9a-fA-F]+);?|#(\d+);?|([A-Za-z][A-Za-z0-9]*);|(amp|lt|gt|quot|nbsp)(?![A-Za-z0-9;]))/g,
+      (m, hex?: string, dec?: string, name?: string, legacy?: string) => {
+        if (legacy !== undefined) return MATHJAX_ENTITIES[legacy] ?? m;
+        if (name !== undefined)
+          return Object.hasOwn(MATHJAX_ENTITIES, name) ? MATHJAX_ENTITIES[name] : m;
+        const code = hex !== undefined ? parseInt(hex, 16) : Number(dec);
+        return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+          ? "�"
+          : String.fromCodePoint(code);
+      },
+    );
   let out = "";
   let at = 0;
   for (const m of sheet.matchAll(
     /<!\[CDATA\[([\s\S]*?)(\]\]>|$)|<!--(?:-?>|[\s\S]*?(?:--!?>|$))|<[a-zA-Z/!?]/g,
   )) {
     const i = m.index ?? 0;
-    out += decodeEntities(sheet.slice(at, i));
+    out += decode(sheet.slice(at, i));
     at = i + m[0].length;
     if (m[0].startsWith("<![CDATA[")) {
       if (m[2] !== "]]>")
@@ -1430,7 +1619,7 @@ function svgSheetText(sheet: string): string {
       );
     }
   }
-  out += decodeEntities(sheet.slice(at));
+  out += decode(sheet.slice(at));
   if (/<\/style/i.test(out)) throw new Error("a diagram's <style> writes </style> in its sheet");
   return out;
 }
@@ -1795,7 +1984,10 @@ function tex2html(latex: string, display: boolean): string {
           "\\unicode after an earlier report's \\unicode[…]: MathJax would draw it in that report's font",
         );
       }
-      if (/\\unicode\s*\[/.test(latex)) unicodeCache.setByThisReport = true;
+      // Any `\unicode` not followed by its `{…}` argument: `\unicode[…]`, and `\unicode` handed on
+      // to an alias (`\let\U\unicode`, `\def\U{\unicode}`), whose `\U[Courier]{x41}` set the
+      // cache unseen (2026-11-07 review 5).
+      if (/\\unicode(?![a-zA-Z])(?!\s*\{)/.test(latex)) unicodeCache.setByThisReport = true;
     }
     const html = adaptor.outerHTML(mjDoc.convert(latex.trim(), { display }));
     mathStats.converted++;
@@ -2026,14 +2218,16 @@ export function bakeBody(src: string, prefix: string): string {
   };
   let body = "";
   {
+    // Never a <style> inside an inert element: one inside a <textarea> is its TEXT, which was cut.
+    const move = (text: string) => outsideInert(text, STYLE_BLOCK, moved);
     let at = 0;
     for (const { start, end } of outerSvgs(body0)) {
       const svg = body0.slice(start, end);
-      body += body0.slice(at, start).replace(STYLE_BLOCK, moved);
-      body += moving.has(svg) ? svg.replace(STYLE_BLOCK, moved) : svg;
+      body += move(body0.slice(at, start));
+      body += moving.has(blankInert(svg)) ? move(svg) : svg;
       at = end;
     }
-    body += body0.slice(at).replace(STYLE_BLOCK, moved);
+    body += move(body0.slice(at));
   }
 
   // The spinner exists only to be hidden by the JS that we removed. It is the
@@ -2282,16 +2476,25 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   // <header> is not read as the head.
   // <head>'s start tag read quote-aware; its content runs to the first </head>. The whole page as
   // a browser draws it: a commented-out <style> in the head is no sheet either.
-  const page = stripUndrawn(src);
+  // Inert content blanked ({@link blankInert}): a <style> inside <template> or <textarea> is none.
+  const page = blankInert(stripUndrawn(src));
   const headOpen = startTagRe("head", "i").exec(page);
   const innerStart = headOpen ? headOpen.index + headOpen[0].length : -1;
   const headClose = headOpen ? /<\/head\s*>/i.exec(page.slice(innerStart)) : null;
   const headInner = headClose ? page.slice(innerStart, innerStart + headClose.index) : "";
-  const afterHead = headClose ? innerStart + headClose.index + headClose[0].length : 0;
+  const afterHead = headClose
+    ? innerStart + headClose.index + headClose[0].length
+    : headOpen
+      ? headOpen.index
+      : 0;
+  // What precedes <head> too (`<html><style>…</style><head>`, or straight after the doctype): the
+  // parser puts such a sheet in the head, and it applies. It was read by neither half of the bake,
+  // and nothing warned (2026-11-07 review 5).
+  const beforeHead = headOpen ? page.slice(0, headOpen.index) : "";
   // The head and the rest, in document order: sheets outside every <svg>, and the sheets of a
   // diagram whose rules cannot be hoisted ({@link svgSheetsToMove}), which apply to the whole page
   // in HTML. A diagram in the head is drawn ({@link drawnBeforeBody}) and read the same way.
-  const rest = `${headInner}\n${page.slice(afterHead)}`;
+  const rest = `${beforeHead}\n${headInner}\n${page.slice(afterHead)}`;
   const moving = svgSheetsToMove(src);
   // A diagram's sheet as SVG parses it ({@link svgSheetText}); the page's as HTML raw text.
   const restSheets: [string, boolean][] = [];
@@ -2346,8 +2549,13 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   // printed in the sealed PDF, and the presence-only verification could not notice (2026-11-06
   // review). A hidden rule no script reveals stays hidden.
   const revealed = revealedSelectors(src);
-  css = css.replace(/([^{}]*)\{([^{}]*)\}/g, (rule, selector: string, decls: string) => {
+  css = css.replace(/([^{}]*)\{([^{}]*)\}/g, (rule, prelude: string, decls: string) => {
     if (!/(?<![\w-])visibility\s*:\s*hidden/i.test(decls)) return rule;
+    // The selector only: statements before it (`@layer a, b;`) are not part of it -- read in, the
+    // gate never matched, and a gated report stayed hidden whole (2026-11-07 review 5; reachable
+    // since review 4 kept those statements).
+    const lead = prelude.slice(0, prelude.lastIndexOf(";") + 1);
+    const selector = prelude.slice(lead.length);
     const parts = selector
       .split(",")
       .map((s) => s.replace(/\s+/g, " ").trim())
@@ -2356,7 +2564,15 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
       bakeWarnings.add(`CSS "${selector.trim()}" hides content no script reveals; it stays hidden`);
       return rule;
     }
-    return `${selector}{${decls.replace(/(?<![\w-])visibility\s*:\s*hidden/gi, () => {
+    // An `!important` hide: the script's inline `style.visibility = 'visible'` cannot beat it, so
+    // in the source the page stayed hidden. Opened, it printed (review 5).
+    if (/(?<![\w-])visibility\s*:\s*hidden\s*!\s*important/i.test(decls)) {
+      bakeWarnings.add(
+        `CSS "${selector.trim()}" hides content with !important, which its script cannot reveal; it stays hidden`,
+      );
+      return rule;
+    }
+    return `${lead}${selector}{${decls.replace(/(?<![\w-])visibility\s*:\s*hidden/gi, () => {
       audit.visibilityNeutralised++;
       return "visibility: visible";
     })}}`;

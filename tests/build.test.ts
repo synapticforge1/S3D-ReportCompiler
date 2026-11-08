@@ -2741,6 +2741,145 @@ test("review 4, group E: the browser example, driven in Chrome", { timeout: TIME
   }
 });
 
+/**
+ * Each expression baked as its own report, in order, in a FRESH process: MathJax's `\unicode` font
+ * cache lives as long as the process, so a check in this one would count other tests' reports.
+ * Returns how many failed to typeset after each report (cumulative).
+ */
+function unicodeFailures(expressions: string[]): number[] {
+  const script = join(work, "unicode-reports.mjs");
+  writeFileSync(
+    script,
+    `const core = await import(${JSON.stringify(pathToFileURL(join(ROOT, "src", "report_core.ts")).href)});\n` +
+      `const cfg = "<script>MathJax={tex2jax:{inlineMath:[['[mathin]','[mathin]']]}}</" + "script>";\n` +
+      `const out = [];\n` +
+      `for (const [i, tex] of ${JSON.stringify(expressions)}.entries()) {\n` +
+      "  core.bakeBody('<html><head>' + cfg + '</head><body><p>[mathin]' + tex + '[mathin]</p></body></html>', 'r' + i + '-');\n" +
+      `  out.push(core.mathStats.failed);\n}\nconsole.log(JSON.stringify(out));\n`,
+  );
+  const r = run([script]);
+  assert.equal(r.code, 0, r.out);
+  return JSON.parse(r.out.trim().split("\n").at(-1) ?? "[]");
+}
+
+test("review 5, group A: the cascade the source had, kept", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  const cfg = `<script>MathJax={tex2jax:{inlineMath:[['[mathin]','[mathin]']]}}</script>`;
+  const doc = (body: string, head = "", bodyTag = "<body>") =>
+    `<html><head>${cfg}${head}</head>${bodyTag}${body}</body></html>`;
+  const both = (src: string) => {
+    core.resetBakeState();
+    return {
+      body: flat(core.bakeBody(src, "r0-")),
+      style: flat(core.bakeStyle(src, ".rs0", "r0-")),
+    };
+  };
+
+  // 1. A root compound mapped onto the wrapper keeps its weight: `body .x` outweighs a later
+  //    `.x`, as in the source (it became `.rs0 .x`, equal, and the later rule won). `:where()` and
+  //    `*` weighed nothing, and still do.
+  const sel = (css: string) => flat(core.scopeCss(css, ".rs0", "r0-"));
+  assert.equal(sel("body .x{a:1}"), ".rs0:is(s3d-w, *) .x {a:1}");
+  assert.equal(sel(":root .x{a:1}"), ".rs0:is(.s3d-w, *) .x {a:1}");
+  assert.equal(sel(":where(body) .x{a:1}"), ".rs0 .x {a:1}");
+  assert.equal(sel("* > .x{a:1}"), ".rs0 * > .x, .rs0 > .x {a:1}");
+  const main = both(
+    doc(`<p class="x">t</p>`, "<style>body#main .x{display:none}</style>", `<body id="main">`),
+  );
+  assert.match(
+    main.style,
+    /\.rs0:is\(#s3d-w, \*\):is\(s3d-w, \*\) \.x \{display:none\}/,
+    "body#main lost its id",
+  );
+
+  // 2. A rival weighing one type through `:is()` / `:not()` competes with a hoist.
+  for (const rival of [":is(text)", ":not(rect)"]) {
+    const r = both(
+      doc(
+        `<svg><style>text{display:none}</style><text>SECRET 66.6</text></svg>`,
+        `<style>${rival}{display:inline}</style>`,
+      ),
+    );
+    assert.doesNotMatch(r.body, /display="none"/, `hoisted under ${rival}`);
+    assert.match(r.style, /\.rs0 text \{display:none\}/);
+  }
+
+  // 3. A diagram holding <foreignObject> is not hoisted: its HTML takes no presentation attribute.
+  const fo = both(
+    doc(
+      `<svg><style>span{display:none}</style><foreignObject><span>HIDDEN 21.5</span></foreignObject></svg>`,
+    ),
+  );
+  assert.doesNotMatch(fo.body, /<span display=/, "hoisted onto HTML in <foreignObject>");
+  assert.match(fo.style, /\.rs0 span \{display:none\}/);
+
+  // 4. A sheet before the <head> tag applies, as the parser puts it in the head.
+  core.resetBakeState();
+  const early = flat(
+    core.bakeStyle(
+      `<html><style>.x{display:none}</style><head>${cfg}</head><body><p class="x">t</p></body></html>`,
+      ".rs0",
+      "r0-",
+    ),
+  );
+  assert.match(early, /\.rs0 \.x \{display:none\}/, "a sheet before <head> was dropped");
+
+  // 5. A top-level `:scope` is the root.
+  assert.equal(sel(":scope .hide{display:none}"), ".rs0:is(.s3d-w, *) .hide {display:none}");
+
+  // 6. The reveal gate does not open an `!important` hide, which the script could not beat.
+  const gate = "<script>$('#report').css('visibility','visible')</script>";
+  core.resetBakeState();
+  const important = core.bakeStyle(
+    doc("", `<style>#report{visibility:hidden !important}</style>${gate}`),
+    ".rs0",
+    "r0-",
+  );
+  assert.match(important, /visibility:hidden !important/, "an !important hide was opened");
+
+  // 7. `\unicode` handed to an alias marks its font cache too: the next report's `\unicode` refused.
+  assert.deepEqual(
+    unicodeFailures(["\\let\\U\\unicode \\U[Courier]{x41}", "\\unicode{x41}"]),
+    [0, 1],
+    "drawn in an aliased \\unicode's font",
+  );
+
+  // 8. An `@layer` statement before the gated rule leaves the gate able to open.
+  core.resetBakeState();
+  const layered = core.bakeStyle(
+    doc("", `<style>@layer base, comp; #report{visibility:hidden}</style>${gate}`),
+    ".rs0",
+    "r0-",
+  );
+  assert.match(layered, /visibility: visible/, "an @layer statement kept the gate shut");
+
+  // 9. A <style> inside <template> or <textarea> is no sheet; the textarea keeps its text.
+  const inert = both(
+    doc(
+      `<template><style>p{display:none}</style></template><textarea><style>.k{a:1}</style></textarea><p>Value 12.5</p>`,
+    ),
+  );
+  assert.doesNotMatch(inert.style, /display:none|\.k/, "an inert <style> was applied");
+  assert.match(
+    inert.body,
+    /<textarea><style>\.k\{a:1\}<\/style><\/textarea>/,
+    "the textarea lost its text",
+  );
+
+  // 10. A diagram's sheet decodes as the parser does, legacy `&gt` (no ";") and `&NewLine;` included.
+  const decoded = both(
+    doc(
+      `<svg><style>.p &gt .lbl{display:none}&NewLine;</style><g class="p"><text class="lbl">HIDDEN 31.4</text></g></svg>`,
+    ),
+  );
+  assert.match(
+    decoded.style,
+    /\.rs0 \.p > \.lbl \{display:none\}/,
+    "a legacy entity left undecoded",
+  );
+});
+
 test("review 4, groups A and B: the next template's constructs bake as a browser draws them", async () => {
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
   const flat = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -2814,13 +2953,13 @@ test("review 4, groups A and B: the next template's constructs bake as a browser
     core.bakeBody(doc(`<p>[mathin]${earlier} y[mathin]</p>`), "r0-");
     assert.equal(core.bakeBody(later, "r1-"), alone, `${earlier} changed the next report`);
   }
-  //    `\unicode`'s cache cannot be reset: after an earlier report's `\unicode[…]`, refused.
-  core.resetBakeState();
-  core.bakeBody(doc("<p>[mathin]\\unicode{x42}[mathin]</p>"), "r0-");
-  assert.equal(core.mathStats.failed, 0, "a \\unicode with no earlier font was refused");
-  core.bakeBody(doc("<p>[mathin]\\unicode[arial]{x41}[mathin]</p>"), "r1-");
-  core.bakeBody(doc("<p>[mathin]\\unicode{x41}[mathin]</p>"), "r2-");
-  assert.equal(core.mathStats.failed, 1, "drawn in an earlier report's \\unicode font");
+  //    `\unicode`'s cache cannot be reset: after an earlier report's `\unicode[…]`, refused. In a
+  //    fresh process -- the cache lives as long as the process, so another test's would count.
+  assert.deepEqual(
+    unicodeFailures(["\\unicode{x42}", "\\unicode[arial]{x41}", "\\unicode{x41}"]),
+    [0, 0, 1],
+    "a first \\unicode refused, or one drawn in an earlier report's \\unicode font",
+  );
 
   // 4. Another diagram's MOVED sheet competes with a hoist, as it applies page-wide.
   const rivals = both(
@@ -2850,7 +2989,11 @@ test("review 4, groups A and B: the next template's constructs bake as a browser
   // 6. The page root inside :where()/:is(), or reached through `*`, maps onto the wrapper.
   const sel = (css: string) => flat(core.scopeCss(css, ".rs0", "r0-"));
   assert.equal(sel(":where(body) .draft{display:none}"), ".rs0 .draft {display:none}");
-  assert.equal(sel(":is(html, body) > .draft{display:none}"), ".rs0 > .draft {display:none}");
+  // (`:is()` weighs its argument, a type: kept since review 5.)
+  assert.equal(
+    sel(":is(html, body) > .draft{display:none}"),
+    ".rs0:is(s3d-w, *) > .draft {display:none}",
+  );
   assert.equal(sel("* > .draft{display:none}"), ".rs0 * > .draft, .rs0 > .draft {display:none}");
 
   // 7. An unclosed <svg> holding a sheet is refused, by name -- not an internal error.
