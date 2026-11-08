@@ -2372,7 +2372,8 @@ test("review 3, group A: nothing is added, hidden or carried between reports", a
   const words = (s: string) => [...core.extractSourceTokens([doc(s)]).words];
   assert.deepEqual(words("[mathin]\\begin{array}[t]{lcr} a \\end{array}[mathin]"), []);
   assert.deepEqual(words("[mathin]x \\label{eq:stress}[mathin] see \\eqref{eq:stress}"), ["see"]);
-  assert.deepEqual(words("[mathin]\\newcommand{\\Mn}[1]{Moment}\\Mn{1}[mathin]"), []);
+  //     A definition's name and argument count are not expected; its body is (review 4, B1).
+  assert.deepEqual(words("[mathin]\\newcommand{\\Mn}[1]{Moment}\\Mn{1}[mathin]"), ["moment"]);
 
   // 11. A "spinner" that draws an embedded image is content: kept by the bake, expected by the
   //     verification; the template's outside .gif spinner is still removed.
@@ -2385,6 +2386,173 @@ test("review 3, group A: nothing is added, hidden or carried between reports", a
   //     An id written inside another attribute is not the spinner's (the checker's half of #36).
   const title = doc(`<div title="see id=loading"><p>Kept 12.5</p></div>`);
   assert.ok(core.extractSourceTokens([title]).numbers.has("12.5"), "title= read as the id");
+});
+
+test("review 4: a report saved as .htm is refused by name, not left out", () => {
+  const dir = control("control-custom-delimiters", join(work, "htm"));
+  const report = readdirSync(dir).find((n) => n.endsWith(".html")) ?? "";
+  writeFileSync(join(dir, "member_9_report.htm"), readFileSync(join(dir, report)));
+  const r = run([MAIN, dir, join(work, "htm-out", "c.pdf")]);
+  assert.equal(r.code, 1, r.out);
+  has(r.out, /not a report name this tool reads/, /member_9_report\.htm/);
+  hasNot(r.out, /Compiling/);
+});
+
+test("review 4, groups A and B: the next template's constructs bake as a browser draws them", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  const cfg = `<script>MathJax={tex2jax:{inlineMath:[['[mathin]','[mathin]']]}}</script>`;
+  const doc = (body: string, head = "") =>
+    `<html><head>${cfg}${head}</head><body>${body}</body></html>`;
+  const both = (src: string) => {
+    core.resetBakeState();
+    return {
+      body: flat(core.bakeBody(src, "r0-")),
+      style: flat(core.bakeStyle(src, ".rs0", "r0-")),
+    };
+  };
+
+  // 1. A diagram's sheet read as SVG parses it: CDATA is a wrapper, <!-- --> a comment, markup refused.
+  const cdata = both(
+    doc(
+      `<svg><style><![CDATA[ .lbl{display:none} ]]></style><text class="lbl">HIDDEN 2468</text></svg>`,
+    ),
+  );
+  assert.match(cdata.style, /\.rs0 \.lbl \{display:none\}/, "a CDATA-wrapped rule was lost");
+  assert.doesNotMatch(cdata.style, /CDATA/);
+  const commented = both(
+    doc(`<svg><style><!-- text{display:none} --></style><text>Shown 1357</text></svg>`),
+  );
+  assert.doesNotMatch(
+    commented.body + commented.style,
+    /display(?:="|\s*:\s*)none/,
+    "a commented rule came alive",
+  );
+  assert.throws(
+    () => both(doc(`<svg><style>.a{fill:red}<b>x</b></style><text class="a">t</text></svg>`)),
+    /holds markup/,
+  );
+
+  // 2. Cascade layers: the statement form kept, every name the report's own.
+  const layered = both(
+    doc(
+      `<p class="n">DRAFT 888</p>`,
+      "<style>@layer show, hide; @layer hide{.n{display:none}} @layer show{.n{display:block}}</style>",
+    ),
+  );
+  assert.match(
+    layered.style,
+    /^@layer r0-show, r0-hide; @layer r0-hide \{ \.rs0 \.n \{display:none\} \} @layer r0-show \{/,
+    "the layer order was lost, or a name left page-wide",
+  );
+  //    ...and a page-wide name two reports define differently is named.
+  core.resetBakeState();
+  core.bakeStyle(
+    doc("", "<style>@font-face{font-family:X;src:url(a.woff)}</style>"),
+    ".rs0",
+    "r0-",
+  );
+  core.bakeStyle(
+    doc("", "<style>@font-face{font-family:'X';src:url(b.woff)}</style>"),
+    ".rs1",
+    "r1-",
+  );
+  assert.ok(
+    [...core.bakeWarnings].some((w: string) => /two reports define @font-face x/.test(w)),
+    "a clashing @font-face family went unnamed",
+  );
+
+  // 3. mathtools' definitions and settings do not reach the next report.
+  const later = doc("<p>[mathin]\\phi M_n = 12.5, a := b[mathin]</p>");
+  for (const earlier of ["\\DeclarePairedDelimiter\\phi{(}{)}", "\\mathtoolsset{centercolon}"]) {
+    core.resetBakeState();
+    const alone: string = core.bakeBody(later, "r1-");
+    core.resetBakeState();
+    core.bakeBody(doc(`<p>[mathin]${earlier} y[mathin]</p>`), "r0-");
+    assert.equal(core.bakeBody(later, "r1-"), alone, `${earlier} changed the next report`);
+  }
+  //    `\unicode`'s cache cannot be reset: after an earlier report's `\unicode[…]`, refused.
+  core.resetBakeState();
+  core.bakeBody(doc("<p>[mathin]\\unicode{x42}[mathin]</p>"), "r0-");
+  assert.equal(core.mathStats.failed, 0, "a \\unicode with no earlier font was refused");
+  core.bakeBody(doc("<p>[mathin]\\unicode[arial]{x41}[mathin]</p>"), "r1-");
+  core.bakeBody(doc("<p>[mathin]\\unicode{x41}[mathin]</p>"), "r2-");
+  assert.equal(core.mathStats.failed, 1, "drawn in an earlier report's \\unicode font");
+
+  // 4. Another diagram's MOVED sheet competes with a hoist, as it applies page-wide.
+  const rivals = both(
+    doc(
+      `<svg><style>.x{fill:red} text{display:inline}</style><rect class="x"/></svg>` +
+        `<svg><style>text{display:none}</style><text>SECRET 555</text></svg>`,
+    ),
+  );
+  assert.doesNotMatch(rivals.body, /display="none"/, "hoisted under a moved rival");
+  assert.match(rivals.style, /\.rs0 text \{display:inline\}.*\.rs0 text \{display:none\}/);
+
+  // 5. Content a report put inside <head> is drawn -- baked AND expected; a <title> is neither.
+  for (const src of [
+    `<html><head><title>Heading T</title><div>Note seventy 77 kN</div></head><body><p>x</p></body></html>`,
+    `<html><head><title>Heading T</title>Note seventy 77 kN<body><p>x</p></body></html>`,
+  ]) {
+    core.resetBakeState();
+    assert.match(core.bakeBody(src, "r0-"), /Note seventy 77 kN/, "head content was dropped");
+    const t = core.extractSourceTokens([src]);
+    assert.ok(t.numbers.has("77") && t.words.has("seventy"), "and not expected");
+    assert.ok(!t.words.has("heading"), "the <title> was expected");
+  }
+  const plain = `<html><head><meta charset="utf-8"><title>T</title><link rel="x"></head><body><p>x</p></body></html>`;
+  core.resetBakeState();
+  assert.equal(flat(core.bakeBody(plain, "r0-")), "<p>x</p>", "an ordinary head was drawn");
+
+  // 6. The page root inside :where()/:is(), or reached through `*`, maps onto the wrapper.
+  const sel = (css: string) => flat(core.scopeCss(css, ".rs0", "r0-"));
+  assert.equal(sel(":where(body) .draft{display:none}"), ".rs0 .draft {display:none}");
+  assert.equal(sel(":is(html, body) > .draft{display:none}"), ".rs0 > .draft {display:none}");
+  assert.equal(sel("* > .draft{display:none}"), ".rs0 * > .draft, .rs0 > .draft {display:none}");
+
+  // 7. An unclosed <svg> holding a sheet is refused, by name -- not an internal error.
+  assert.throws(
+    () => both(doc(`<svg><style>.a{fill:red}</style><text class="a">t</text>`)),
+    /never closed/,
+  );
+
+  // 8. (The folder build's `.htm` refusal is in the CLI test below.) A marked `.html` in a zip
+  //    is a report, not the tool's own PDF.
+  const marked = await core.readZipReports(
+    testZip([
+      { name: "member_1_report.html", data: new TextEncoder().encode(doc("<p>a</p>")), method: 0 },
+      {
+        name: "member_2_report.html",
+        data: new TextEncoder().encode(doc("<p>b</p>")),
+        method: 0,
+        comment: "added by s3d-reportcompiler (verified)",
+      },
+    ]),
+    "pack.pdf",
+  );
+  assert.equal(marked.reports.length, 2, "a marked report was taken for the old PDF");
+  assert.equal(marked.own, null);
+
+  // 9. The verifier expects what a definition prints at its uses, and no setting's argument.
+  const tokens = (s: string) => core.extractSourceTokens([doc(s)]);
+  const defined = tokens(
+    "[mathin]\\newcommand{\\Mn}{512.3\\,\\text{kip}}\\def\\Vn#1{77.9 #1}\\Mn[mathin]",
+  );
+  assert.ok(
+    defined.numbers.has("512.3") && defined.numbers.has("77.9"),
+    "a macro's value unchecked",
+  );
+  assert.ok(!defined.numbers.has("1"), "a #1 parameter was expected");
+  for (const s of [
+    "\\unicode[.8,0][arial]{x41}",
+    "\\newtagform{brackets}[\\textbf]{[}{]}\\usetagform{brackets}",
+    "\\Newextarrow{\\xr}{5,10}{0x21C0}",
+    "\\DeclarePairedDelimiter\\abs{\\lvert}{\\rvert}\\mathtoolsset{centercolon}",
+    "\\begin{multlined}[t][10cm] a \\end{multlined}",
+  ]) {
+    const t = tokens(`[mathin]${s}[mathin]`);
+    assert.deepEqual([...t.numbers, ...t.words], [], `${s}: a setting was expected`);
+  }
 });
 
 test(

@@ -781,6 +781,17 @@ if (zipPath !== null) {
     console.error(`\nEvery .html in the input folder is a report. Fix or move these, then re-run.`);
     rt.exit(1);
   }
+  // A report saved as `.htm` is still a report: left out, the package lacked it with PASS (12 of 13
+  // compiled), where the zip path refuses it (2026-11-07 review 4).
+  const htm = (await rt.listNames(htmlDir)).filter((n) => /\.(?:htm|xhtml)$/i.test(n));
+  if (htm.length > 0) {
+    console.error(`Not compiled, and not a report name this tool reads (.html):`);
+    for (const n of htm) console.error(`  ${rt.joinPath(htmlDir, n)}`);
+    console.error(
+      `\nRename each report to .html, or move the file out of the folder, then re-run.`,
+    );
+    rt.exit(1);
+  }
 
   // Read once, here: every input is needed below to tell reports from previous
   // bakes, and again to compile. As bytes, decoded by decodeReport -- as the zip's entries are: a

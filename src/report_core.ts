@@ -410,6 +410,9 @@ export const seenOpeners: Set<string> = new Set();
  */
 export const bakeWarnings: Set<string> = new Set();
 
+/** Each page-wide name a report's sheet defined (`@font-face` family, `@keyframes`, …), for {@link bakeStyle}. */
+const globalDefinitions = new Map<string, { body: string; prefix: string }>();
+
 /**
  * Selectors from an inline SVG's `<style>` block that could not be hoisted onto
  * presentation attributes, so the block was left in place.
@@ -801,6 +804,34 @@ function scopeSelector(selector: string, scope: string, prefix: string, roots?: 
   let s = selector.trim();
   if (!s) return "";
 
+  // The page root written another way (2026-11-07 review 4): `:where(body) .x` / `:is(html, body)
+  // > .x` are their alternatives, each mapped as below; `* > .x` also matched <body>'s children,
+  // which are the wrapper's. Kept as written, each needed a <body> or an element inside the wrapper,
+  // so what the rule hid printed.
+  const fn = /^:(?:is|where)\(/i.exec(s);
+  if (fn) {
+    const close = closeOf(s, fn[0].length - 1);
+    const items =
+      close < 0 ? [] : splitSelectorList(s.slice(fn[0].length, close - 1)).map((t) => t.trim());
+    if (items.length > 0 && items.every((t) => /^(?:html|body|:root)$/i.test(t))) {
+      const after = s.slice(close);
+      return [...new Set(items.map((t) => scopeSelector(t + after, scope, prefix, roots)))]
+        .filter(Boolean)
+        .join(", ");
+    }
+  }
+  const star = /^\*(?:\|\*)?(\s*>\s*|\s+)(?=\S)/.exec(s);
+  if (star) {
+    const asBody = scopeSelector(`body${star[1]}${s.slice(star[0].length)}`, scope, prefix, roots);
+    const asAny = `${scope} ${namespaceIds(s, prefix)}`;
+    return asBody ? `${asAny}, ${asBody}` : asAny;
+  }
+  if (/[(,]\s*(?:html|body|:root)(?![\w-])/i.test(s)) {
+    bakeWarnings.add(
+      `CSS "${selector}" names the page root inside a selector function; it was scoped as written`,
+    );
+  }
+
   let qualifier = "";
   let combinator = " ";
   let rooted = false;
@@ -877,6 +908,7 @@ export function scopeCss(css: string, scope: string, prefix: string): string {
     css,
     (s) => scopeSelector(s, scope, prefix),
     (s) => namespaceIds(s, prefix),
+    (n) => `${prefix}${n}`,
   );
 }
 
@@ -1001,10 +1033,34 @@ function scopeRules(
   css: string,
   mapSelector: (selector: string) => string,
   idsOnly: (selector: string) => string,
+  layerName: (name: string) => string,
 ): string {
   const src = stripCssComments(css);
   const out: string[] = [];
   let i = 0;
+
+  // Cascade layers are named page-wide, and ordered by where a name first appears. So each
+  // report's names are its own (`r0-a`), and the statement form `@layer a, b;` -- no block, and
+  // dropped as a stray token, which flipped the order -- is kept, renamed. Unrenamed, one report's
+  // `@layer show, hide;` ordered the next report's layers, and content it hid printed (2026-11-07
+  // review 4).
+  const layers = (names: string) =>
+    names
+      .split(",")
+      .map((n) => n.trim())
+      .filter(Boolean)
+      .map(layerName)
+      .join(", ");
+  /** The statements before a rule (or after the last): `@layer` ones kept, anything else dropped. */
+  const statements = (text: string, counted: boolean) => {
+    let stray = false;
+    for (const part of text.split(";")) {
+      const m = /^\s*@layer\s+([^{}]+?)\s*$/i.exec(part);
+      if (m) out.push(`@layer ${layers(m[1])};`);
+      else if (counted || part.trim()) stray = true;
+    }
+    if (stray && counted) audit.strayTokensDropped++;
+  };
 
   const skipQuoted = (s: string, at: number): number => {
     const q = s[at];
@@ -1025,7 +1081,10 @@ function scopeRules(
         break;
       }
     }
-    if (open < 0) break;
+    if (open < 0) {
+      statements(src.slice(i), false);
+      break;
+    }
 
     let depth = 0;
     let close = src.length;
@@ -1046,13 +1105,14 @@ function scopeRules(
     // A stray ";" between rules is legal -- CSS error recovery discards it.
     // Left in place it would be glued onto the following selector, and a
     // browser drops a rule whose selector it cannot parse. That silently
-    // deletes styling, so anything up to the last semicolon is discarded here.
+    // deletes styling, so anything up to the last semicolon is discarded here
+    // ({@link statements} keeps an `@layer` statement among it).
     // Caveat: a selector carrying a semicolon inside an attribute value, as in
     // a[href="x;y"], would be truncated. No such selector exists in these
     // reports, and the alternative -- a full selector parser -- is not worth it.
     const lastSemicolon = prelude.lastIndexOf(";");
     if (lastSemicolon >= 0) {
-      audit.strayTokensDropped++;
+      statements(prelude.slice(0, lastSemicolon), true);
       prelude = prelude.slice(lastSemicolon + 1).trim();
     }
 
@@ -1063,8 +1123,12 @@ function scopeRules(
         .toLowerCase();
       // We define page geometry ourselves; a report's own @page would fight it.
       if (name === "page") continue;
-      if (NESTING_AT_RULES.has(name)) {
-        out.push(`${prelude} {\n${scopeRules(block, mapSelector, idsOnly)}\n}`);
+      if (name === "layer") {
+        const named = prelude.slice("@layer".length).trim();
+        const head = named ? `@layer ${layers(named)}` : "@layer";
+        out.push(`${head} {\n${scopeRules(block, mapSelector, idsOnly, layerName)}\n}`);
+      } else if (NESTING_AT_RULES.has(name)) {
+        out.push(`${prelude} {\n${scopeRules(block, mapSelector, idsOnly, layerName)}\n}`);
       } else if (name === "scope") {
         // `@scope (A) to (B)`: A is the root -- mapped like any selector (no prelude: the
         // document, i.e. the wrapper); B and the inner rules are relative to it, so only their
@@ -1081,7 +1145,7 @@ function scopeRules(
         if (roots.length === 0) continue; // the root matched nothing in the source
         const limit = pm[2] ? ` to (${splitSelectorList(pm[2]).map(idsOnly).join(", ")})` : "";
         out.push(
-          `@scope (${roots.join(", ")})${limit} {\n${scopeRules(block, idsOnly, idsOnly)}\n}`,
+          `@scope (${roots.join(", ")})${limit} {\n${scopeRules(block, idsOnly, idsOnly, layerName)}\n}`,
         );
       } else if (DECLARATION_AT_RULES.has(name)) {
         out.push(`${prelude} {${block}}`);
@@ -1154,23 +1218,23 @@ const selfClosing = (tag: string): boolean => /\/\s*>$/.test(tag) && !/=[^\s"'>]
  * and missed `</svg >`, so one diagram's sheet was hoisted onto the next (2026-11-07 review). An
  * unclosed `<svg>` runs to the end, as the parser keeps it open.
  */
-function outerSvgs(html: string): { start: number; end: number }[] {
-  const out: { start: number; end: number }[] = [];
+function outerSvgs(html: string): { start: number; end: number; closed: boolean }[] {
+  const out: { start: number; end: number; closed: boolean }[] = [];
   let depth = 0;
   let start = 0;
   for (const m of html.matchAll(SVG_TAG)) {
     const at = m.index ?? 0;
     if (m[1] !== undefined) {
       if (selfClosing(m[0])) {
-        if (depth === 0) out.push({ start: at, end: at + m[0].length });
+        if (depth === 0) out.push({ start: at, end: at + m[0].length, closed: true });
         continue;
       }
       if (depth++ === 0) start = at;
     } else if (depth > 0 && --depth === 0) {
-      out.push({ start, end: at + m[0].length });
+      out.push({ start, end: at + m[0].length, closed: true });
     }
   }
-  if (depth > 0) out.push({ start, end: html.length });
+  if (depth > 0) out.push({ start, end: html.length, closed: false });
   return out;
 }
 
@@ -1208,7 +1272,9 @@ function hoistPlan(svg: string): { ok: boolean; rules: [string, string, string[]
       continue;
     }
     ok =
-      hoistSvgRules(sheet, (selector, decls, props) => rules.push([selector, decls, props])) && ok;
+      hoistSvgRules(svgSheetText(sheet), (selector, decls, props) =>
+        rules.push([selector, decls, props]),
+      ) && ok;
   }
   return { ok, rules };
 }
@@ -1250,31 +1316,57 @@ function svgSheetsToMove(src: string): Set<string> {
     .map((m) => stripCssComments(m[2]))
     .join("\n");
 
-  const move = new Set<string>();
-  svgs.forEach(({ start, end }, i) => {
-    const svg = page.slice(start, end);
-    const plan = hoistPlan(svg);
+  // An unclosed <svg> runs to the end of whatever text it is found in, so bakeBody (the body) and
+  // bakeStyle (the page) would key it differently: its sheet was then neither moved nor hoisted, or
+  // both (2026-11-07 review 4). Refused while it holds a sheet; without one nothing depends on it.
+  const last = svgs.at(-1);
+  if (last && !last.closed && hoistPlan(page.slice(last.start)) !== null) {
+    throw new Error("a diagram's <svg> is never closed, and holds a <style> the bake must place");
+  }
+
+  const plans = svgs.map(({ start, end }) => hoistPlan(page.slice(start, end)));
+  const move = new Set<number>();
+  /** The CSS of a moved diagram's sheets, as it applies once moved: to the whole report. */
+  const sheetCss = (i: number) =>
+    [...page.slice(svgs[i].start, svgs[i].end).matchAll(STYLE_BLOCK)]
+      .filter((m) => styleBlockKind(m[1]) !== "ignored")
+      .map((m) => stripCssComments(svgSheetText(m[2])))
+      .join("\n");
+  plans.forEach((plan, i) => {
     if (plan === null) return;
     if (!plan.ok) {
-      move.add(svg);
+      move.add(i);
       return;
     }
     const rest = outside(i);
-    for (const [element, , props] of plan.rules) {
+    for (const [element] of plan.rules) {
       if (startTagRe(element, "i").test(rest)) {
         svgStyleWarnings.add(`${element} (also outside its diagram)`);
-        move.add(svg);
-        return;
-      }
-      const rival = competingRule(pageCss, element, props);
-      if (rival !== null) {
-        svgStyleWarnings.add(`${element} (competes with "${rival}")`);
-        move.add(svg);
+        move.add(i);
         return;
       }
     }
   });
-  return move;
+  // A moved sheet is a rival too: diagram B's moved `text{display:inline}` beat diagram A's
+  // hoisted `display="none"` attribute, where in the source A's later rule won (2026-11-07 review
+  // 4). Each move can make another, so repeated until none does.
+  for (let changed = true; changed;) {
+    changed = false;
+    plans.forEach((plan, i) => {
+      if (plan === null || move.has(i)) return;
+      const rivals = [pageCss, ...[...move].filter((j) => j !== i).map(sheetCss)].join("\n");
+      for (const [element, , props] of plan.rules) {
+        const rival = competingRule(rivals, element, props);
+        if (rival !== null) {
+          svgStyleWarnings.add(`${element} (competes with "${rival}")`);
+          move.add(i);
+          changed = true;
+          return;
+        }
+      }
+    });
+  }
+  return new Set([...move].map((i) => page.slice(svgs[i].start, svgs[i].end)));
 }
 
 /**
@@ -1309,6 +1401,39 @@ function competingRule(css: string, element: string, props: string[]): string | 
 
 /** `<style ...>` blocks, capturing the attributes and the sheet. */
 const STYLE_BLOCK = new RegExp(STYLE_ELEMENT, "gi");
+
+/**
+ * The CSS an `<svg>`'s `<style>` holds, read as the parser reads it there. Inside an `<svg>` a
+ * `<style>` is foreign content, not raw text: `<![CDATA[ … ]]>` is a text wrapper, `<!-- … -->` a
+ * real comment, and `&gt;` a character. Taken as an HTML sheet's text, a CDATA-wrapped
+ * `.lbl{display:none}` became the invalid rule `<![CDATA[ .lbl`, which the browser dropped, so the
+ * hidden label printed; a `<!-- text{display:none} -->` came alive and hid one the source shows
+ * (2026-11-07 review 4: since 54eb5b2 moves such sheets out of their `<svg>`). Refused, not guessed,
+ * where the sheet holds an element or an unclosed CDATA section (it swallows the page's rest).
+ */
+function svgSheetText(sheet: string): string {
+  let out = "";
+  let at = 0;
+  for (const m of sheet.matchAll(
+    /<!\[CDATA\[([\s\S]*?)(\]\]>|$)|<!--(?:-?>|[\s\S]*?(?:--!?>|$))|<[a-zA-Z/!?]/g,
+  )) {
+    const i = m.index ?? 0;
+    out += decodeEntities(sheet.slice(at, i));
+    at = i + m[0].length;
+    if (m[0].startsWith("<![CDATA[")) {
+      if (m[2] !== "]]>")
+        throw new Error("a diagram's <style> opens a CDATA section it never closes");
+      out += m[1];
+    } else if (!m[0].startsWith("<!--")) {
+      throw new Error(
+        "a diagram's <style> holds markup, which is not a stylesheet the bake can read",
+      );
+    }
+  }
+  out += decodeEntities(sheet.slice(at));
+  if (/<\/style/i.test(out)) throw new Error("a diagram's <style> writes </style> in its sheet");
+  return out;
+}
 
 /**
  * What a `<style>` block's attributes make of it, as a browser reads them:
@@ -1369,7 +1494,14 @@ function hoistSvgRules(
   let i = 0;
   while (i < src.length) {
     const open = src.indexOf("{", i);
-    if (open < 0) break;
+    if (open < 0) {
+      // A statement after the last rule (`@layer a, b;`) orders the page's layers: not an attribute.
+      if (src.slice(i).includes("@")) {
+        svgStyleWarnings.add(src.slice(i).trim());
+        allHoisted = false;
+      }
+      break;
+    }
     let depth = 0;
     let close = src.length;
     for (let k = open; k < src.length; k++) {
@@ -1379,11 +1511,15 @@ function hoistSvgRules(
         break;
       }
     }
-    // A stray ";" before a rule is discarded, as CSS error recovery does.
-    const prelude = src
-      .slice(i, open)
-      .replace(/^[\s\S]*;/, "")
-      .trim();
+    // A stray ";" before a rule is discarded, as CSS error recovery does -- but not a statement
+    // at-rule: `@layer a, b;` sets the order of the page's layers, which no attribute can carry.
+    const head = src.slice(i, open);
+    const dropped = head.slice(0, head.lastIndexOf(";") + 1);
+    if (dropped.includes("@")) {
+      svgStyleWarnings.add(dropped.trim());
+      allHoisted = false;
+    }
+    const prelude = head.replace(/^[\s\S]*;/, "").trim();
     const declarations = src.slice(open + 1, close);
     i = close + 1;
 
@@ -1533,8 +1669,33 @@ const texInput = new TeX({
 });
 const mjDoc = mathjax.document("", { InputJax: texInput, OutputJax: chtml });
 
-/** The maps MathJax's `newcommand` package adds definitions to (its `NEW_*` names). */
-const TEX_DEFINITION_MAPS = ["new-Command", "new-Environment", "new-Delimiter"];
+/**
+ * The maps MathJax adds a report's definitions to: `newcommand`'s (its `NEW_*` names), and
+ * mathtools' `\DeclarePairedDelimiter` map -- missed, report 0's `\DeclarePairedDelimiter\phi{(}{)}`
+ * printed report 1's `\phi M_n` as `(M)_n`, 0 failed (2026-11-07 review 4).
+ */
+const TEX_DEFINITION_MAPS = [
+  "new-Command",
+  "new-Environment",
+  "new-Delimiter",
+  "mathtools-paired-delims",
+];
+
+/** mathtools' settings as configured, before any report's `\mathtoolsset` changed them. */
+const MATHTOOLS_DEFAULTS: Record<string, unknown> = (() => {
+  const set = (texInput.parseOptions.options as { mathtools?: Record<string, unknown> }).mathtools;
+  if (set === undefined) throw new Error("MathJax keeps no mathtools settings to reset");
+  return { ...set };
+})();
+
+/**
+ * `\unicode`'s font and size cache is private to MathJax's module and never reset: a later
+ * `\unicode{x41}` takes the font an earlier `\unicode[…]{x41}` gave it. Within a report that is the
+ * page's own behaviour; across reports it is state no standalone page has (2026-11-07 review 4).
+ * So once a report has used `\unicode[…]`, a LATER report's `\unicode` is refused -- counted as
+ * failed -- rather than drawn in another report's font.
+ */
+const unicodeCache = { setByEarlierReport: false, setByThisReport: false };
 
 /**
  * Give the next report the TeX state it has standing alone: no label or equation number, and no
@@ -1563,6 +1724,16 @@ function resetTexDefinitions(): void {
   if (!(tags.mtFormats instanceof Map)) throw new Error("MathJax keeps no tag-form table to reset");
   tags.mtFormats.clear();
   tags.mtCurrent = null;
+  // `\mathtoolsset{…}` writes these for good (`centercolon` changed the next report's layout).
+  const mathtools = (options.options as { mathtools?: Record<string, unknown> }).mathtools;
+  if (mathtools === undefined) throw new Error("MathJax keeps no mathtools settings to reset");
+  for (const key of Object.keys(mathtools)) {
+    if (!Object.hasOwn(MATHTOOLS_DEFAULTS, key)) delete mathtools[key];
+  }
+  Object.assign(mathtools, MATHTOOLS_DEFAULTS);
+  // Not resettable ({@link unicodeCache}): remembered, so a later report's `\unicode` is refused.
+  if (unicodeCache.setByThisReport) unicodeCache.setByEarlierReport = true;
+  unicodeCache.setByThisReport = false;
 }
 
 /**
@@ -1606,6 +1777,7 @@ export function resetBakeState(): void {
   svgStyleWarnings.clear();
   cssWarnings.clear();
   bakeWarnings.clear();
+  globalDefinitions.clear();
   resetTexDefinitions();
 }
 
@@ -1617,6 +1789,14 @@ export function resetBakeState(): void {
  */
 function tex2html(latex: string, display: boolean): string {
   try {
+    if (/\\unicode(?![a-zA-Z])/.test(latex)) {
+      if (unicodeCache.setByEarlierReport) {
+        throw new Error(
+          "\\unicode after an earlier report's \\unicode[…]: MathJax would draw it in that report's font",
+        );
+      }
+      if (/\\unicode\s*\[/.test(latex)) unicodeCache.setByThisReport = true;
+    }
     const html = adaptor.outerHTML(mjDoc.convert(latex.trim(), { display }));
     mathStats.converted++;
     return html;
@@ -1969,12 +2149,35 @@ function browserBody(html: string, bodyOpen: RegExpExecArray): string {
   const inner = last?.index === undefined ? after : after.slice(0, last.index);
   const trailing =
     last?.index === undefined ? "" : after.slice(last.index).replace(/<\/(?:body|html)\s*>/gi, "");
-  const headClose = /<\/head\s*>/i.exec(html);
+  const leak = drawnBeforeBody(html, bodyOpen.index);
   const before =
-    headClose && headClose.index < bodyOpen.index
-      ? html.slice(headClose.index + headClose[0].length, bodyOpen.index)
-      : "";
-  return (before.trim() ? before : "") + inner + (trailing.trim() ? trailing : "");
+    leak < 0 ? "" : html.slice(leak, bodyOpen.index).replace(/<\/?head(?![^\s/>])[^>]*>/gi, "");
+  return before + inner + (trailing.trim() ? trailing : "");
+}
+
+/**
+ * Where, before the `<body>` tag at `bodyAt`, the parser starts the body: the first thing that is
+ * not whitespace, the doctype, the `<html>` / `<head>` tags or an element a head may hold. Anything
+ * else -- a `<div>` or bare text inside `<head>`, or between `</head>` and `<body>` -- opens the
+ * body there, so it is drawn, and so is all that follows it. -1 when nothing does. Only text after
+ * `</head>` was taken before, so a `<div>` in the head was missing from the bake AND the
+ * verification, and passed (2026-11-07 review 4).
+ */
+function drawnBeforeBody(html: string, bodyAt: number): number {
+  const headOnly = new RegExp(
+    String.raw`[ \t\n\f\r]+|<!doctype[^>]*>` +
+      String.raw`|<\/?(?:html|head|meta|link|base|basefont|bgsound)(?![^\s/>])${TAG_ATTRS}>` +
+      String.raw`|<(style|title|template)(?![^\s/>])${TAG_ATTRS}>[\s\S]*?<\/\1\s*>`,
+    "iy",
+  );
+  let at = 0;
+  while (at < bodyAt) {
+    headOnly.lastIndex = at;
+    const m = headOnly.exec(html);
+    if (!m || m.index + m[0].length > bodyAt) return at;
+    at += m[0].length;
+  }
+  return -1;
 }
 
 /**
@@ -2085,25 +2288,32 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
   const headClose = headOpen ? /<\/head\s*>/i.exec(page.slice(innerStart)) : null;
   const headInner = headClose ? page.slice(innerStart, innerStart + headClose.index) : "";
   const afterHead = headClose ? innerStart + headClose.index + headClose[0].length : 0;
-  const rest = page.slice(afterHead);
-  // The rest in document order: sheets outside every <svg>, and the sheets of a diagram whose
-  // rules cannot be hoisted ({@link svgSheetsToMove}), which apply to the whole page in HTML.
+  // The head and the rest, in document order: sheets outside every <svg>, and the sheets of a
+  // diagram whose rules cannot be hoisted ({@link svgSheetsToMove}), which apply to the whole page
+  // in HTML. A diagram in the head is drawn ({@link drawnBeforeBody}) and read the same way.
+  const rest = `${headInner}\n${page.slice(afterHead)}`;
   const moving = svgSheetsToMove(src);
-  const restSheets: string[] = [];
+  // A diagram's sheet as SVG parses it ({@link svgSheetText}); the page's as HTML raw text.
+  const restSheets: [string, boolean][] = [];
   {
     let at = 0;
     for (const { start, end } of outerSvgs(rest)) {
-      restSheets.push(rest.slice(at, start));
+      restSheets.push([rest.slice(at, start), false]);
       const svg = rest.slice(start, end);
-      if (moving.has(svg)) restSheets.push(svg);
+      if (moving.has(svg)) restSheets.push([svg, true]);
       at = end;
     }
-    restSheets.push(rest.slice(at));
+    restSheets.push([rest.slice(at), false]);
   }
   const blocks: [string, string][] = [
-    ...[...headInner.matchAll(STYLE_BLOCK)].map((m) => [m[1], m[2]] as [string, string]),
-    ...restSheets.flatMap((part) =>
-      [...part.matchAll(STYLE_BLOCK)].map((m) => [m[1], m[2]] as [string, string]),
+    ...restSheets.flatMap(([part, inSvg]) =>
+      [...part.matchAll(STYLE_BLOCK)].map(
+        (m) =>
+          [m[1], inSvg && styleBlockKind(m[1]) !== "ignored" ? svgSheetText(m[2]) : m[2]] as [
+            string,
+            string,
+          ],
+      ),
     ),
   ];
 
@@ -2163,7 +2373,28 @@ export function bakeStyle(src: string, scope: string, prefix: string): string {
     css,
     (s) => scopeSelector(s, scope, prefix, roots),
     (s) => namespaceIds(s, prefix),
+    (n) => `${prefix}${n}`,
   );
+
+  // The names these at-rules define are page-wide, not scoped: a later report's `@font-face` for a
+  // family an earlier one also defines draws BOTH reports' text in it. Renaming them means
+  // rewriting every use, so a clash is named instead (2026-11-07 review 4).
+  for (const m of css.matchAll(
+    /@((?:-[a-z]+-)?keyframes|font-face|counter-style|property|font-palette-values|position-try)\b([^{;]*)\{((?:[^{}]|\{[^{}]*\})*)\}/gi,
+  )) {
+    const kind = m[1].toLowerCase();
+    const name =
+      kind === "font-face"
+        ? (/font-family\s*:\s*([^;]+)/i.exec(m[3])?.[1] ?? "").replace(/["'\s]/g, "").toLowerCase()
+        : m[2].trim();
+    const key = `@${kind} ${name}`;
+    const body = m[3].replace(/\s+/g, "");
+    const seen = globalDefinitions.get(key);
+    if (seen === undefined) globalDefinitions.set(key, { body, prefix });
+    else if (seen.prefix !== prefix && seen.body !== body) {
+      bakeWarnings.add(`two reports define ${key} differently; the page applies one to both`);
+    }
+  }
 
   // height:100% is meaningless in paged media and makes some engines emit a
   // single viewport-tall page. The property `height` only: `line-height` / `max-height: 100%`
@@ -2447,21 +2678,32 @@ const NONPRINTING_TEX: Record<string, string> = {
   // "stress" in the PDF, a false failure (2026-11-07 review).
   ref: "{",
   eqref: "{",
-  // A definition prints nothing where it stands: the name, argument count, default and body.
-  newcommand: "*{[[{",
-  renewcommand: "*{[[{",
-  providecommand: "*{[[{",
-  newenvironment: "*{[[{{",
-  renewenvironment: "*{[[{{",
-  def: "{{",
-  gdef: "{{",
+  // A definition's name, argument count and default print nothing. Its BODY is what prints wherever
+  // the macro is used, so it is expected: dropped, `\newcommand{\Mn}{512.3}` left 512.3 unchecked at
+  // every use (2026-11-07 review 4). Its `#1` parameters are not text ({@link TEX_DEFINITIONS}). A
+  // macro defined and never used then fails loudly, the safe direction.
+  newcommand: "*{[[",
+  renewcommand: "*{[[",
+  providecommand: "*{[[",
+  newenvironment: "*{[[",
+  renewenvironment: "*{[[",
+  def: "{",
+  gdef: "{",
   let: "{{",
-  DeclareMathOperator: "*{{",
+  DeclareMathOperator: "*{",
+  // mathtools and the tag forms: names, delimiters, options (2026-11-07 review 4).
+  DeclarePairedDelimiter: "{{{",
+  DeclarePairedDelimiterX: "{[{{",
+  mathtoolsset: "{",
+  newtagform: "{[",
+  usetagform: "{",
+  Newextarrow: "{{{",
   require: "{",
   style: "{",
   class: "{",
   cssId: "{",
-  unicode: "[{",
+  // `\unicode[height,depth][font]{x41}`: both options are settings.
+  unicode: "[[{",
   href: "{",
   enclose: "{[",
   bbox: "[",
@@ -2473,9 +2715,45 @@ const TEX_DIMENSION_COMMANDS =
   /\\(?:kern|mkern|hskip|mskip|vskip|raise|lower|moveleft|moveright)\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|mm|cm|in|em|ex|mu|px|pc|bp|dd|cc|sp)/g;
 /** Environments whose first group after `\begin{…}` is a column or count spec. */
 const TEX_SPEC_ENVIRONMENTS = new Set(["array", "subarray", "tabular", "alignat", "alignedat"]);
+/** Environments that take up to two `[…]` options and no spec (`\begin{multlined}[t][10cm]`). */
+const TEX_OPTION_ENVIRONMENTS = new Set(["multlined", "aligned", "gathered"]);
+/**
+ * The definitions whose body is kept as text, and how many groups after the command it can span:
+ * their `#1` parameters are blanked within it, as the arguments stand there in print.
+ */
+const TEX_DEFINITIONS =
+  /\\(?:(?:re)?newcommand|providecommand|(?:re)?newenvironment|g?def|DeclareMathOperator|DeclarePairedDelimiterX)(?![a-zA-Z])/g;
+
+/**
+ * `text` with each definition's `#1` parameters blanked ({@link TEX_DEFINITIONS}) -- the same
+ * length, so nothing else moves. Through the end of the definition's last group: one for `\def`
+ * (`\def\x#1{…}`), three for an environment, four for `\DeclarePairedDelimiterX`, two for the rest
+ * (a token name overshoots by one group, which can only blank another `#1`).
+ */
+function blankTexParameters(text: string): string {
+  let out = text;
+  for (const m of text.matchAll(TEX_DEFINITIONS)) {
+    const want = /def$/.test(m[0]) ? 1 : /environment$/.test(m[0]) ? 3 : /X$/.test(m[0]) ? 4 : 2;
+    let groups = 0;
+    let depth = 0;
+    let k = (m.index ?? 0) + m[0].length;
+    for (; k < text.length && groups < want; k++) {
+      if (text[k] === "\\") k++;
+      else if (text[k] === "{") depth++;
+      else if (text[k] === "}" && depth > 0 && --depth === 0) groups++;
+    }
+    const from = m.index ?? 0;
+    out =
+      out.slice(0, from) +
+      out.slice(from, k).replace(/#+[1-9]/g, (p) => " ".repeat(p.length)) +
+      out.slice(k);
+  }
+  return out;
+}
 
 /** `text` with every non-printing TeX argument removed (see {@link NONPRINTING_TEX}). */
-function dropNonPrintingTex(text: string): string {
+function dropNonPrintingTex(source: string): string {
+  const text = blankTexParameters(source);
   // A group from `at` (a "{" or "["), braces nested; returns the index past its close -- or -1 if
   // it never closes, and then nothing is dropped: running to the end dropped the rest of the
   // report from the expected tokens (2026-11-06 review).
@@ -2539,6 +2817,14 @@ function dropNonPrintingTex(text: string): string {
         j = at < 0 ? j : skipSpace(at);
       }
       if (at >= 0 && text[j] === "{") at = group(j, "{", "}");
+      if (at < 0) unclosed = true;
+    } else if (!unclosed && TEX_OPTION_ENVIRONMENTS.has(environment.replace(/\*$/, ""))) {
+      // `\begin{multlined}[t][10cm]`: a position and a width, which never print.
+      for (let n = 0; n < 2 && at >= 0; n++) {
+        const j = skipSpace(at);
+        if (text[j] !== "[") break;
+        at = group(j, "[", "]");
+      }
       if (at < 0) unclosed = true;
     }
     if (unclosed) continue;
@@ -2650,6 +2936,42 @@ function withoutSpinner(html: string): string {
 }
 
 /**
+ * What a reader sees of `html` before its `<body>` tag at `bodyAt` (comments, scripts and sheets
+ * already blanked by {@link readerVisible}): everything from the first token a `<head>` cannot hold,
+ * or "" when there is none. Tokens are read one at a time, quote-aware; written apart from the
+ * bake's own reading (design-decisions §9).
+ */
+function bodyStartBefore(html: string, bodyAt: number): string {
+  const head = html.slice(0, bodyAt);
+  let i = 0;
+  while (i < head.length) {
+    const ch = head[i];
+    if (" \t\n\f\r".includes(ch)) {
+      i++;
+      continue;
+    }
+    if (ch !== "<") return head.slice(i);
+    if (/^<!doctype/i.test(head.slice(i, i + 9))) {
+      i = head.indexOf(">", i) + 1 || head.length;
+      continue;
+    }
+    const name = /^<\/?([a-zA-Z][a-zA-Z0-9-]*)/.exec(head.slice(i))?.[1]?.toLowerCase();
+    if (name === undefined) return head.slice(i);
+    const end = sourceTagEnd(head, i);
+    if (["html", "head", "meta", "link", "base", "basefont", "bgsound"].includes(name)) {
+      i = end;
+    } else if ((name === "title" || name === "template") && head[i + 1] !== "/") {
+      const close = head.toLowerCase().indexOf(`</${name}`, end);
+      if (close < 0) return "";
+      i = sourceTagEnd(head, close);
+    } else {
+      return head.slice(i);
+    }
+  }
+  return "";
+}
+
+/**
  * Derive the expected content from the **raw source reports**, independently of
  * anything the bake step did.
  *
@@ -2672,8 +2994,12 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
     // missing from both sides and nothing noticed (2026-11-06). Written apart from the bake's.
     const bodyAt = html.search(/<body(?=[\s/>])/i);
     if (bodyAt >= 0) {
-      const headEnd = html.search(/<\/head\s*>/i);
-      const before = headEnd >= 0 && headEnd < bodyAt ? html.slice(headEnd, bodyAt) : "";
+      // Before <body>: from the first thing a head cannot hold -- a <div> or text inside <head>
+      // opens the body there (2026-11-07 review 4). A <title> past that point is still not drawn.
+      const before = bodyStartBefore(html, bodyAt).replace(
+        /<title(?=[\s/>])(?:"[^"]*"|'[^']*'|[^"'>])*>[\s\S]*?<\/title\s*>/gi,
+        " ",
+      );
       const after = html.slice(sourceTagEnd(html, bodyAt)).replace(/<\/(?:body|html)\s*>/gi, " ");
       html = `${before} ${after}`;
     }
@@ -3279,6 +3605,10 @@ async function zipEntryBytes(r: ZipRecord): Promise<Uint8Array> {
  */
 const ZIP_OWN_MARK = "added by s3d-reportcompiler (verified)";
 
+/** The entry this tool added: a PDF carrying {@link ZIP_OWN_MARK}. An `.html` with it is a report. */
+const isOwnEntry = (r: ZipRecord): boolean =>
+  r.comment === ZIP_OWN_MARK && r.name.toLowerCase().endsWith(".pdf");
+
 /** The reports in a zip, and what else it held. */
 export type ZipReports = {
   /** Every `.html` entry, in the zip's order, decoded as UTF-8 exactly as the folder build reads a file. */
@@ -3318,7 +3648,8 @@ export async function readZipReports(zip: Uint8Array, ownName: string): Promise<
     seen.set(key, r.name);
     if (r.name.endsWith("/")) problems.push(`"${r.name}" is a folder`);
     else if (/[/\\]/.test(r.name)) problems.push(`"${r.name}" is inside a folder`);
-    else if (r.comment === ZIP_OWN_MARK) own = r.name;
+    // Only a PDF is this tool's: an `.html` carrying the mark is a report, and was dropped.
+    else if (isOwnEntry(r)) own = r.name;
     else if (key === ownName.toLowerCase()) {
       problems.push(
         `"${r.name}" is not a report, and not a PDF this tool added -- a build would replace it`,
@@ -3407,7 +3738,7 @@ export function zipWithFile(
   date: Date,
 ): Uint8Array {
   const { records, comment } = parseZip(zip);
-  const kept = records.filter((r) => r.comment !== ZIP_OWN_MARK);
+  const kept = records.filter((r) => !isOwnEntry(r));
   if (kept.some((r) => r.name.toLowerCase() === name.toLowerCase())) {
     throw new Error(`the zip already holds "${name}", which this tool did not add`);
   }
@@ -3522,7 +3853,7 @@ export async function checkZipUpdate(
   } catch (e) {
     return [(e as Error).message];
   }
-  const kept = before.records.filter((r) => r.comment !== ZIP_OWN_MARK);
+  const kept = before.records.filter((r) => !isOwnEntry(r));
   const same = (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((x, i) => x === b[i]);
   if (after.records.length !== kept.length + 1) {
