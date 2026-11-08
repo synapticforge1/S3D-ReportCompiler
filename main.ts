@@ -671,10 +671,15 @@ function pageText(items: unknown[]): string {
     if (prev !== null && it.str !== "") {
       const size = Math.max(h, prev.h);
       const dy = Math.abs(y - prev.y);
+      // Between two digits (or a digit and its point) a gap may be letter-spacing, up to 0.35 of
+      // the height: `letter-spacing: 0.25em` printed 77.531 as "7 7 . 5 3 1" (iteration 2). A
+      // number apart from another stands 4.3 heights from it or more (measured 2026-11-08 on the
+      // samples and the 48-report set).
+      const digits = /[\d.,]$/.test(out) && /^[\d.,]/.test(it.str);
       if (dy > size) out += "\n";
       else if (
         dy > 0.3 * size ||
-        x - (prev.x + prev.w) > 0.15 * size ||
+        x - (prev.x + prev.w) > (digits ? 0.35 : 0.15) * size ||
         // A change of size: a subscript set smaller, touching its base (`λ` then `rf`).
         Math.abs(h - prev.h) > 0.2 * size
       ) {
@@ -698,7 +703,9 @@ type PdfDetail = {
   imagesPerPage: number[];
   /** Pages with an image cut by the page break (drawn past the page's edge). */
   cutImagePages: Set<number>;
-  /** Pages with text drawn invisibly (rendering mode 3, or fill alpha 0). */
+  /** Pages with an image drawn but not seen: under 2 pt on a side, or mostly outside its clip. */
+  hiddenImagePages: Set<number>;
+  /** Pages with text drawn invisibly (rendering mode 3, or a tenth of full alpha or less). */
   invisibleTextPages: Set<number>;
   /** Pages with text drawn in white. */
   whiteTextPages: Set<number>;
@@ -716,6 +723,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
   const obs: PdfObservations & PdfDetail = {
     imagesPerPage: [],
     cutImagePages: new Set(),
+    hiddenImagePages: new Set(),
     invisibleTextPages: new Set(),
     whiteTextPages: new Set(),
     cutDiagramPages: [],
@@ -740,14 +748,44 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     // place each image on the page; the text rendering mode and fill alpha, to know text drawn
     // invisibly -- it is still in the text layer, so a value printed in mode 3 or at alpha 0
     // passed the word check unseen.
-    type Gs = { m: number[]; mode: number; alpha: number; white: boolean };
+    // Since iteration 2: the alpha of every enclosing transparency group, multiplied in (an
+    // element's `opacity` is a group, its text's own alpha set inside it); and the clipping box,
+    // to know an image `overflow: hidden` left mostly unseen.
+    type Box = [number, number, number, number];
+    type Gs = { m: number[]; mode: number; alpha: number; white: boolean; clip: Box | null };
     const stack: Gs[] = [];
-    let gs: Gs = { m: [1, 0, 0, 1, 0, 0], mode: 0, alpha: 1, white: false };
-    /** Whether a fill colour is white: pdf.js gives it as "#rrggbb", or as numbers. */
-    const isWhite = (args: unknown[]) =>
-      typeof args[0] === "string"
-        ? /^#f{6}$/i.test(args[0])
-        : args.length > 0 && args.every((v) => Number(v) >= 254 || Number(v) === 1);
+    const groupAlpha: number[] = [1];
+    let gs: Gs = { m: [1, 0, 0, 1, 0, 0], mode: 0, alpha: 1, white: false, clip: null };
+    let clipPending = false;
+    /**
+     * Whether a fill colour is white or so near it as to be unreadable on a white page: every
+     * channel at 0xF0 or above (pdf.js gives "#rrggbb", or numbers 0-255 or 0-1). The darkest
+     * text colour the real sets use is far below it; `#fefefe` passed the exact test.
+     */
+    const isWhite = (args: unknown[]) => {
+      if (typeof args[0] === "string") {
+        const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(args[0]);
+        return hex?.slice(1).every((c) => parseInt(c, 16) >= 0xf0) === true;
+      }
+      const v = args.map(Number);
+      return (
+        v.length > 0 &&
+        (v.every((c) => c >= 0xf0 && c <= 255) || v.every((c) => c >= 0.94 && c <= 1))
+      );
+    };
+    /** A box under the transform, in page space. */
+    const place = (b: Box, m: number[]): Box => {
+      const xs = [b[0], b[2]].flatMap((x) => [b[1], b[3]].map((y) => m[0] * x + m[2] * y + m[4]));
+      const ys = [b[0], b[2]].flatMap((x) => [b[1], b[3]].map((y) => m[1] * x + m[3] * y + m[5]));
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    };
+    const meet = (a: Box, b: Box): Box => [
+      Math.max(a[0], b[0]),
+      Math.max(a[1], b[1]),
+      Math.min(a[2], b[2]),
+      Math.min(a[3], b[3]),
+    ];
+    const area = (b: Box) => Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
     const mul = (a: number[], b: number[]) => [
       a[0] * b[0] + a[1] * b[2],
       a[0] * b[1] + a[1] * b[3],
@@ -777,9 +815,18 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         for (const [key, value] of (args[0] as [string, unknown][]) ?? []) {
           if (key === "ca") gs = { ...gs, alpha: Number(value) };
         }
+      } else if (fn === pdfjs.OPS.beginGroup) {
+        groupAlpha.push(groupAlpha[groupAlpha.length - 1] * gs.alpha);
+      } else if (fn === pdfjs.OPS.endGroup) {
+        if (groupAlpha.length > 1) groupAlpha.pop();
+      } else if (fn === pdfjs.OPS.clip || fn === pdfjs.OPS.eoClip) {
+        clipPending = true; // pdf.js gives the clip before the path it clips to
       } else if (SHOW_TEXT.has(fn)) {
-        if (gs.mode % 4 === 3 || gs.alpha === 0) obs.invisibleTextPages.add(p);
-        if (gs.white && gs.mode % 4 !== 3 && gs.alpha !== 0) obs.whiteTextPages.add(p);
+        // Faint is invisible: at a tenth of full alpha or less (text is drawn at 0.87).
+        const alpha = gs.alpha * groupAlpha[groupAlpha.length - 1];
+        const hidden = gs.mode % 4 === 3 || alpha <= 0.1;
+        if (hidden) obs.invisibleTextPages.add(p);
+        else if (gs.white) obs.whiteTextPages.add(p);
       } else if (fn === pdfjs.OPS.paintImageXObject) {
         obs.imagePaints++;
         imagesHere++;
@@ -787,19 +834,23 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         // The image is the unit square under the transform. One that runs past the page's edge
         // is cut by the page break: the whole image is drawn on each page and each shows part.
         // A count could not see it when a lost image elsewhere made the totals agree (class B).
-        const m = gs.m;
-        const xs = [m[4], m[0] + m[4], m[2] + m[4], m[0] + m[2] + m[4]];
-        const ys = [m[5], m[1] + m[5], m[3] + m[5], m[1] + m[3] + m[5]];
-        if (
-          Math.min(...ys) < -1 ||
-          Math.max(...ys) > pageH + 1 ||
-          Math.min(...xs) < -1 ||
-          Math.max(...xs) > pageW + 1
-        ) {
+        const box = place([0, 0, 1, 1], gs.m);
+        if (box[1] < -1 || box[3] > pageH + 1 || box[0] < -1 || box[2] > pageW + 1) {
           obs.cutImagePages.add(p);
+        }
+        // Drawn, but not seen: under 2 pt on a side, or less than half inside its clip.
+        const seen = gs.clip === null ? box : meet(box, gs.clip);
+        if (box[2] - box[0] < 2 || box[3] - box[1] < 2 || area(seen) < 0.5 * area(box)) {
+          obs.hiddenImagePages.add(p);
         }
       } else if (fn === pdfjs.OPS.constructPath) {
         drew = true;
+        const minMax = args[2] as ArrayLike<number> | null | undefined;
+        if (clipPending && minMax && minMax.length === 4) {
+          const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
+          gs = { ...gs, clip: gs.clip === null ? box : meet(gs.clip, box) };
+        }
+        clipPending = false;
       }
     });
     obs.imagesPerPage.push(imagesHere);
@@ -1646,6 +1697,11 @@ try {
     if (observed.cutImagePages.size > 0) {
       check.failures.push(
         `an image was cut by a page break on page(s) ${[...observed.cutImagePages].join(", ")}`,
+      );
+    }
+    if (observed.hiddenImagePages.size > 0) {
+      check.failures.push(
+        `an image drawn but not seen (under 2 pt, or mostly clipped) on page(s) ${[...observed.hiddenImagePages].join(", ")}`,
       );
     }
     if (observed.headingPages.length === entries.length) {

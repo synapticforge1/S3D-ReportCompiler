@@ -26,7 +26,7 @@ Run automatically as the last step; `--no-verify` skips it (**never on a release
 | **STRUCTURE** | every report contributed content, no page is blank |
 
 ```
-  checked:  216 words, 685 numbers from 48 source(s)
+  checked:  220 words, 685 numbers from 48 source(s)
   missing:  0 word(s), 0 number(s)
   per-report: 48/48 reports hold all their own words and numbers
   graphics: 48 image paint(s), 48 expected; 48 diagram(s) checked, intact
@@ -154,24 +154,39 @@ occurrence deleted. Now (1% and 0%, the 1% being an unsigned number after a minu
 - **The PDF text is read with its gaps** (`main.ts` `pageText`): pdf.js items that touch on one
   line are joined (kerned pieces, maths glyph by glyph); items apart by more than 0.15 of the text
   height, raised or dropped by more than 0.3 of it, or of another SIZE (a subscript) are separated
-  by a space.
+  by a space — between two digits, more than 0.35 of it (letter-spacing; separate numbers stand
+  4.3 heights apart or more in both PDFs).
 - **Tokens are matched WHOLE**: a number with no digit, point or separator joined to it; a word
   with no letter joined to it (one space may stand between its letters — maths draws `λ_{rf}`'s
   subscript as "r f").
 - **Number tokens keep** their sign (a "-" with nothing alphanumeric before it, so `M_{p}-0.7` is a
   binary minus), thousands separators, decimal part and exponent; `−` and the dashes read as "-".
+  A comma is a thousands separator only inside a whole integer of groups (`1,250`, `12,300.5`);
+  anywhere else it separates (`\max(96.982,50.675)` is two numbers — the first version read
+  neither). A bare number is not found right after a sign (`12.5` is not `-12.5`); a signed one may
+  print its minus spaced, as MathJax sets a binary minus (`M_{u} -0.537` → "- 0.537").
 - **Words are two letters or more, in any script; every non-ASCII character is a symbol** (`λ`,
-  `≤`, `²`, `°`), matched case and all (`Δ` is not `δ`); a command that prints a glyph expects it
-  (`\lambda` → λ, `\phi` → U+03D5 as MathJax writes it); a command name is blanked only where it is
-  a command, so prose "Max" is still checked beside a `\max`.
+  `≤`, `²`, `°`), matched case and all (`Δ` is not `δ`). A word of three letters or fewer keeps its
+  case — that is where the units are (`MN` is not `mN`) — and is found as written or in capitals (a
+  heading set upper-case by CSS). A command that prints a glyph expects it (`\lambda` → λ, `\phi` →
+  U+03D5 as MathJax writes it, `\circ` → ∘); an operator name expects its name (`\max` → "max");
+  any other command name is blanked only where it is a command, so prose "Max" is still checked
+  beside a `\max`. A phrasing tag joins what is either side of it (`<b>0</b>.95` is 0.95), and
+  zero-width characters are dropped.
 
 All three real sets pass under it (2026-11-08). What it adds on the PDF side (`main.ts`): an image
 cut by a page break, seen by where it is DRAWN (past the page's edge — a count let a lost image
 cancel a split one); each report's own image count; a diagram's title without its caption in
-reading order; text drawn invisibly (render mode 3 or fill alpha 0); text drawn in WHITE (none in
-the real sets — a template with white text on a band would fail here, the loud direction); TeX
-sub/superscript marks left in the printed text (`F_y`, `k_{2}`), whatever delimiter the bake missed.
-⚠️ Still NOT seen: text covered by an opaque box, and a diagram's drawing (only its labels are text).
+reading order; text drawn invisibly (render mode 3, or a tenth of full alpha or less, every
+enclosing group's alpha multiplied in — `opacity: 0.02` is a group); text drawn in WHITE or near it
+(every channel ≥ `0xF0`; none in the real sets — a template with white text on a band would fail
+here, the loud direction); an image drawn but not seen (under 2 pt on a side, or less than half
+inside its clipping box); TeX sub/superscript marks in their braced form left in the printed text
+(`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
+⚠️ Still NOT seen: text covered by an opaque box, or grey on grey; a diagram's drawing (only its
+labels are text) and an image's pixels; a one-letter unit (`12 m` → `12 N` — a single letter is in
+every report, so alone it proves nothing). A number broken across two lines fails (lines are never
+joined, else table rows would be) — the loud direction.
 
 Two extraction rules that were bugs first:
 

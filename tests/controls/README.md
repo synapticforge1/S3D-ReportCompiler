@@ -23,9 +23,9 @@ rather than the folder the control just built.
 | Script | Injects | Expected |
 |---|---|---|
 | `control-unknown-delimiter.ts` | `@@..@@` with the tex2jax config removed | guard refuses; `87 expressions, 0 failed` then `270 TeX command(s)` (250 before 2026-11-06, when the fallback lost its bare `$`), **no PDF**. The generator throws if either edit does not apply (since 2026-11-06; it used to print "config removed: false" and go on) |
-| `control-hidden-content.ts` | `#calculations { display: none }` in a **single** report | `214 words, 116 numbers missing` — every token of the hidden report (171 / 114 until 2026-11-08, when two-letter words, symbols and whole number tokens began to count; 172 / 119 earlier still), 1 blank page, exit 1 |
+| `control-hidden-content.ts` | `#calculations { display: none }` in a **single** report | `218 words, 116 numbers missing` — every token of the hidden report (171 / 114 until 2026-11-08, when two-letter words, symbols and whole number tokens began to count, 214 / 116 until short words kept their case the same day; 172 / 119 earlier still), 1 blank page, exit 1 |
 | `control-custom-delimiters-colliding.ts` | `{{..}}` — collides with LaTeX braces | guard refuses; truncated expressions leave LaTeX behind |
-| `control-hidden-row-two-reports.ts` | one table row hidden in the second of two identical reports | since 2026-10-28: per-report check `b_report.html: 5 word(s) … internal, forces, absolute, force, bending`, exit 1 — the set-wide check alone still reports 0 missing |
+| `control-hidden-row-two-reports.ts` | one table row hidden in the second of two identical reports | since 2026-10-28: per-report check `b_report.html: 6 word(s) … internal, forces, For, absolute, force, bending` (5, without "For", until 2026-11-08), exit 1 — the set-wide check alone still reports 0 missing |
 
 ⚠️ `control-hidden-content.ts` uses **one** report deliberately. Its two-report sibling PASSED when it
 should have failed until 2026-10-28 — conservation was only a set union; the per-report check closes

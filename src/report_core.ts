@@ -2887,6 +2887,8 @@ function normalizeText(text: string): string {
       // The multiplication dot: a report writes `·` (U+00B7) in its maths, MathJax prints `⋅`.
       .replace(/·/g, "⋅")
       .replace(/[ﬀ-ﬆ]/g, (c) => c.normalize("NFKC"))
+      // Characters that draw nothing: a zero-width space or joiner inside `12​.5` split it.
+      .replace(/[​-‍⁠﻿]/g, "")
   );
 }
 
@@ -2899,8 +2901,12 @@ function normalizeText(text: string): string {
  */
 export function textWords(text: string): Set<string> {
   const t = normalizeText(text);
-  // Words lower-cased; a symbol (below) keeps its case.
-  const words = (t.match(/\p{L}{2,}/gu) ?? []).map((w) => w.toLowerCase());
+  // Words lower-cased, but not a short one: three letters or fewer is where the units are, and
+  // case is their meaning (`MN` is not `mN`, `MPa` not `mPa`; class B, iteration 2). A symbol
+  // (below) keeps its case too.
+  const words = (t.match(/\p{L}{2,}/gu) ?? []).map((w) =>
+    [...w].length <= 3 ? w : w.toLowerCase(),
+  );
   // A symbol: anything but an ASCII character, a decimal digit, a space or an invisible format
   // character -- so `²` (category No, not a digit) is one, and so is every non-ASCII LETTER on its
   // own: a single `λ` is no two-letter word, but λ → φ changes the quantity.
@@ -2918,19 +2924,36 @@ export function textNumbers(text: string): Set<string> {
   return new Set(normalizeText(text).match(NUMBER_TOKEN) ?? []);
 }
 
-/** One number token ({@link textNumbers}). */
+/**
+ * One number token ({@link textNumbers}). A comma is a thousands separator only inside a whole
+ * integer of groups (`1,250`, `12,300.5`); anywhere else it separates (`max(12.5,300.2)`, `(1,2)`).
+ * The first version read every "digit," as the start of a group and dropped both arguments of the
+ * samples' own `\max(96.982,50.675)` (class B, iteration 2).
+ */
 const NUMBER_TOKEN =
-  /(?:(?<![\p{L}\p{N}\])}.,])-)?(?<![\d.]|\d,)(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?![\d]|\.\d|,\d{3}|[eE][-+]?\d)/gu;
+  /(?:(?<![\p{L}\p{N}\])}.,])-)?(?<![\d.])(?:(?:\d{1,3}(?:,\d{3})+(?!\d)|\d{4,}|\d{1,3}(?!,\d{3}(?!\d)))(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?!\d|\.\d|[eE][-+]?\d)/gu;
+
+/** A "-" read as a sign ({@link NUMBER_TOKEN}): nothing alphanumeric or closing before it. */
+const SIGN = String.raw`(?<![\p{L}\p{N}\])}.,])-`;
 
 /**
  * Where `token` (a {@link textNumbers} token) stands WHOLE in `text`: no digit, point or separator
  * joined to either side of it, so `0.9` is not found in `0.95`, `125` not in `1250`, `250` not in
- * `1,250`. A sign is part of a signed token; an unsigned one may follow a "-" (`5-3`).
+ * `1,250`, `12` not in `12,300`. An unsigned token is not found right after a SIGN (`12.5` is not
+ * `-12.5`), though it may follow a binary minus (`5-3`). A signed token may print its minus apart
+ * from its digits: MathJax spaces `M_{u} -0.537` as a binary minus, "- 0.537".
  */
 function hasNumber(text: string, token: string): boolean {
-  const body = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const before = token.startsWith("-") ? "" : String.raw`(?<![\d.]|\d,)`;
-  return new RegExp(`${before}${body}(?![\\d]|\\.\\d|,\\d{3}|[eE][-+]?\\d)`, "u").test(text);
+  const signed = token.startsWith("-");
+  const digits = (signed ? token.slice(1) : token).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let before = signed ? String.raw`-\s?` : `(?<!${SIGN})`;
+  before = `(?<![\\d.])${before}`;
+  // The tail of a thousands number: three digits after an integer group and a comma.
+  if (!signed && /^\d{3}(?!\d)/.test(token))
+    before = String.raw`(?<!(?<![\d.])\d{1,3}(?:,\d{3})*,)` + before;
+  // The head of one: an integer of one to three digits followed by ",ddd".
+  const after = /^-?\d{1,3}$/.test(token) ? String.raw`(?!,\d{3}(?!\d))` : "";
+  return new RegExp(`${before}${digits}${after}(?!\\d|\\.\\d|[eE][-+]?\\d)`, "u").test(text);
 }
 
 /**
@@ -2941,8 +2964,16 @@ function hasNumber(text: string, token: string): boolean {
 function hasWord(text: string, word: string, exact: string): boolean {
   // A symbol in the text as printed, case and all: `Δ` is not `δ`.
   if ([...word].length === 1 || !/\p{L}/u.test(word)) return exact.includes(word);
-  const body = [...word].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s?");
-  return new RegExp(`(?<!\\p{L})${body}(?!\\p{L})`, "u").test(text);
+  const pattern = (w: string) =>
+    new RegExp(
+      `(?<!\\p{L})${[...w].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s?")}(?!\\p{L})`,
+      "u",
+    );
+  // A short word kept its case ({@link textWords}): found as written, or in capitals (a heading
+  // a stylesheet sets in upper case), in the text as printed.
+  if ([...word].length <= 3)
+    return pattern(word).test(exact) || pattern(word.toUpperCase()).test(exact);
+  return pattern(word).test(text);
 }
 
 /**
@@ -3008,7 +3039,48 @@ const TEX_GLYPHS: Record<string, string> = {
   prod: "∏",
   int: "∫",
   partial: "∂",
+  // `^\circ` is how a TeX report writes a degree; MathJax prints the ring operator.
+  circ: "∘",
 };
+
+/**
+ * The commands that print their own NAME, upright (`\max(a,b)` shows "max"): blanked with the
+ * other commands, a renamed `\min` passed (class B, iteration 2).
+ */
+const TEX_OPERATOR_NAMES = new Set([
+  "arccos",
+  "arcsin",
+  "arctan",
+  "arg",
+  "cos",
+  "cosh",
+  "cot",
+  "coth",
+  "csc",
+  "deg",
+  "det",
+  "dim",
+  "exp",
+  "gcd",
+  "hom",
+  "inf",
+  "ker",
+  "lg",
+  "lim",
+  "liminf",
+  "limsup",
+  "ln",
+  "log",
+  "max",
+  "min",
+  "Pr",
+  "sec",
+  "sin",
+  "sinh",
+  "sup",
+  "tan",
+  "tanh",
+]);
 
 /** Everything the source reports contain that the finished PDF must still have. */
 export type SourceTokens = {
@@ -3023,6 +3095,10 @@ export type SourceTokens = {
  * reading (design-decisions §9).
  */
 const SOURCE_TAG = /<\/?[a-zA-Z](?:"[^"]*"|'[^']*'|[^"'>])*>/g;
+
+/** A phrasing element's tag, drawn in line with its neighbours ({@link extractSourceTokens}). */
+const INLINE_TAG =
+  /^<\/?(?:a|abbr|b|bdi|bdo|cite|code|data|del|dfn|em|font|i|ins|kbd|mark|q|s|samp|small|span|strike|strong|time|tt|u|var|wbr)(?=[\s/>])/i;
 
 /** Index just past the `>` that ends the tag starting at `at`, quoted runs skipped. */
 function sourceTagEnd(html: string, at: number): number {
@@ -3432,7 +3508,13 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
     // real numbers, making this check falsely lenient. Requiring a letter after
     // "<" keeps it to genuine tags; quotes are respected, so a ">" inside an attribute value
     // does not leave the rest of the tag behind as text.
-    const text = dropNonPrintingTex(decodeEntities(html.replace(SOURCE_TAG, " ")));
+    // A phrasing tag joins what is on either side, as a browser draws it: `<b>0</b>.95` is the
+    // number 0.95, `<b>Ax</b>ial` the word "Axial"; replaced by a space, each split into tokens
+    // the PDF does not hold (class B, iteration 2). Every other tag -- a cell, a line break, a
+    // `<sub>`/`<sup>`, which prints apart -- still separates.
+    const text = dropNonPrintingTex(
+      decodeEntities(html.replace(SOURCE_TAG, (tag) => (INLINE_TAG.test(tag) ? "" : " "))),
+    );
 
     // Command and delimiter names are notation, not content: a reader never sees "dfrac". They
     // are blanked WHERE THEY ARE COMMANDS -- `\\` first, so `\\color` is a line break and the word
@@ -3442,7 +3524,13 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
     const prose = text
       .replace(/\[(?:mathin|math)\]/gi, " ")
       .replace(/\\\\|\\([a-zA-Z]+)/g, (_m, name?: string) =>
-        name !== undefined && Object.hasOwn(TEX_GLYPHS, name) ? ` ${TEX_GLYPHS[name]} ` : " ",
+        name === undefined
+          ? " "
+          : Object.hasOwn(TEX_GLYPHS, name)
+            ? ` ${TEX_GLYPHS[name]} `
+            : TEX_OPERATOR_NAMES.has(name)
+              ? ` ${name} `
+              : " ",
       );
     // Numbers from the text as written: a sign needs nothing before it but a space or an operator,
     // so `M_{p}-0.7` keeps its BINARY minus (the `}` before it).
@@ -3515,9 +3603,12 @@ export function compareAgainstPdf(
   // `10^{-3}`): maths left as prose behind a delimiter the BAKE could not read (`inlineMath: D`, a
   // variable) carries no command and no delimiter this knows -- and the bake-side guard reads the
   // delimiters the bake read, so it missed it too (2026-11-08, class B; design-decisions §9).
+  // Only the BRACED marks: a bare `x_1` or `m^2` is also how prose writes one, and failed a
+  // correct report (iteration 2); maths left with bare marks only still has every character
+  // checked as a word or a number.
   const leftoverLatex =
     pdf.text.match(
-      /\\[a-zA-Z]{2,}|\[math\]|\[mathin\]|\\\(|\\\)|\\\[|\\\]|\$\$|[\p{L}\p{N})\]}][_^]\{|(?<![\p{L}\p{N}_])\p{L}[_^][\p{L}\p{N}](?![\p{L}\p{N}_])/gu,
+      /\\[a-zA-Z]{2,}|\[math\]|\[mathin\]|\\\(|\\\)|\\\[|\\\]|\$\$|[\p{L}\p{N})\]}][_^]\{/gu,
     ) ?? [];
   const splitDiagrams = pdf.diagramTitlePages.filter((p) => !pdf.diagramAxisPages.includes(p));
 

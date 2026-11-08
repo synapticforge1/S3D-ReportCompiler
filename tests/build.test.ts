@@ -158,9 +158,10 @@ test("hidden content in one report: set-wide conservation fails", { timeout: TIM
   );
   has(
     r.out,
-    // Every token of the report is missing (it is hidden whole): 214 / 116 since 2026-11-08,
-    // when words of two letters, symbols and whole number tokens are counted (class B; 171 / 114).
-    /missing:\s+214 word\(s\), 116 number\(s\)/,
+    // Every token of the report is missing (it is hidden whole): 218 / 116 since 2026-11-08,
+    // when words of two letters, symbols and whole number tokens are counted and a short word
+    // keeps its case (class B; 171 / 114, then 214 / 116).
+    /missing:\s+218 word\(s\), 116 number\(s\)/,
     /1 blank page\(s\)/,
     /VERIFICATION FAILED/,
     /- content missing from the PDF/,
@@ -181,7 +182,9 @@ test(
       // The set-wide check alone still passes this — the intact copy supplies the tokens.
       /missing:\s+0 word\(s\), 0 number\(s\)/,
       /per-report: 1 of 2 report\(s\) missing their own content/,
-      /b_report\.html: 5 word\(s\), 0 number\(s\) -- internal, forces, absolute, force, bending/,
+      // "For" since class B iteration 2: a short word keeps its case, and the row's capital one
+      // is in no other row.
+      /b_report\.html: 6 word\(s\), 0 number\(s\) -- internal, forces, For, absolute, force, bending/,
       /VERIFICATION FAILED/,
       /- content missing from its own report: b_report\.html/,
     );
@@ -3152,8 +3155,8 @@ test("class B: the verification checks values whole, not substrings", async () =
   assert.deepEqual(missing("[mathin]M_{p}-0.7[mathin]", "M p − 0.7"), []);
   // 3. Two-letter words, any script, and the glyph a TeX command prints.
   for (const [body, pdf, lost] of [
-    ["Check: OK", "Check: NG", "ok"],
-    ["load 12 kN", "load 12 mm", "kn"],
+    ["Check: OK", "Check: NG", "OK"],
+    ["load 12 kN", "load 12 mm", "kN"],
     ["[mathin]\\lambda_p = 3[mathin]", "φ p = 3", "λ"],
     ["x &le; 3", "x ≥ 3", "≤"],
   ]) {
@@ -3220,6 +3223,73 @@ test("class B: the verification checks values whole, not substrings", async () =
   );
 });
 
+test("class B, iteration 2: lists, signs, units, split tokens, printed names", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const heading = "MEMBER # 1 DESIGN REPORT";
+  const src = (body: string) => `<html><body><h2>${heading}</h2>${body}</body></html>`;
+  const missing = (body: string, pdf: string) => {
+    const r = core.compareEachReport([src(body)], [`${heading} ${pdf}`]).reports[0];
+    return [...r.missingWords, ...r.missingNumbers];
+  };
+  // The body's numbers, the heading's "1" left out.
+  const numbers = (body: string) =>
+    [...core.extractSourceTokens([`<html><body>${body}</body></html>`]).numbers].sort();
+
+  // 1. A comma after a decimal, or before fewer than three digits, separates: both arguments of
+  //    `\max(96.982,50.675)` are checked (they were dropped), and a changed one is missing.
+  assert.deepEqual(numbers("[mathin]\\max(96.982,50.675)[mathin]"), ["50.675", "96.982"]);
+  assert.deepEqual(numbers("<p>(1,2)</p>"), ["1", "2"]);
+  assert.deepEqual(numbers("<p>F = 1,250 and 12,300.5</p>"), ["1,250", "12,300.5"]);
+  assert.ok(
+    missing("<p>max(12.5,300.2)</p>", "max(12.5,300.9)").includes("300.2"),
+    "a list's value passed",
+  );
+  assert.ok(missing("<p>a 12 b</p>", "a 12,300 b").includes("12"), "12 passed inside 12,300");
+  assert.deepEqual(missing("<p>max(12.5,300.2) (1,2)</p>", "max(12.5,300.2) (1,2)"), []);
+  // 2. A bare number is not found after a sign; a binary minus may stand anywhere; a signed number
+  //    may print its minus spaced, as MathJax sets `M_{u} -0.537`.
+  assert.ok(missing("<p>M = 12.5</p>", "M = -12.5").includes("12.5"), "12.5 passed as -12.5");
+  assert.deepEqual(missing("<p>5-3</p>", "5-3"), []);
+  assert.deepEqual(missing("[mathin]M_{u} -0.537[mathin]", "M u - 0.537"), []);
+  // 3. A short word keeps its case (a unit's case is its meaning); capitals still find it.
+  assert.ok(missing("<p>12 MN</p>", "12 mN").includes("MN"), "MN passed as mN");
+  assert.ok(missing("<p>4 MPa</p>", "4 mPa").includes("MPa"), "MPa passed as mPa");
+  assert.deepEqual(missing("<h3>Load kN</h3>", "LOAD KN"), []);
+  // 4. Bare sub/superscript marks are prose too: not "unrendered LaTeX". Braced ones still are.
+  const residue = (text: string) =>
+    core
+      .compareAgainstPdf(
+        { words: new Set(), numbers: new Set(), expectedImages: 0 },
+        {
+          text: `${heading} ${text}`,
+          pages: 1,
+          imagePaints: 0,
+          diagramTitlePages: [],
+          diagramAxisPages: [],
+          headingPages: [1],
+          blankPages: [],
+        },
+        1,
+      )
+      .failures.includes("unrendered LaTeX in the PDF");
+  assert.equal(residue("area in m^2, x_1 and a_b"), false, "prose m^2 failed");
+  assert.equal(residue("k_{2}"), true, "braced residue passed");
+  // 5. A phrasing tag or a zero-width character inside a token does not split it.
+  const joined = core.extractSourceTokens([src("<b>0</b>.95 <b>Ax</b>ial 12​.5")]);
+  assert.ok(joined.numbers.has("0.95") && joined.numbers.has("12.5"), "a split number");
+  assert.ok(joined.words.has("axial"), "a split word");
+  assert.deepEqual(missing("<b>0</b>.95 <b>Ax</b>ial", "0.95 Axial"), []);
+  // 6. A command that prints its name expects it; `^\circ` expects the ring MathJax prints.
+  assert.ok(
+    missing("[mathin]\\min(a,b)[mathin]", "max(a,b)").includes("min"),
+    "\\min passed as max",
+  );
+  assert.ok(
+    missing("[mathin]30^\\circ[mathin]", "30").includes("∘"),
+    "the degree ring went unchecked",
+  );
+});
+
 test(
   "class B: what the PDF draws -- invisible and white text, cut images, cut diagrams",
   { timeout: TIMEOUT },
@@ -3235,6 +3305,20 @@ test(
         /text drawn invisibly/,
       ],
       ["white text", `<p style="color:#fff">Zorblaxian 4471</p>`, /text drawn in white/],
+      // Iteration 2: faint is invisible (the group's alpha multiplied in), near-white is white,
+      // and an image drawn but clipped away, or drawn too small to see, is not seen.
+      ["faint text", `<p style="opacity:0.02">Zorblaxian 4471</p>`, /text drawn invisibly/],
+      ["near-white text", `<p style="color:#fefefe">Zorblaxian 4471</p>`, /text drawn in white/],
+      [
+        "a clipped image",
+        `<div style="height:4px;overflow:hidden"><img style="display:block;width:200px;height:200px" src="data:image/png;base64,${png}"></div>`,
+        /an image drawn but not seen/,
+      ],
+      [
+        "a tiny image",
+        `<img style="width:1px;height:1px" src="data:image/png;base64,${png}">`,
+        /an image drawn but not seen/,
+      ],
       // The totals agree (one image hidden, one painted twice), so only where it is drawn shows it.
       [
         "a cut image, totals agreeing",
