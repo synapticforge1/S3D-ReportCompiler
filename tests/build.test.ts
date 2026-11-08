@@ -31,7 +31,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -449,34 +449,7 @@ test(
     writeFileSync(pdf, await old.save());
     const before = readFileSync(pdf);
 
-    let release: () => Promise<void>;
-    if (process.platform === "win32") {
-      // A PDF viewer's lock: others may read the file, but not write or delete it.
-      const holder = spawn(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-Command",
-          "$f=[IO.File]::Open($env:S3D_LOCK,'Open','Read','Read'); 'locked'; " +
-            "[Console]::In.ReadLine() | Out-Null; $f.Close()",
-        ],
-        { env: { ...process.env, S3D_LOCK: pdf }, stdio: ["pipe", "pipe", "inherit"] },
-      );
-      await new Promise<void>((resolve, reject) => {
-        holder.stdout.on("data", (d) => String(d).includes("locked") && resolve());
-        holder.on("exit", (c) => reject(new Error(`the lock holder exited (${c})`)));
-      });
-      release = () =>
-        new Promise((r) => {
-          holder.on("close", () => r());
-          holder.stdin.end("\n");
-        });
-    } else {
-      // The POSIX equivalent: a folder whose entries cannot be removed.
-      chmodSync(out, 0o555);
-      release = async () => chmodSync(out, 0o755);
-    }
-
+    const release = await lockAgainstRemoval(pdf);
     try {
       // This runtime as "Chrome", as in the stale-PDF test below: it writes no PDF. With
       // --no-optimize --no-verify nothing else would notice the old file being read back.
@@ -492,6 +465,37 @@ test(
     assert.deepEqual(readFileSync(pdf), before, "the previous PDF changed");
   },
 );
+
+/**
+ * Make `file` impossible to remove until the returned function is called: a PDF viewer's lock on
+ * Windows (others may read it, not write or delete it), a read-only folder on POSIX (not as root).
+ */
+async function lockAgainstRemoval(file: string): Promise<() => Promise<void>> {
+  if (process.platform === "win32") {
+    const holder = spawn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "$f=[IO.File]::Open($env:S3D_LOCK,'Open','Read','Read'); 'locked'; " +
+          "[Console]::In.ReadLine() | Out-Null; $f.Close()",
+      ],
+      { env: { ...process.env, S3D_LOCK: file }, stdio: ["pipe", "pipe", "inherit"] },
+    );
+    await new Promise<void>((resolve, reject) => {
+      holder.stdout.on("data", (d) => String(d).includes("locked") && resolve());
+      holder.on("exit", (c) => reject(new Error(`the lock holder exited (${c})`)));
+    });
+    return () =>
+      new Promise((r) => {
+        holder.on("close", () => r());
+        holder.stdin.end("\n");
+      });
+  }
+  const dir = dirname(file);
+  chmodSync(dir, 0o555);
+  return async () => chmodSync(dir, 0o755);
+}
 
 test("a render that writes nothing does not pass off a stale PDF", { timeout: TIMEOUT }, () => {
   const input = control("control-custom-delimiters", join(work, "stale"));
@@ -2166,9 +2170,13 @@ test(
     // The font cache lives in the working directory: seeded from this checkout's, so these runs
     // need no network when the rest of the suite needs none.
     const fonts = join(ROOT, ".mathjax-fonts");
-    const seed = (dir: string) => {
-      if (existsSync(fonts)) cpSync(fonts, join(dir, ".mathjax-fonts"), { recursive: true });
-    };
+    // Run alone (`-t`), nothing has filled the checkout's cache yet: one build here fills it, as
+    // the fonts test does, so the runs below do not each download them (review 4: order-dependent).
+    if (!existsSync(fonts)) {
+      const s = build(control("control-custom-delimiters", join(work, "default-seed")));
+      assert.equal(s.code, 0, tail(s.out));
+    }
+    const seed = (dir: string) => cpSync(fonts, join(dir, ".mathjax-fonts"), { recursive: true });
     // 1. Run from a folder holding HTMLFilesToBeCompiled/: the reports there, the PDF in CompiledPDF/.
     const nested = join(work, "default-nested");
     mkdirSync(join(nested, "HTMLFilesToBeCompiled"), { recursive: true });
@@ -2922,6 +2930,24 @@ test(
     assert.equal(timedOut.code, 1, tail(timedOut.out));
     has(timedOut.out, /did not finish within/);
     assert.ok(!existsSync(stale), "an earlier verified PDF outlived the build");
+    //    ...said as it goes (review 4: deleted without a word), and one that cannot go is refused
+    //    in its own terms -- Chrome never writes it, so "Chrome could not write the new one" was
+    //    wrong for it.
+    has(timedOut.out, /removed:\s+\S*pack\.verified\.pdf\s+\(an earlier build's PDF/);
+    if (process.platform === "win32" || process.getuid?.() !== 0) {
+      writeFileSync(stale, "%PDF-1.7 an earlier run's");
+      const release = await lockAgainstRemoval(stale);
+      try {
+        const locked = run([MAIN, zipPath], {
+          env: { ...process.env, S3D_CHROME_TIMEOUT_MS: "1" },
+        });
+        assert.equal(locked.code, 1, tail(locked.out));
+        has(locked.out, /Could not remove the previous PDF/, /kept it beside the zip/);
+        hasNot(locked.out, /Chrome could not write the new one|did not finish within/);
+      } finally {
+        await release();
+      }
+    }
 
     // 2. A folder report that is not UTF-8 is refused, named -- not decoded to U+FFFD on both sides.
     const latin = join(work, "latin1");

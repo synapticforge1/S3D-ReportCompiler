@@ -486,6 +486,12 @@ function fontSource(url: string): string {
   return url.replace(/^https?:\/\/[^/]+/, hook.replace(/\/+$/, ""));
 }
 
+/** How long one font may take to download (each is under 100 kB). */
+const FONT_FETCH_TIMEOUT_MS = 60_000;
+
+/** The font cache's write failure is said once a build, not once a font. */
+let fontCacheWarned = false;
+
 /**
  * One font file, from the on-disk cache or downloaded once and cached.
  *
@@ -503,9 +509,6 @@ function fontSource(url: string): string {
  *
  * @param cacheRoot `.mathjax-fonts` in the working directory
  */
-/** How long one font may take to download (each is under 100 kB). */
-const FONT_FETCH_TIMEOUT_MS = 60_000;
-
 async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
   const name = rt.baseName(url).replace(/[^\w.-]/g, "_");
   // Bytes from the test hook are kept apart from the real cache: stored under the real key, a
@@ -520,15 +523,24 @@ async function fontBytes(url: string, cacheRoot: string): Promise<Uint8Array> {
   const cacheDir = rt.joinPath(cacheRoot, dirKey);
   const cached = rt.joinPath(cacheDir, name);
 
-  // A cache that cannot be written is said as such: it used to surface as "check the network".
+  // A cache that cannot be written is said as such (it used to surface as "check the network") --
+  // and costs only the cache: the font was downloaded and checked, so the build uses it. It used to
+  // fail the build whose fonts had all arrived (review 4).
   const keep = async (bytes: Uint8Array) => {
+    const partial = `${cached}.partial`;
     try {
       await rt.mkdirp(cacheDir);
-      const partial = `${cached}.partial`;
       await rt.writeFile(partial, bytes);
       await rt.rename(partial, cached);
     } catch (e) {
-      throw new Error(`the font cache could not be written: ${cacheDir} (${(e as Error).message})`);
+      await rt.removeQuietly(partial);
+      if (!fontCacheWarned) {
+        fontCacheWarned = true;
+        console.warn(
+          `  warning: the font cache could not be written (${cacheDir}: ${(e as Error).message});` +
+            " the fonts were downloaded and are used, and the next build downloads them again",
+        );
+      }
     }
   };
 
@@ -1129,19 +1141,42 @@ const candidatePdf = `${outputPdf.replace(/\.pdf$/i, "")}.unverified.pdf`;
 // SUCCESSFUL build beside the new zip, still called "verified", without a word -- and a failed
 // build left it unmentioned (2026-11-07 review).
 for (const old of zipPath === null ? [outputPdf, candidatePdf] : [candidatePdf, zipKeptPdf]) {
+  const existed = await rt.fileExists(old);
   await rt.removeQuietly(old);
   if (await rt.fileExists(old)) {
     console.error(`Could not remove the previous PDF:\n  ${old}\n`);
     console.error("It is probably open in a PDF viewer. Close it and run again.");
-    console.error("(Left in place, Chrome could not write the new one, and the old one would be");
-    console.error("read back as this run's output.)");
+    // Said of what this file IS (review 4): Chrome never writes the zip's kept PDF, so "Chrome
+    // could not write the new one" was wrong for it.
+    console.error(
+      old === zipKeptPdf
+        ? "(An earlier build kept it beside the zip when its zip update failed; left in place, it\n" +
+            "would still be called verified beside a zip that this build changes.)"
+        : "(Left in place, Chrome could not write the new one, and the old one would be\n" +
+            "read back as this run's output.)",
+    );
     rt.exit(1);
+  }
+  // Removed with a word: it was an earlier build's verified PDF, and it is gone now.
+  if (existed && old === zipKeptPdf) {
+    console.log(
+      `  removed:  ${zipKeptPdf}\n            (an earlier build's PDF, kept when its zip update failed)`,
+    );
   }
 }
 
 // Created only now that there is something to write: a build refused earlier used to leave an
 // empty output folder behind.
-if (outputDir && outputDir !== outputPdf) await rt.mkdirp(outputDir);
+if (outputDir && outputDir !== outputPdf) {
+  try {
+    await rt.mkdirp(outputDir);
+  } catch (e) {
+    // A message, not a stack trace (review 4): a read-only drive, a file where a folder must go.
+    console.error(`Cannot create the output folder:\n  ${outputDir}\n  ${(e as Error).message}\n`);
+    console.error("Give an output path in a folder that can be written, then re-run.");
+    rt.exit(1);
+  }
+}
 
 // Only the Chrome profile needs to be temporary now. The baked document is a
 // build artifact in its own right and belongs beside the PDF it produced.
@@ -1155,16 +1190,28 @@ let zipPartial: string | null = null;
 // folder). Always exit 130: the build used to carry on while cleanup ran, and end with 1 or 130
 // depending on which finished first (2026-11-06 review).
 const interrupt = new AbortController();
+/**
+ * The file a final rename is giving its name to, while one runs ({@link finalRename}), else null.
+ * An interrupt then waits for it: cleaning up beside a rename in progress removed the PDF it was
+ * moving, or said "nothing was finished" of a zip already replaced (review 4).
+ */
+let finishing: string | null = null;
+let afterRename: (() => void) | null = null;
 if (typeof process !== "undefined" && typeof process.once === "function") {
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
       interrupt.abort();
-      console.error(`\nInterrupted (${signal}): nothing was finished. Cleaning up...`);
-      void Promise.all([
-        rt.removeQuietly(workDir, true),
-        zipPartial === null ? undefined : rt.removeQuietly(zipPartial),
-        rt.removeQuietly(candidatePdf),
-      ]).finally(() => rt.exit(130));
+      const cleanUp = (what: string) => {
+        console.error(`\nInterrupted (${signal}): ${what} Cleaning up...`);
+        void Promise.all([
+          rt.removeQuietly(workDir, true),
+          zipPartial === null ? undefined : rt.removeQuietly(zipPartial),
+          rt.removeQuietly(candidatePdf),
+        ]).finally(() => rt.exit(130));
+      };
+      if (finishing === null) return cleanUp("nothing was finished.");
+      const done = finishing;
+      afterRename = () => cleanUp(`stopped after the last step; this is complete:\n  ${done}\n`);
     });
   }
 }
@@ -1177,6 +1224,21 @@ if (typeof process !== "undefined" && typeof process.once === "function") {
  */
 async function haltIfInterrupted(): Promise<void> {
   if (interrupt.signal.aborted) await new Promise(() => {});
+}
+
+/** `rt.rename(from, to)`, with an interrupt that arrives meanwhile held until it is done. */
+async function finalRename(from: string, to: string): Promise<void> {
+  await haltIfInterrupted();
+  finishing = to;
+  try {
+    await rt.rename(from, to);
+  } finally {
+    finishing = null;
+    if (afterRename !== null) {
+      afterRename();
+      await new Promise(() => {}); // the cleanup exits 130
+    }
+  }
 }
 
 // Set inside the try and acted on after the finally: rt.exit() is process.exit(),
@@ -1213,8 +1275,7 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
         problem = `the updated zip failed its check:\n${failures.map((f) => `    - ${f}`).join("\n")}`;
       } else {
         try {
-          await haltIfInterrupted();
-          await rt.rename(zipPartial, zip);
+          await finalRename(zipPartial, zip);
           zipPartial = null;
           replaced = true;
         } catch (e) {
@@ -1233,7 +1294,7 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
     zipPartial = null;
     // The PDF passed: kept under ONE fixed name (an earlier one was removed before the render),
     // never under the zip's own name, where a stale copy outlived later builds.
-    await rt.rename(pdfPath, zipKeptPdf);
+    await finalRename(pdfPath, zipKeptPdf);
     console.error("");
     if (replaced) {
       console.error(
@@ -1317,8 +1378,14 @@ try {
         "ordinary user, set S3D_CHROME_NO_SANDBOX=1 for this build (the reports' own code is " +
         "still blocked: the bake strips it and the document forbids scripts)."
       : "";
+    // Exit 0 and no file: the usual sign of a CHROME_PATH that names a launcher, which starts the
+    // browser and exits before it has printed (review 4).
+    const launcherHint =
+      result.code === 0 && rt.env("CHROME_PATH")
+        ? "\nCHROME_PATH must name the browser program itself, not a script that starts it and exits."
+        : "";
     throw new Error(
-      `Chrome produced no PDF (exit status ${result.code}).\n${result.stderr.trim()}${sandboxHint}`,
+      `Chrome produced no PDF (exit status ${result.code}).\n${result.stderr.trim()}${sandboxHint}${launcherHint}`,
     );
   }
   // Chrome's exit status counts too, even with a PDF written: it was never read, so a Chrome that
@@ -1432,7 +1499,7 @@ try {
   if (!verificationFailed && zipPath !== null) {
     zipFailed = !(await addPdfToZip(zipPath, candidatePdf, htmlPath));
   } else if (!verificationFailed) {
-    await rt.rename(candidatePdf, outputPdf);
+    await finalRename(candidatePdf, outputPdf);
     // Discarded only on request, and only after a good build -- on a failed one the baked
     // document is the first thing worth looking at (it used to be deleted before verifying).
     if (!keepHtml) await rt.removeQuietly(htmlPath);

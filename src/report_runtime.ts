@@ -287,7 +287,10 @@ export function exit(code: number): never {
 /** Exit status and captured stderr from a spawned process. */
 export type RunResult = { code: number; stderr: string };
 
-/** Run a command to completion, capturing stderr. */
+/**
+ * Run a command to completion, capturing stderr. UNBOUNDED: it waits as long as the command (and
+ * anything holding its stderr) lives. To launch a browser, use {@link runWithTimeout}.
+ */
 export async function run(cmd: string, argv: string[]): Promise<RunResult> {
   requireHost("Launching a browser");
   const { spawn } = await import("node:child_process");
@@ -322,7 +325,11 @@ export const MAX_TIMEOUT_MS = 2_147_483_647;
  * profile, a dialog or a driver never exited, and neither did the build (2026-11-06).
  *
  * After a kill it resolves when the process EXITS, not when its stderr closes: a helper that
- * inherited the pipe could hold it open, and the build waited on it after its own timeout.
+ * inherited the pipe could hold it open, and the build waited on it after its own timeout. A
+ * process that exits by itself is given two seconds for its stderr to close; then
+ * it resolves with the exit status, and on POSIX the rest of its process group is killed. So `cmd`
+ * must be the program that does the work: a launcher script that starts the browser and exits at
+ * once resolves before the browser has finished.
  *
  * @param timeoutMs 1 to {@link MAX_TIMEOUT_MS}; a longer delay overflowed the timer, which then
  *                  fired after 1 ms and killed Chrome at once (2026-11-06 review)
@@ -398,10 +405,19 @@ export async function runWithTimeout(
       // so the wait was unbounded, the timeout's kill could not reach a tree whose root was gone,
       // and the result then said timedOut for a process that exited 0 (2026-11-07 review). The
       // stderr written so far, and the status, after a short grace.
-      grace = setTimeout(
-        () => settle({ code: exited ?? -1, stderr, timedOut: false }),
-        EXIT_GRACE_MS,
-      );
+      // What still holds the pipe then is a helper of a browser that has exited: reaped with its
+      // process group on POSIX, where the group outlives its leader (review 4: left running).
+      // Windows keeps no tree once the root is gone; its helpers end with the browser.
+      grace = setTimeout(() => {
+        if (!windows && child.pid !== undefined) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            // the group is already gone
+          }
+        }
+        settle({ code: exited ?? -1, stderr, timedOut: false });
+      }, EXIT_GRACE_MS);
     });
     child.on("close", (code) => settle({ code: code ?? -1, stderr, timedOut }));
   });

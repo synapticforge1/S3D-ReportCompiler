@@ -367,7 +367,6 @@ const UNDRAWN = new RegExp(
   "gi",
 );
 
-/** `html` without the comments, scripts and `<noscript>` a browser does not draw ({@link UNDRAWN}). */
 /**
  * The `<script>` elements a browser would run, each whole (start tag to end tag), in document
  * order: found by the same {@link UNDRAWN} pass, so one inside a comment or a `<noscript>` is not
@@ -381,6 +380,7 @@ function liveScripts(html: string): string[] {
   return out;
 }
 
+/** `html` without the comments, scripts and `<noscript>` a browser does not draw ({@link UNDRAWN}). */
 function stripUndrawn(html: string, count = false): string {
   return html.replace(UNDRAWN, (m, scriptish: string | undefined, raw: string | undefined) => {
     if (raw !== undefined) return m;

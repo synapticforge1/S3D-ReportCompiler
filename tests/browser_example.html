@@ -40,6 +40,15 @@
 <div id="log">Ready.</div>
 <iframe id="preview" title="Combined report preview"></iframe>
 
+<script>
+// A bundle older than this page (it is built locally, not committed) lacks an export it imports:
+// the module then never runs, and the page said nothing (review 4).
+window.addEventListener("error", (e) => {
+  document.getElementById("log").textContent +=
+    `\nERROR: ${e.message}` +
+    (/export|import/i.test(e.message) ? " -- rebuild the bundle: bun run bundle:browser" : "");
+});
+</script>
 <script type="module">
 import {
   bakeBody, bakeStyle, assembleDocument, mathStyleSheet,
@@ -59,10 +68,21 @@ bakeButton.addEventListener("click", async () => {
   bakeButton.disabled = true;
   try {
     await bake();
+  } catch (e) {
+    // A bake that throws (a diagram sheet it refuses to read, say) is said, not lost in the console.
+    log(`REFUSING: ${e?.message ?? e}`);
   } finally {
     bakeButton.disabled = false;
   }
 });
+
+/** The preview emptied: a refused bake left the LAST good document showing, ready to print. */
+function clearPreview() {
+  const doc = document.getElementById("preview").contentDocument;
+  doc.open();
+  doc.write("");
+  doc.close();
+}
 
 async function bake() {
   document.getElementById("log").textContent = "Baking...";
@@ -71,6 +91,7 @@ async function bake() {
   resetBakeState();
   document.getElementById("print").disabled = true;
   combined = "";
+  clearPreview();
   const names = sortReportNames(
     document.getElementById("files").value.split(",").map((s) => s.trim()).filter(Boolean),
   );

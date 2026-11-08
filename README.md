@@ -197,6 +197,9 @@ you keep a clone: it builds the npm package from your working tree and installs 
   as root (a container), where it cannot start with one. On a host where Chrome finds no usable
   sandbox for an ordinary user, the build says so; set `S3D_CHROME_NO_SANDBOX=1` for that build
   (the build then prints `sandbox: OFF`). The reports' own code stays blocked either way.
+  `CHROME_PATH` must name the browser program itself, not a script that starts it and exits.
+  Chrome is stopped if it has not finished in 10 minutes; a very large set may need more — set
+  `S3D_CHROME_TIMEOUT_MS` (milliseconds, e.g. `1800000`).
 - **The network, once.** The first build in a folder downloads MathJax's fonts (329 kB) into
   `.mathjax-fonts/`; later builds there work offline. Only complete font files are kept — a
   network login page, or a download cut short, stops the build with a plain message and nothing
