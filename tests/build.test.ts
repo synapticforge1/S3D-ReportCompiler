@@ -2468,6 +2468,279 @@ test("review 4: a report saved as .htm is refused by name, not left out", () => 
   hasNot(r.out, /Compiling/);
 });
 
+test(
+  "review 4, group E: the runtime's exits, with a stand-in Chrome (POSIX)",
+  {
+    timeout: TIMEOUT,
+    skip:
+      process.platform === "win32"
+        ? "a stand-in Chrome is a script run by its shebang, which Windows does not honour"
+        : false,
+  },
+  async () => {
+    // 1. The helpers of a browser that has exited are reaped with its process group: after the
+    //    2 s grace they were left running. The helper here shares the parent's group, as Chrome's
+    //    do (the review-3 case above detaches its helper into a group of its own).
+    const rt = await import(pathToFileURL(join(ROOT, "src", "report_runtime.ts")).href);
+    const parent = join(work, "group-helper.mjs");
+    const pidFile = join(work, "group-helper.pid");
+    writeFileSync(
+      parent,
+      `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";\n` +
+        `const c = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], ` +
+        `{ stdio: ["ignore", "ignore", "inherit"] });\n` +
+        `writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); c.unref(); process.exit(0);\n`,
+    );
+    const r = await rt.runWithTimeout(process.execPath, [parent], 20_000);
+    assert.deepEqual([r.code, r.timedOut], [0, false]);
+    const helper = Number(readFileSync(pidFile, "utf8"));
+    await new Promise((done) => setTimeout(done, 300));
+    let alive = true;
+    try {
+      process.kill(helper, 0);
+    } catch {
+      alive = false;
+    }
+    if (alive) process.kill(helper, "SIGKILL");
+    assert.ok(!alive, "a helper of the exited process was left running");
+
+    // A stand-in "Chrome": this runtime, by shebang, given Chrome's arguments. S3D_STANDIN says
+    // what it does -- "pdf" writes a real one-page PDF where --print-to-pdf= says, "none" writes
+    // nothing, "fail" writes one and exits 1. Exit 0 otherwise.
+    const { PDFDocument } = await import("pdf-lib");
+    const page = await PDFDocument.create();
+    page.addPage();
+    const fixture = join(work, "standin-page.pdf");
+    writeFileSync(fixture, await page.save());
+    const standin = join(work, "standin-chrome.cjs");
+    writeFileSync(
+      standin,
+      `#!${process.execPath}\nconst fs = require("node:fs");\n` +
+        `const out = process.argv.find((a) => a.startsWith("--print-to-pdf="))?.slice(15);\n` +
+        `const mode = process.env.S3D_STANDIN;\n` +
+        `if (mode !== "none" && out) fs.writeFileSync(out, fs.readFileSync(${JSON.stringify(fixture)}));\n` +
+        `process.exit(mode === "fail" ? 1 : 0);\n`,
+    );
+    chmodSync(standin, 0o755);
+    const input = control("control-custom-delimiters", join(work, "standin"));
+    const pdf = join(work, "standin-out", "c.pdf");
+    const env = (mode: string) => ({ ...process.env, CHROME_PATH: standin, S3D_STANDIN: mode });
+    const args = [MAIN, input, pdf, "--no-optimize", "--no-verify"];
+
+    // 2. Exit 0 and no PDF: the sign of a CHROME_PATH naming a launcher, now said.
+    const none = run(args, { env: env("none") });
+    assert.equal(none.code, 1, tail(none.out));
+    has(
+      none.out,
+      /Chrome produced no PDF \(exit status 0\)/,
+      /must name the browser program itself/,
+    );
+
+    // 3. A PDF written and exit 1: refused (known-issues #76 listed this as reasoned only).
+    const fail = run(args, { env: env("fail") });
+    assert.equal(fail.code, 1, tail(fail.out));
+    has(fail.out, /exited with status 1, so the PDF cannot be trusted/);
+    hasNot(fail.out, /^Created /m);
+
+    // 4. An interrupt during the final rename waits for it, and names the finished file: it used
+    //    to clean up beside the rename -- the PDF it was moving deleted, "nothing was finished".
+    //    The rename is slowed by a preload that marks its start.
+    const preload = join(work, "slow-rename.cjs");
+    writeFileSync(
+      preload,
+      `const fsp = require("node:fs/promises"); const fs = require("node:fs"); const real = fsp.rename;\n` +
+        `fsp.rename = async (from, to) => { if (String(to).endsWith(${JSON.stringify(pdf)})) {\n` +
+        `  fs.writeFileSync(${JSON.stringify(`${pdf}.renaming`)}, "");\n` +
+        `  await new Promise((d) => setTimeout(d, 3000)); } return real(from, to); };\n` +
+        `try { require("node:module").syncBuiltinESMExports(); } catch {}\n`,
+    );
+    rmSync(join(work, "standin-out"), { recursive: true, force: true });
+    const child = spawn(
+      process.execPath,
+      [process.versions.bun ? "--preload" : "--require", preload, ...args],
+      { cwd: ROOT, env: env("pdf"), stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    const closed = new Promise<number | null>((done) => child.on("close", (c) => done(c)));
+    for (let i = 0; i < 1200 && !existsSync(`${pdf}.renaming`); i++) {
+      await new Promise((d) => setTimeout(d, 50));
+    }
+    assert.ok(existsSync(`${pdf}.renaming`), `the final rename never started:\n${tail(out)}`);
+    child.kill("SIGINT");
+    const code = await closed;
+    assert.equal(code, 130, tail(out));
+    has(out, /stopped after the last step; this is complete/);
+    hasNot(out, /nothing was finished/);
+    assert.ok(existsSync(pdf), "the PDF being renamed was lost to the cleanup");
+    assert.ok(!existsSync(pdf.replace(/\.pdf$/, ".unverified.pdf")));
+  },
+);
+
+test("review 4, group E: the browser example, driven in Chrome", { timeout: TIMEOUT }, async () => {
+  // Chrome renders every build in this suite, and Bun is on every CI job: both required, so
+  // this cannot pass by not running.
+  const rt = await import(pathToFileURL(join(ROOT, "src", "report_runtime.ts")).href);
+  const chrome = await rt.findChrome();
+  assert.ok(chrome, "no Chrome or Edge on this machine");
+  // The page imports a bundle built locally (git-ignored): built here, into the work folder.
+  const bun = process.versions.bun ? process.execPath : "bun";
+  const bundle = join(work, "browser-bundle.js");
+  const b = spawnSync(
+    bun,
+    ["build", join(ROOT, "src", "report_core.ts"), "--target=browser", `--outfile=${bundle}`],
+    { encoding: "utf8" },
+  );
+  assert.equal(b.status, 0, `the browser bundle did not build: ${b.stderr}`);
+  const fresh = readFileSync(bundle, "utf8");
+  // A bundle from before decodeReport: the export dropped from its final export list.
+  const at = fresh.lastIndexOf("export {");
+  const stale = fresh.slice(0, at) + fresh.slice(at).replace(/\n\s*decodeReport,?/, "");
+  assert.notEqual(stale, fresh, "could not make a stale bundle");
+
+  let served = fresh;
+  const cfg = `<script>MathJax={tex2jax:{inlineMath:[['[mathin]','[mathin]']]}}</script>`;
+  const files: Record<string, [string, string]> = {
+    "/browser_example.html": [
+      "text/html",
+      readFileSync(join(ROOT, "tests", "browser_example.html"), "utf8"),
+    ],
+    "/ok_report.html": ["text/html", readFileSync(join(SAMPLES, "member_0_report.html"), "utf8")],
+    "/bad_report.html": [
+      "text/html",
+      `<html><head>${cfg}</head><body><svg><style>.a{fill:red}<b>x</b></style><text class="a">t</text></svg></body></html>`,
+    ],
+  };
+  const server = createServer((req, res) => {
+    const path = (req.url ?? "").split("?")[0];
+    if (path === "/report_core.browser.js") {
+      res.writeHead(200, { "content-type": "text/javascript" });
+      return res.end(served);
+    }
+    const f = files[path];
+    res.writeHead(f ? 200 : 404, { "content-type": f?.[0] ?? "text/plain" });
+    res.end(f?.[1] ?? "");
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  const profile = mkdtempSync(join(tmpdir(), "s3d-cdp-"));
+  const browser = spawn(
+    chrome,
+    [
+      "--headless=new",
+      "--remote-debugging-port=0",
+      `--user-data-dir=${profile}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      ...(process.platform !== "win32" && process.getuid?.() === 0 ? ["--no-sandbox"] : []),
+      "about:blank",
+    ],
+    { stdio: "ignore", detached: process.platform !== "win32" },
+  );
+  try {
+    const portFile = join(profile, "DevToolsActivePort");
+    for (let i = 0; i < 300 && !existsSync(portFile); i++)
+      await new Promise((d) => setTimeout(d, 100));
+    const port = readFileSync(portFile, "utf8").split("\n")[0];
+    const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as {
+      type: string;
+      webSocketDebuggerUrl: string;
+    }[];
+    const target = targets.find((x) => x.type === "page");
+    assert.ok(target, "no page target");
+    const ws = new WebSocket(target.webSocketDebuggerUrl);
+    await new Promise((done, fail) => {
+      ws.onopen = done;
+      ws.onerror = fail;
+    });
+    let next = 0;
+    const pending = new Map<number, (v: unknown) => void>();
+    ws.onmessage = (m) => {
+      const msg = JSON.parse(String(m.data));
+      pending.get(msg.id)?.(msg.result);
+      pending.delete(msg.id);
+    };
+    const send = (method: string, params: object = {}) =>
+      new Promise<unknown>((done) => {
+        const id = ++next;
+        pending.set(id, done);
+        ws.send(JSON.stringify({ id, method, params }));
+      });
+    const evaluate = async (expression: string) =>
+      (
+        (await send("Runtime.evaluate", {
+          expression,
+          returnByValue: true,
+          awaitPromise: true,
+        })) as {
+          result: { value: unknown };
+        }
+      ).result.value;
+    const logUntil = async (re: RegExp) => {
+      let log = "";
+      for (let i = 0; i < 600; i++) {
+        log = String(await evaluate(`document.getElementById("log")?.textContent ?? ""`));
+        if (re.test(log)) return log;
+        await new Promise((d) => setTimeout(d, 100));
+      }
+      assert.fail(`the log never matched ${re}:\n${log}`);
+    };
+    // Loaded: the module (deferred) has run by `complete`, so its click handler is in place.
+    const open = async () => {
+      await send("Page.navigate", { url: `${origin}/browser_example.html` });
+      for (let i = 0; i < 600; i++) {
+        const state = await evaluate(
+          `location.pathname === "/browser_example.html" && document.readyState`,
+        );
+        if (state === "complete") return;
+        await new Promise((d) => setTimeout(d, 100));
+      }
+      assert.fail("the browser example never finished loading");
+    };
+    const bake = (names: string) =>
+      evaluate(
+        `document.getElementById("files").value = ${JSON.stringify(names)}; ` +
+          `document.getElementById("bake").click(); true`,
+      );
+    const previewText = () =>
+      evaluate(`document.getElementById("preview").contentDocument.body?.innerText.length ?? 0`);
+
+    // 1. A good bake fills the preview; a bake that THROWS is logged, and empties it -- it used
+    //    to go unlogged, with the last good document still showing, ready to print.
+    await open();
+    await bake("ok_report.html");
+    await logUntil(/Ready to print\./);
+    assert.ok(Number(await previewText()) > 0, "the good bake drew nothing");
+    await bake("bad_report.html");
+    const refused = await logUntil(/REFUSING/);
+    assert.match(refused, /holds markup/, "the thrown error was not logged");
+    assert.equal(Number(await previewText()), 0, "the last good preview was left showing");
+    assert.equal(await evaluate(`document.getElementById("print").disabled`), true);
+
+    // 2. A bundle older than the page: the module never runs, and the log says to rebuild.
+    served = stale;
+    await open();
+    await logUntil(/rebuild the bundle: bun run bundle:browser/);
+    ws.close();
+  } finally {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/pid", String(browser.pid), "/T", "/F"], { stdio: "ignore" });
+    } else if (browser.pid !== undefined) {
+      try {
+        process.kill(-browser.pid, "SIGKILL");
+      } catch {
+        // gone
+      }
+    }
+    server.closeAllConnections?.();
+    await new Promise((done) => server.close(done));
+    await new Promise((d) => setTimeout(d, 500));
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
 test("review 4, groups A and B: the next template's constructs bake as a browser draws them", async () => {
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
   const flat = (s: string) => s.replace(/\s+/g, " ").trim();
