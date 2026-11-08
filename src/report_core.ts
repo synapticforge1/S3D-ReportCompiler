@@ -1302,7 +1302,7 @@ function hoistPlan(svg: string): { ok: boolean; rules: [string, string, string[]
 function svgSheetsToMove(src: string): Set<string> {
   const page = stripUndrawn(src);
   const svgs = outerSvgs(page);
-  const outside = (i: number) => page.slice(0, svgs[i].start) + " " + page.slice(svgs[i].end);
+  const outside = (i: number) => `${page.slice(0, svgs[i].start)} ${page.slice(svgs[i].end)}`;
   // The report's own sheets outside every <svg>, comments gone: the rules a hoist competes with.
   let pageOnly = "";
   let at = 0;

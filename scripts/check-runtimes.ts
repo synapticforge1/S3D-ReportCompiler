@@ -44,7 +44,8 @@ if (!/^\d+\.\d+\.\d+$/.test(floor)) {
   process.exit(1);
 }
 
-const res = await fetch(SCHEDULE);
+// Bounded: an unanswering host hung the check with no message (review 4).
+const res = await fetch(SCHEDULE, { signal: AbortSignal.timeout(60_000) });
 if (!res.ok) {
   console.error(
     `❌ cannot read Node's release schedule (HTTP ${res.status}) — refusing to guess the LTS lines`,

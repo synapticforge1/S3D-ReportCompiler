@@ -40,6 +40,7 @@ import {
   JSR_RETRY_MS,
   JSR_TIMEOUT_MS,
   type Look,
+  lookupGithubCommit,
   lookupGithubRelease,
   lookupNpmVersion,
   lookupVersion,
@@ -178,7 +179,29 @@ async function githubVerdict(): Promise<number> {
     }
   }
   if ("found" in g && g.found) {
-    console.log(`✅ the GitHub release ${tag} exists.`);
+    // ...and its tag names the commit JSR got (release/<tag>, which publish.yml's record job
+    // writes): "a release exists" passed whatever commit the tag had moved to (review 4).
+    const [atTag, atBranch] = await Promise.all([
+      lookupGithubCommit(tag),
+      lookupGithubCommit(`release/${tag}`),
+    ]);
+    if ("error" in atTag || "error" in atBranch) {
+      const why = "error" in atTag ? atTag.error : "error" in atBranch ? atBranch.error : "";
+      console.error(`\n⚠️  Could not read the commits of ${tag} and release/${tag}: ${why}.`);
+      console.error(`   This is not a verdict. Re-run: bun run verify-release ${version} --github`);
+      return 5;
+    }
+    if (atBranch.sha === "" || atTag.sha !== atBranch.sha) {
+      console.error(
+        atBranch.sha === ""
+          ? `\n❌ The GitHub release ${tag} exists, but there is no release/${tag} branch to say which commit JSR got.`
+          : `\n❌ ${tag} names ${atTag.sha || "nothing"}, but JSR got ${atBranch.sha} (release/${tag}): the release is of another commit.`,
+      );
+      return 5;
+    }
+    console.log(
+      `✅ the GitHub release ${tag} exists, at the commit JSR got (${atTag.sha.slice(0, 12)}).`,
+    );
     return 0;
   }
   if ("found" in g) {

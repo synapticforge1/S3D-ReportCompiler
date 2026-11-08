@@ -40,7 +40,7 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { lookupVersion, usingTestApi } from "./jsr-api.ts";
+import { lookupVersion, testHooksSet, usingTestApi } from "./jsr-api.ts";
 
 const manifest = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url), "utf8")) as {
   name: string;
@@ -284,8 +284,12 @@ if (diffCode !== 0) {
   }
   // A "not published" from a fake JSR is not one from JSR: never tag on it. (The test hook only
   // ever drives refusals; a hook left set in a shell must not be what lets a release through.)
-  if (usingTestApi()) {
-    console.error(`\n❌ S3D_JSR_API is set — a release never tags against a test JSR. Unset it.`);
+  // Every hook, not JSR's alone: the npm and GitHub verdicts after tagging read theirs (review 4).
+  const hooks = testHooksSet();
+  if (usingTestApi() || hooks.length > 0) {
+    console.error(
+      `\n❌ ${hooks.join(", ") || "S3D_JSR_API"} is set — a release never runs against a test registry. Unset it.`,
+    );
     refuse(1);
   }
 

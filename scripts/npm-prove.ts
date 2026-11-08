@@ -68,13 +68,23 @@ const fnmNode = (version: string, args: string[], cwd: string) =>
   run("fnm", ["exec", `--using=${version}`, "--", "node", ...args], cwd);
 const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex").slice(0, 12);
 
+/** `fetch`, bounded (60 s) and refused unless it answers 2xx: a hung or failing host is no verdict. */
+const fetchOk = async (url: string): Promise<Response> => {
+  const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new Error(`${url} answered HTTP ${res.status} -- not a verdict; re-run`);
+  }
+  return res;
+};
+
 const work = mkdtempSync(join(tmpdir(), "s3d-npm-prove-"));
 try {
   const floor = /^>=(\d+\.\d+\.\d+)$/.exec(String(manifest.engines?.node ?? ""))?.[1];
   if (!floor)
     throw new Error(`engines.node must be ">=X.Y.Z": ${JSON.stringify(manifest.engines)}`);
   const schedule = (await (
-    await fetch("https://raw.githubusercontent.com/nodejs/Release/main/schedule.json")
+    await fetchOk("https://raw.githubusercontent.com/nodejs/Release/main/schedule.json")
   ).json()) as Record<string, { lts?: string; end: string }>;
   const now = Date.now();
   const lines = Object.entries(schedule)
@@ -283,8 +293,10 @@ try {
   //    that CI, so such a release could never go out (2026-11-06 review). Between releases the
   //    tree's version IS on JSR, and the check is as strong as before; on the release commit
   //    itself it is not yet, and the check says it did not run rather than passing or failing.
+  // Only an answer is a verdict: a 503 or a timeout from npm.jsr.io used to read as "not on JSR
+  // yet", and the check said it had not run rather than that it could not (review 4).
   const jsrMeta = (await (
-    await fetch("https://npm.jsr.io/@jsr/jrmarcum__s3d-reportcompiler")
+    await fetchOk("https://npm.jsr.io/@jsr/jrmarcum__s3d-reportcompiler")
   ).json()) as {
     "dist-tags": { latest: string };
     versions: Record<string, { dist: { tarball: string } }>;
@@ -296,7 +308,7 @@ try {
     );
   } else {
     const tgz = new Uint8Array(
-      await (await fetch(jsrMeta.versions[jsrVersion].dist.tarball)).arrayBuffer(),
+      await (await fetchOk(jsrMeta.versions[jsrVersion].dist.tarball)).arrayBuffer(),
     );
     const tar = gunzipSync(tgz);
     let jsrExports: string[] = [];

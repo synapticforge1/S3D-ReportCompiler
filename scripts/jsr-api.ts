@@ -94,8 +94,49 @@ export async function lookupGithubRelease(
   }
 }
 
+/**
+ * The commit a ref names on GitHub (`v1.3.0`, `release/v1.3.0`): `{ sha }`, `{ sha: "" }` for no
+ * such ref, or `{ error }`. For `--github`: the release's tag must name the commit JSR got.
+ */
+export async function lookupGithubCommit(
+  ref: string,
+): Promise<{ sha: string } | { error: string }> {
+  const url = `${githubBase()}/repos/${GITHUB_REPO}/commits/${ref}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        accept: "application/vnd.github+json",
+        "user-agent": "s3d-reportcompiler-release",
+      },
+      signal: AbortSignal.timeout(JSR_TIMEOUT_MS),
+    });
+    if (res.status === 404 || res.status === 422) {
+      await res.body?.cancel();
+      return { sha: "" };
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      return { error: `HTTP ${res.status}` };
+    }
+    const sha = ((await res.json()) as { sha?: unknown }).sha;
+    return typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha)
+      ? { sha }
+      : { error: "no commit in the answer" };
+  } catch (e) {
+    return { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
+  }
+}
+
 /** True while the test hook redirects the lookup (callers that would tag must refuse). */
 export const usingTestApi = (): boolean => apiBase() !== REAL_API;
+
+/**
+ * Every registry test hook that is set (`S3D_JSR_API`, `S3D_NPM_API`, `S3D_GITHUB_API`): a release
+ * refuses while ANY is, not only JSR's -- the npm and GitHub verdicts it reports after tagging
+ * would otherwise come from a fake (review 4).
+ */
+export const testHooksSet = (): string[] =>
+  ["S3D_JSR_API", "S3D_NPM_API", "S3D_GITHUB_API"].filter((name) => !!process.env[name]);
 
 export const JSR_TIMEOUT_MS = envMs("S3D_JSR_TIMEOUT_MS", 20_000);
 export const JSR_RETRY_MS = envMs("S3D_JSR_RETRY_MS", 15_000);

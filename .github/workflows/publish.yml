@@ -72,6 +72,18 @@ jobs:
             echo "::error::${TAG} now points at ${NOW}, not the pushed ${PUSHED} — a newer run owns it; refusing."
             exit 1
           fi
+          # "Run workflow" recovers npm for the commit JSR GOT, which release/<tag> records. A tag
+          # moved since then is refused here, by name -- it used to be resolved and built, and only
+          # the npm job's last check refused it (review 4).
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            REL=$(gh api "repos/${GITHUB_REPOSITORY}/commits/release/${TAG}" --jq .sha 2>/dev/null || true)
+            [[ "$REL" =~ ^[0-9a-f]{40}$ ]] || REL="" # a 404 answers with a body, not a SHA
+            if [ -z "$REL" ]; then echo "::error::No release/${TAG} branch: JSR's commit was never recorded — refusing."; exit 1; fi
+            if [ "$REL" != "$NOW" ]; then
+              echo "::error::${TAG} points at ${NOW}, but JSR got ${REL} (release/${TAG}) — move the tag back, or release a new version; refusing."
+              exit 1
+            fi
+          fi
           echo "sha=${NOW}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "✅ releasing ${TAG} = ${NOW}"
@@ -128,6 +140,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # The Deno this job's upload check ran, for the publish job to install exactly: each floated
+    # `v2.x` on its own, so a Deno released between the jobs published unchecked (review 4).
+    outputs:
+      deno: ${{ steps.deno.outputs.version }}
     steps:
       # Every action pinned to a commit (2026-11-07 review): a moved tag of a third-party action
       # would otherwise run new code in a release. The comment names the version it was.
@@ -141,6 +157,10 @@ jobs:
         uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
           deno-version: v2.x
+
+      - name: The Deno version, for the publish job
+        id: deno
+        run: echo "version=$(deno --version | head -n 1 | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -188,11 +208,12 @@ jobs:
       # correlation was coincidental.
       #
       # The absence was a JSR-side issue, not a defect in this workflow's provenance setup. Floating
-      # `v2.x` is correct, and nothing here needs changing to obtain an attestation.
+      # `v2.x` is correct, and nothing here needs changing to obtain an attestation. It floats ONCE,
+      # in `checks`: this job installs the exact version the upload check ran (review 4).
       - name: Setup Deno
         uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.x
+          deno-version: ${{ needs.checks.outputs.deno }}
 
       # REQUIRED, and easy to leave out: jsr.json sets "nodeModulesDir": "manual", so Deno resolves
       # the npm dependencies from an on-disk node_modules that something else has to create. Without
@@ -399,7 +420,8 @@ jobs:
         with:
           name: npm-dist
           path: dist/
-          retention-days: 1
+          # A week: "Re-run failed jobs" on the npm job the next day needs this artifact (review 4).
+          retention-days: 7
           if-no-files-found: error
 
   npm:

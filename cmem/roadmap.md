@@ -428,17 +428,21 @@ bun run verify-release 1.0.1        # audit any version
 Exit codes: **0** attested · **1** published but not attested · **2** not published yet, or JSR
 could not be asked · **3** attested but yanked · **4** (`--npm`) attested on JSR, but npm lacks the
 version, its provenance, or an answer · **5** (`--github`, since 2026-11-07) both registries fine,
-but no GitHub release for the tag, or no answer · **64** a usage error (an unknown flag, since
+but no GitHub release for the tag, a tag not at the commit JSR got (`release/<tag>`, review 4), or
+no answer · **64** a usage error (an unknown flag, since
 2026-11-06). Verified against all three real cases (again on Deno, Bun and Node, 2026-10-26).
 **Since 2026-11-07 the release passes `--github` too** (known-issues #75); `publish.ts` refuses an
 unknown argument (exit 64).
 
-🔁 **`publish.yml`'s job graph since 2026-11-07** (#75; first exercised by the next real release):
-`ci-green` → `checks` (the upload check and the SemVer gate; no token) → `publish` (JSR; installs
-with scripts off; holds `id-token`) → `record` (the release branch) and `jsr-score`
+🔁 **`publish.yml`'s job graph since 2026-11-07** (#75; first exercised by 1.3.0, run 42397518507,
+all green): `ci-green` → `checks` (the upload check and the SemVer gate; no token) → `publish`
+(JSR; installs with scripts off; holds `id-token`) → `record` (the release branch) and `jsr-score`
 (informational) · `npm-build` (no token) → `npm` (publishes the built artifact; holds `id-token`) →
 `finalize` (the GitHub release; on "Run workflow" too). A second run for the same tag WAITS; none
-is cancelled. Every action is pinned to a commit.
+is cancelled. Every action is pinned to a commit. Review 4 (not yet exercised by a release):
+`publish` installs the exact Deno `checks` ran; "Run workflow" refuses in `ci-green` a tag that is
+not at `release/<tag>`; the npm artifact is kept 7 days; `bun run release` refuses while ANY
+registry test hook (`S3D_JSR_API`, `S3D_NPM_API`, `S3D_GITHUB_API`) is set.
 `bun run release --no-wait` skips the wait if you do not want to hold the terminal.
 
 **Since 2026-11-06 the release passes `--npm`** (known-issues #40): one tag publishes both, and a

@@ -30,7 +30,7 @@
     "format:check": "bun fmt --check main.ts src scripts tests/build.test.ts tests/controls/*.ts && bun scripts/check-format-canary.ts",
     "lint": "bunx @biomejs/biome@2.5.15 lint --error-on-warnings && bun scripts/check-lint-canary.ts",
     "runtimes": "bun scripts/check-runtimes.ts",
-    "serve": "npx --yes serve ."
+    "serve": "npx --yes serve@14.2.4 ."
   },
   "dependencies": {
     "mathjax-full": "3.2.2",

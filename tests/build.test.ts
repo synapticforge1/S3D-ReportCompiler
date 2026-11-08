@@ -3192,8 +3192,30 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
     version: "9.9.9",
     dist: { attestations: { provenance: { predicateType: "x" } } },
   });
+  // A fake GitHub by path: the release, the tag's commit, release/<tag>'s commit (review 4: the
+  // release must be of the commit JSR got).
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  const github =
+    (release: number, tagSha: string, branchSha: string): Handler =>
+    (req, res) => {
+      const url = req.url ?? "";
+      const [status, body] = /\/releases\/tags\//.test(url)
+        ? [release, { tag_name: "v9.9.9" }]
+        : /\/commits\/release\//.test(url)
+          ? branchSha
+            ? [200, { sha: branchSha }]
+            : [404, {}]
+          : /\/commits\//.test(url)
+            ? [200, { sha: tagSha }]
+            : [404, {}];
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
   const ghCases: Array<[string, Handler, number, RegExp]> = [
-    ["exists", json({ tag_name: "v9.9.9" }), 0, /the GitHub release v9\.9\.9 exists/],
+    ["exists", github(200, A, A), 0, /the GitHub release v9\.9\.9 exists, at the commit JSR got/],
+    ["another commit", github(200, A, B), 5, /the release is of another commit/],
+    ["no branch", github(200, A, ""), 5, /no release\/v9\.9\.9 branch/],
     ["missing", json({}, 404), 5, /NO GitHub release v9\.9\.9/],
     ["503", json({}, 503), 5, /Could not ask GitHub whether the release v9\.9\.9 exists: HTTP 503/],
   ];
@@ -3429,14 +3451,19 @@ test("release: the JSR test hook can never let a release tag", { timeout: TIMEOU
   // A fake JSR answering "not published" (404): the release still refuses, because it is fake.
   const dir = releaseClone("release-hook-404");
   const before = headOf(dir);
+  // Every hook is named, npm's and GitHub's too (review 4): their verdicts follow the tag.
   const r = await withFakeJsr(json({}, 404), (base) =>
     runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
       cwd: dir,
-      env: { ...process.env, S3D_JSR_API: base },
+      env: { ...process.env, S3D_JSR_API: base, S3D_NPM_API: base, S3D_GITHUB_API: base },
     }),
   );
   assert.equal(r.code, 1, r.out);
-  has(r.out, /S3D_JSR_API is set — a release never tags against a test JSR/, /undid the local/);
+  has(
+    r.out,
+    /S3D_JSR_API, S3D_NPM_API, S3D_GITHUB_API is set — a release never runs against a test registry/,
+    /undid the local/,
+  );
   hasNot(r.out, /tagging /);
   assert.equal(headOf(dir), before);
 
@@ -3516,20 +3543,37 @@ test("review 2, group D: the release path checks what it publishes", () => {
   assert.equal(b.code, 1, b.out);
   has(b.out, /disagree on a dependency/, /pdf-lib: package\.json 1\.17\.0, jsr\.json 1\.17\.1/);
 
-  // The workflows, read for the gates that make a release publish what it checked.
-  const yml = readFileSync(join(ROOT, ".github", "workflows", "publish.yml"), "utf8");
+  // The workflows, read for the gates that make a release publish what it checked -- as CODE
+  // (review 4): comments gone, a trailing one too (`run: bun install # --ignore-scripts` satisfied
+  // the check), and a folded `run: >-` or a `\` continuation joined onto one line (split, a correct
+  // `--ignore-scripts` read as missing). A commented-out job header is then no job.
+  const code = (text: string) => {
+    const out: string[] = [];
+    let fold = -1;
+    for (const raw of text.split("\n")) {
+      const line = raw.replace(/(^|\s)#.*$/, "$1").replace(/\s+$/, "");
+      const indent = /^\s*/.exec(line)?.[0].length ?? 0;
+      if (fold >= 0 && (line === "" || indent > fold)) {
+        if (line !== "") out[out.length - 1] += ` ${line.trim()}`;
+        continue;
+      }
+      fold = /^\s*(?:- )?run:\s*>[-+]?$/.test(line) ? indent : -1;
+      out.push(line);
+    }
+    return out.join("\n").replace(/\\\n\s*/g, " ");
+  };
+  const yml = code(readFileSync(join(ROOT, ".github", "workflows", "publish.yml"), "utf8"));
   const job = (name: string) => {
     const at = yml.indexOf(`\n  ${name}:\n`);
     assert.ok(at >= 0, `no ${name} job`);
     const next = yml.slice(at + 4).search(/\n {2}[a-z-]+:\n/);
     return next < 0 ? yml.slice(at) : yml.slice(at, at + 4 + next);
   };
-  const [ciGreen, checks, publish, record, npmBuild, npm, finalize] = [
+  const [ciGreen, checks, publish, record, npm, finalize] = [
     "ci-green",
     "checks",
     "publish",
     "record",
-    "npm-build",
     "npm",
     "finalize",
   ].map(job);
@@ -3549,20 +3593,34 @@ test("review 2, group D: the release path checks what it publishes", () => {
   assert.match(npm, /needs: \[ci-green, publish, npm-build\]/, "npm waits on the release branch");
   // Review 3 (2026-11-07). The publishing credential (`id-token: write`) only where nothing
   // installed runs: the gates and the npm build hold none.
-  for (const [name, text] of [
-    ["checks", checks],
-    ["npm-build", npmBuild],
-  ] as const) {
-    assert.doesNotMatch(text, /id-token/, `${name} can mint a publishing token`);
+  //   Every job states its permissions; only publish and npm may mint a token, only record and
+  //   finalize may write (review 4: nothing asserted the blocks of the jobs that hold neither).
+  const jobs = [...yml.matchAll(/\n {2}([a-z-]+):\n/g)]
+    .map((m) => m[1])
+    .filter((n) => n !== "push");
+  assert.ok(jobs.length >= 8, `only ${jobs.length} jobs read`);
+  for (const name of jobs) {
+    const text = job(name);
+    assert.match(text, /\n {4}permissions:\n/, `${name} states no permissions`);
+    assert.equal(
+      /id-token: write/.test(text),
+      ["publish", "npm"].includes(name),
+      `${name}: id-token`,
+    );
+    assert.equal(
+      /contents: write/.test(text),
+      ["record", "finalize"].includes(name),
+      `${name}: contents: write`,
+    );
   }
-  const code = (job: string) => job.replace(/^\s*#.*$/gm, ""); // comments are not steps
   for (const [name, text] of [
-    ["publish", code(publish)],
-    ["npm", code(npm)],
+    ["publish", publish],
+    ["npm", npm],
   ] as const) {
+    // Every way to install or run a package, not `bun install` alone (`npm ci`, `bun i`, `bunx`).
     assert.doesNotMatch(
       text,
-      /bun install(?![^\n]*--ignore-scripts)|npm:build|compat\.ts|jsr-upload-check/,
+      /\bbun\s+(?:i|install|add)\b(?![^\n]*--ignore-scripts)|\bbunx\b|\bbun\s+(?:x|run)\b|\bnpm\s+(?:ci|i|install|exec|x|run|rebuild)\b|\bnpx\b|\b(?:pnpm|yarn)\b|npm:build|compat\.ts|jsr-upload-check/,
       `${name} runs dependency code beside its publishing token`,
     );
   }
@@ -3570,13 +3628,18 @@ test("review 2, group D: the release path checks what it publishes", () => {
   //   release branch); every action is pinned to a commit; npm-only recovery gets its release.
   assert.match(yml, /cancel-in-progress: false/);
   for (const file of ["publish.yml", "ci.yml"]) {
-    const text = readFileSync(join(ROOT, ".github", "workflows", file), "utf8");
+    const text = code(readFileSync(join(ROOT, ".github", "workflows", file), "utf8"));
+    // Any spacing, and any form: `docker://` and a local `./action` are not commits either.
     assert.doesNotMatch(
       text,
-      /uses: \S+@(?![0-9a-f]{40}\b)/,
+      /uses:\s+["']?(?!\S+@[0-9a-f]{40}["']?(?:\s|$))\S+/,
       `${file}: an action not pinned to a commit`,
     );
   }
+  //   The Deno the upload check ran is the one that publishes (review 4: each job floated v2.x).
+  assert.match(checks, /deno --version/);
+  assert.match(publish, /deno-version: \$\{\{ needs\.checks\.outputs\.deno \}\}/);
+  assert.match(ciGreen, /commits\/release\/\$\{TAG\}/, "dispatch does not check JSR's commit");
   assert.match(finalize, /github\.event_name == 'workflow_dispatch'/, "no release after npm-only");
   assert.match(
     npm,
