@@ -690,6 +690,34 @@ test("the sanitizer refuses a filled field it does not scrub, and short values",
     assert.equal(r.code, 1, `${what}:\n${r.out}`);
     has(r.out, /1 removed term\(s\) still present elsewhere/);
   }
+  //   Review 5. The block must hold every field row: an empty `<div></div>` after the heading made
+  //   it empty, the row check read nothing, and a filled Client row passed with ✅.
+  const emptied = sanitizerInput("sanitize-emptied-block", false);
+  edit(emptied, /(Project details\s*<\/h[1-6]>)/i, "$1<div></div>");
+  edit(
+    emptied,
+    /(Company:\s*\[mathin\]\\text\{[^}]*\}\[mathin\]<br)/,
+    "$1><b>Client</b>: Brightwater Holdings<br",
+  );
+  const em = sanitize(emptied);
+  assert.equal(em.code, 1, em.out);
+  has(em.out, /the project-details block holds 0 of the file's \d+ field row\(s\)/);
+  hasNot(em.out, /Brightwater|✅|✓/);
+  //   ...and the residue check reads text: a soft hyphen, a zero-width space and a tag inside the
+  //   name hid it, and so did the name inside a longer word.
+  for (const [what, title] of [
+    ["soft hyphen", "<title>Zor&shy;blax "],
+    ["zero width", "<title>Zorb&#8203;lax "],
+    ["tag inside", "<title>Zor<b></b>blax "],
+    ["inside a word", "<title>ZorblaxQuarry_member0 "],
+  ] as const) {
+    const dir = sanitizerInput(`sanitize-r5-${what.replace(/\W/g, "")}`, false);
+    edit(dir, /<title>/i, title);
+    const r = sanitize(dir);
+    assert.equal(r.code, 1, `${what}:\n${r.out}`);
+    has(r.out, /removed term\(s\) still present elsewhere/);
+    hasNot(r.out, /Zorblax/);
+  }
 
   // A template without the [mathin] spacer: the scrub still works there, but the field guard read
   // only the spacer layout, saw no row at all, and passed a filled Company with ✓.
@@ -837,6 +865,23 @@ test("review 3, group C: the redactor takes every spelling of a private path and
     ipShare: ["//192.168.1.5/jobs/acme-steel", /192\.168|acme/],
     clipped: ["kestrel.brumby@brumby-mail.o", /kestrel|brumby/],
     literal: ["bob@[192.168.1.1]", /bob|192/],
+    // Review 5: an apostrophe in a name; quoted paths of every kind (any POSIX root, a scheme, a
+    // shell's home, curly quotes); two spaces; a spaced username at the end; addresses clipped
+    // anywhere, dot-less or double-encoded; an intranet host.
+    apostrophe: ["D:\\Jobs\\O'Brennick Steel\\calc.html", /Brennick|Steel/],
+    apostropheQuoted: ['"D:\\Jobs\\O\'Brennick Steel"', /Brennick|Steel/],
+    anyRoot: ['"/data/jobs/Zorblax Quarry"', /Zorblax|Quarry/],
+    fileScheme: ['"file:///D:/Jobs/Zorblax Quarry"', /Zorblax|Quarry/],
+    tildeQuoted: ['"~/Jobs/Zorblax Quarry"', /Zorblax|Quarry/],
+    envQuoted: ['"%USERPROFILE%\\Jobs\\Zorblax Quarry"', /Zorblax|Quarry/],
+    curly: ["“D:\\Jobs\\Zorblax Quarry”", /Zorblax|Quarry/],
+    twoSpaces: ["D:\\Jobs\\Zorblax  Quarry\\calc.html", /Zorblax|Quarry/],
+    spacedUserEnd: ["C:\\Users\\Kestrel Brumby", /Kestrel|Brumby/],
+    clippedBeforeDot: ["kestrel.brumby@brumby-m", /kestrel|brumby/],
+    clippedAtAt: ["kestrel.brumby@", /kestrel|brumby/],
+    dotless: ["kestrel.brumby@brumbymail", /kestrel|brumby/],
+    doubleEncoded: ["kestrel.brumby%2540brumby-mail.org", /kestrel|brumby/],
+    intranet: ["//fileserver7.corp/jobs/zorblax", /fileserver7|zorblax/],
   };
   for (const [name, [line, secret]] of Object.entries(cases)) {
     const file = join(work, `redact-${name}.md`);
@@ -857,6 +902,12 @@ test("review 3, group C: the redactor takes every spelling of a private path and
     ["C:\\Users\\qwertyu and then the rest", " and then the rest"],
     ["see `D:\\Jobs\\job41` then", "` then"],
     ["in D:\\Jobs\\job41, then", ", then"],
+    // Review 5: a later file name or drive on the line no longer pulls the prose in.
+    ["copied D:\\tmp\\a to the folder and opened README.md", " to the folder and opened README.md"],
+    ["copy C:\\Users\\qwertyu to D:\\backup now", " to "],
+    ["from D:\\a and then E:\\b", " and then "],
+    // ...and a version or an action ref is not an address.
+    ["react@18.3.1 and actions/checkout@v5", "react@18.3.1 and actions/checkout@v5"],
   ]) {
     const file = join(work, "redact-prose.md");
     writeFileSync(file, `${line}\n`);
@@ -864,6 +915,14 @@ test("review 3, group C: the redactor takes every spelling of a private path and
     assert.equal(r.code, 0, r.out);
     assert.ok(readFileSync(file, "utf8").includes(kept), `${line}: "${kept}" was redacted`);
   }
+  //   A username that survives is reported by LINE, not with the 70 characters around it, which
+  //   were the very text it protects (review 5).
+  const left = join(work, "redact-left.md");
+  writeFileSync(left, "first line\nzorblaxnobody met Kestrel Brumby of Wharfton Quarry\n");
+  const r = run([redact, left, "--user=zorblaxnobody", "--check"]);
+  assert.equal(r.code, 1, r.out);
+  has(r.out, /remaining at line\(s\): 2/);
+  hasNot(r.out, /Kestrel|Wharfton/);
 });
 
 test("the redactor removes checkout, drive and slug paths, and fails on a residue", () => {

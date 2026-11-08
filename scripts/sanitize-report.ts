@@ -61,7 +61,10 @@ const asText = (html: string) =>
     })
     // One form for both sides: "Müller" typed decomposed (u + U+0308) did not match "Müller", and
     // a full-width "Ｍüller" is the same name to a reader.
-    .normalize("NFKC");
+    .normalize("NFKC")
+    // Characters a reader never sees -- a soft hyphen, zero-width spaces and joiners, the BOM --
+    // split a name for the matcher alone: `Zor&shy;blax` passed with ✓ (2026-11-07 review 5).
+    .replace(/[­​-‍⁠﻿]/g, "");
 
 /** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
 const readText = (p: string) => readFile(p, "utf8");
@@ -252,6 +255,19 @@ for (const file of files) {
     failures++;
     continue;
   }
+  // The block must HOLD every field row the file has: it ends at the first closing tag after the
+  // heading, so an empty `<div></div>` there (or the heading in a `<th>`) made it empty, the row
+  // check read nothing, and a filled Client row passed with ✅ (2026-11-07 review 5).
+  const inBlock = [...block.matchAll(FIELD_ROW)].length;
+  const inFile = [...out.matchAll(FIELD_ROW)].length;
+  if (inBlock !== inFile || inBlock < REPLACEMENTS.length) {
+    console.error(
+      `❌ ${name}: the project-details block holds ${inBlock} of the file's ${inFile} field row(s) — ` +
+        `refusing: the rows outside it cannot be checked.`,
+    );
+    failures++;
+    continue;
+  }
   // ROW by row, not label by label (2026-11-07 review 4): a second `<b>Client</b>:` row passed
   // because "client" was a label already read, and so did a Client whose first line was blank
   // (the rest on the lines after it, which carry no colon), and any line without one. Now every
@@ -314,8 +330,17 @@ for (const file of files) {
   // quiet the false positives. Widening the ignore list to fix a sloppy matcher
   // is how a redaction check ends up unable to fail.
   // Searched in the written file as TEXT (entities decoded): `M&uuml;ller` is Müller to a reader.
+  // And with its tags removed (review 5): `Zor<b></b>blax` reads "Zorblax", which neither the raw
+  // file nor a tags-to-spaces reading shows. A token of five letters or more is also found INSIDE
+  // a longer word -- `ZorblaxQuarry_member0` -- where a short one ("Inc") would flag innocent prose.
   const outText = asText(out);
-  const survivors = tokens.filter((t) => wholeWord(t).test(outText));
+  const joined = asText(out.replace(/<[^>]*>/g, ""));
+  const survivors = tokens.filter(
+    (t) =>
+      wholeWord(t).test(outText) ||
+      wholeWord(t).test(joined) ||
+      ([...t].length >= 5 && /\p{L}/u.test(t) && joined.toLowerCase().includes(t.toLowerCase())),
+  );
 
   // Counted, never printed: the survivors and the removed values ARE the client's data, and printing
   // them put a project name and a designer in the terminal and every session transcript

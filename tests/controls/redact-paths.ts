@@ -72,7 +72,13 @@ const SEP = String.raw`(?:\\{1,2}\/?|\/|%5[Cc]|%2[Ff])`;
 // A segment ends at an encoded separator too: run across `%5C`, a percent-encoded path was one
 // long "segment", and the space-tolerant username part then swallowed the prose after it.
 // Not a backtick either: a path in a Markdown code span took the closing "`" and the prose after it.
-const SEGMENT = String.raw`(?:(?!%5[Cc]|%2[Ff])[^\\/\s"'\x60])+`;
+// An apostrophe BETWEEN letters is part of a name (`O'Brennick Steel`): ending the segment there
+// left "'Brennick Steel\calc.html" behind, exit 0 (2026-11-07 review 5).
+const NAME_LETTER = "[A-Za-zÀ-ɏ]";
+const SEGMENT = String.raw`(?:(?!%5[Cc]|%2[Ff])(?:[^\\/\s"'\x60]|(?<=${NAME_LETTER})'(?=${NAME_LETTER})))+`;
+/** `word` matched in any case, for the rules that must stay case-SENSITIVE elsewhere ({@link CONT}). */
+const ci = (word: string) =>
+  word.replace(/[A-Za-z]/g, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
 // A last segment does not end in sentence punctuation: "…\job41," kept the comma's sentence whole
 // but took the comma, and "(see …\x)" its ")" (review 4).
 const SEG_END = String.raw`(?<![,.;:)\]}])`;
@@ -87,14 +93,20 @@ const SEG_END = String.raw`(?<![,.;:)\]}])`;
 const driveRe = (letter = "[A-Za-z]") =>
   String.raw`(?:(?<![A-Za-z0-9])${letter}(?::|%3[Aa])|(?<![\w.~-])/(?:mnt/|cygdrive/)?${letter}(?=/))`;
 const DRIVE = driveRe();
-const rule = (body: string) => new RegExp(`${DRIVE}${SEP}${body}`, "gi");
+// Case-sensitive ("g"): the continuation rules below tell a capitalised word from a lowercase one.
+const rule = (body: string) => new RegExp(`${DRIVE}${SEP}${body}`, "g");
+const USERS = ci("Users");
 
-// A folder name may hold spaces ("Program Files", "OneDrive - Acme Ltd"); an intermediate segment
-// may therefore run across single spaces, as long as a separator follows it. The LAST segment
-// runs across spaces only when it ends in a file extension ("Quarry Job.zip"), so prose after a
-// path is not swallowed -- and a file name with a space no longer leaves its second word behind.
-const MID = `${SEGMENT}(?: ${SEGMENT})*(?=${SEP})`;
-const LAST = String.raw`(?:${SEGMENT}(?: ${SEGMENT})*?\.[A-Za-z0-9]{1,8}(?![\w.])|${SEGMENT}${SEG_END})`;
+// A folder name may hold spaces ("Program Files", "OneDrive - Acme Ltd", and two in a row): an
+// intermediate segment may therefore run across spaces, as long as a separator follows it -- but
+// never into a drive (`from D:\a and then E:\b` was one path to the "E:"). A LAST segment, with no
+// separator after it to prove it is still a path, continues only into words that do not start
+// lowercase ({@link CONT}: "Acme Steel", "Job 41", not "to the folder and opened README.md", which
+// the extension branch used to reach lazily across the sentence; review 5).
+const NOT_DRIVE = "(?![A-Za-z](?::|%3[Aa]))";
+const CONT = String.raw`(?: +${NOT_DRIVE}(?![a-z\u00DF-\u00FF])${SEGMENT})`;
+const MID = `${SEGMENT}(?: +${NOT_DRIVE}${SEGMENT})*(?=${SEP})`;
+const LAST = String.raw`(?:${SEGMENT}${CONT}*?\.[A-Za-z0-9]{1,8}(?![\w.])|${SEGMENT}${CONT}*${SEG_END})`;
 const ANY_PATH = `${DRIVE}(?:${SEP}${MID})*${SEP}${LAST}`;
 // A network path, \\server\share\..., single- or JSON-escaped; not after a word,
 // a ":" or another backslash, so a drive path's own separators never start one. And //server/share
@@ -114,20 +126,53 @@ const POSIX_PATH = String.raw`(?<![\w.:/\\>-])\\?\/(?:${PSEG}(?: ${PSEG})*\\?\/)
  * `<home>\OneDrive - <employer>\Jobs\<client>\…`, a surname after a spaced username -- while the
  * residue check, looking for drive paths only, said "0 drive path(s) after" (2026-11-06 review).
  */
-// The username runs across spaces only where a separator follows it: `C:\Users\<name> and then`
-// took "and then" and the rest of the line as the name (review 4).
-const HOME_TAIL = `${SEGMENT}(?:(?: ${SEGMENT})+(?=${SEP}))?(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
+// The username runs across spaces where a separator follows it, or -- at the end -- into
+// capitalised words ({@link CONT}): `C:\Users\<name> and then` took "and then" as the name (review
+// 4), and a spaced `C:\Users\Kestrel Brumby` at a line's end then left "Brumby" (review 5).
+const HOME_TAIL = `${SEGMENT}(?:(?: +${NOT_DRIVE}${SEGMENT})+(?=${SEP})|${CONT}+)?(?:${SEP}${MID})*(?:${SEP}${LAST})?`;
 
+/** Host suffixes that name a private network, never a public site. */
+const INTRANET_TLD = String.raw`(?:corp|local|lan|internal|intranet|home|lab|localdomain|ad)(?![\w.-])`;
+
+/** Where a home is written through a shell's name for it (`~`, `%USERPROFILE%`, `$HOME`, `$env:…`). */
+const HOME_VARS = ["USERPROFILE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "ONEDRIVE", "TEMP", "TMP"];
+const HOME_NAME = String.raw`(?:~|%(?:${HOME_VARS.map(ci).join("|")})%|\$env:(?:${[...HOME_VARS, "HOME"].map(ci).join("|")})|\$\{?HOME\}?)`;
+
+/**
+ * Where a quoted path starts: an optional `file:` / `vscode:` scheme, then a drive, a network
+ * path either way round, any absolute POSIX path of two segments, or a home through its shell name.
+ * Review 5: only a fixed list of POSIX roots counted (`"/data/jobs/Zorblax Quarry"` kept
+ * "Quarry"), and a scheme, `~` or `%USERPROFILE%` in quotes was not a quoted path at all.
+ */
+const QUOTED_START = String.raw`(?:file:\/\/\/?|vscode:\/\/file\/)?(?:${DRIVE}${SEP}|\\{2,4}[A-Za-z0-9_.$-]+\\|\/\/[A-Za-z0-9_.$-]+\/|\/[\w.~@%+-]+\/|${HOME_NAME}${SEP})`;
 /**
  * A path written inside quotes, taken to the closing quote: there a last folder name may hold
  * spaces, and the unquoted rules stop it at the first one -- `cd "D:\Jobs\Acme Steel"` became
- * `"<path> Steel"`, the employer's name left (review 4). A drive path, a network path, or a POSIX
- * path under a home or a share; the quote is `"`, `'` or a backtick, JSON-escaped or not.
+ * `"<path> Steel"`, the employer's name left (review 4). The quote is `"`, `'` or a backtick,
+ * JSON-escaped or not, and closes only where no letter follows it: `'D:\Jobs\O'Brennick Steel'`
+ * does not end at `O'`. Curly quotes (`“…”`, `‘…’`) too ({@link QUOTED_CURLY}).
  */
 const QUOTED_PATH = new RegExp(
-  String.raw`(["'\x60])((?:${DRIVE}${SEP}|\\{2,4}[A-Za-z0-9_.$-]+\\|\/(?:home|Users|root|srv|mnt|media|Volumes|net|opt|tmp|var)\/)[^"'\x60\n]*?)(?=\\?\1)`,
-  "gi",
+  String.raw`(["'\x60])(${QUOTED_START}(?:(?!\1)[^\n])*?)(?=\\?\1(?!${NAME_LETTER}))`,
+  "g",
 );
+const QUOTED_CURLY = new RegExp(
+  String.raw`([“‘])(${QUOTED_START}[^\n”’]*?(?:’(?=${NAME_LETTER})[^\n”’]*?)*)(?=[”’](?!${NAME_LETTER}))`,
+  "g",
+);
+/** The placeholder for a quoted path: a home's, a network path's, or a path's; its scheme kept. */
+const quotedPlaceholder = (_m: string, quote: string, path: string) => {
+  const scheme = /^(?:file:\/\/\/?|vscode:\/\/file\/)/i.exec(path)?.[0] ?? "";
+  const bare = path.slice(scheme.length);
+  const kind = new RegExp(
+    String.raw`^(?:${DRIVE}${SEP}${USERS}${SEP}|\/(?:home|Users|root)\/|${HOME_NAME}${SEP})`,
+  ).test(bare)
+    ? "<home>"
+    : /^(?:\\{2}|\/\/)/.test(bare)
+      ? "<unc-path>"
+      : "<path>";
+  return `${quote}${scheme}${kind}`;
+};
 
 /**
  * This checkout, and the folder holding it, in any separator and any drive spelling. A
@@ -194,34 +239,26 @@ const RULES: Array<[RegExp, Replacement]> = [
   ...(WORK_FOLDER
     ? [
         [
-          rule(`Users${SEP}${SEGMENT}${SEP}${SEGMENT}${SEP}${escapeRe(WORK_FOLDER)}`),
+          rule(`${USERS}${SEP}${SEGMENT}${SEP}${SEGMENT}${SEP}${ci(escapeRe(WORK_FOLDER))}`),
           "<project>",
         ] as [RegExp, string],
       ]
     : []),
-  // Any other path in quotes, whole ({@link QUOTED_PATH}): a home, a network path, or a path.
-  [
-    QUOTED_PATH,
-    (_m: string, quote: string, path: string) =>
-      quote +
-      (new RegExp(String.raw`^(?:${DRIVE}${SEP}Users${SEP}|\/(?:home|Users|root)\/)`, "i").test(
-        path,
-      )
-        ? "<home>"
-        : /^\\{2}/.test(path)
-          ? "<unc-path>"
-          : "<path>"),
-  ],
+  // Any other path in quotes, whole ({@link QUOTED_PATH}, {@link QUOTED_CURLY}): a home, a network
+  // path, or a path, its scheme kept.
+  [QUOTED_PATH, quotedPlaceholder],
+  [QUOTED_CURLY, quotedPlaceholder],
   // A home folder and EVERYTHING below it (HOME_TAIL), in any separator.
-  [rule(`Users${SEP}${HOME_TAIL}`), "<home>"],
+  [rule(`${USERS}${SEP}${HOME_TAIL}`), "<home>"],
   // The same home written without its drive (`\Users\<name>\…`), or through a shell's name for it
   // -- `~\…`, `%USERPROFILE%\…`, `$env:USERPROFILE\…`, `$HOME/…` -- and everything below. Each
-  // passed whole, folder and client names included (2026-11-07 review).
-  [new RegExp(String.raw`(?<![\w:\\/>%])\\{1,2}Users${SEP}${HOME_TAIL}`, "gi"), "<home>"],
+  // passed whole, folder and client names included (2026-11-07 review). Case-sensitive, as
+  // {@link CONT} needs, the names matched in any case by {@link ci}.
+  [new RegExp(String.raw`(?<![\w:\\/>%])\\{1,2}${USERS}${SEP}${HOME_TAIL}`, "g"), "<home>"],
   [
     new RegExp(
-      String.raw`(?:%(?:USERPROFILE|HOMEPATH|APPDATA|LOCALAPPDATA|ONEDRIVE|TEMP|TMP)%|\$env:(?:USERPROFILE|HOME|HOMEPATH|APPDATA|LOCALAPPDATA|OneDrive|TEMP|TMP)\b|\$\{?HOME\}?(?![\w]))(?:${SEP}${HOME_TAIL})?`,
-      "gi",
+      String.raw`(?:%(?:${HOME_VARS.map(ci).join("|")})%|\$env:(?:${[...HOME_VARS, "HOME"].map(ci).join("|")})\b|\$\{?HOME\}?(?![\w]))(?:${SEP}${HOME_TAIL})?`,
+      "g",
     ),
     "<home>",
   ],
@@ -249,6 +286,15 @@ const RULES: Array<[RegExp, Replacement]> = [
   // each passed whole (review 4).
   [/(?<![\w])(smb|afp|nfs|cifs|webdav|davs?):\/\/[^\s"'<>)\]\x60]+/gi, "$1://<unc-path>"],
   [/(?<![\w:/\\>])\/\/\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\/[^\s"'<>)\]\x60]*/g, "<unc-path>"],
+  // ...or to an intranet host: a dotted host is a URL's (`//cdn.example.org/…`), but not one under
+  // an intranet suffix (`//fileserver7.corp/jobs/…` passed whole; review 5).
+  [
+    new RegExp(
+      String.raw`(?<![\w:/\\>])\/\/[A-Za-z0-9_$-]+(?:\.[A-Za-z0-9_$-]+)*\.${INTRANET_TLD}(?::\d+)?\/[^\s"'<>)\]\x60]*`,
+      "gi",
+    ),
+    "<unc-path>",
+  ],
   // Last: any network path, then any drive path still standing.
   [new RegExp(UNC, "g"), "<unc-path>"],
   [new RegExp(ANY_PATH, "g"), "<path>"],
@@ -272,8 +318,26 @@ const RULES: Array<[RegExp, Replacement]> = [
 // the full-width and small "@" (U+FF20, U+FE6B): ASCII-only, each passed (2026-11-07 review).
 // The domain may be an address literal (`bob@[192.168.1.1]`), and its last label one letter: a
 // transcript exporter clips long lines, and `…@brumby-mail.o` passed (review 4).
-const EMAIL =
-  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}._%+-]+)(?:@|＠|﹫|%40|\\u0040|&#0*64;|&#x0*40;|&commat;)(?:\[[0-9A-Fa-f.:]+\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}+)/giu;
+// Review 5: clipped anywhere -- before the dot (`…@brumby-m`), at the "@" itself, or with no dot at
+// all (`…@brumbymail`, an intranet host) -- and a double-encoded "@" (`%2540`). The domain then
+// needs only one letter; a `pkg/name@version` (after a "/", no local part of its own) and a
+// version (`react@18.3.1`, no letter) are not addresses.
+const AT = String.raw`(?:@|＠|﹫|%2540|%40|\\u0040|&#0*64;|&#x0*40;|&commat;)`;
+/** Where an address ends: the end, whitespace, a quote, a bracket, punctuation -- never a "/". */
+const ADDRESS_END = String.raw`(?=$|[\s…"'<>)\]\x60,;:])`;
+/**
+ * The domains an address may have. Never a version (`@v5`, `@1.2.3`, `@v1.2.3`: a GitHub action
+ * or package ref) and never followed by "/" (`name@scope/pkg`). Dotted with a last label of any
+ * length (`…@brumby-mail.o`, clipped) or a trailing dot; dot-less (an intranet host) or empty
+ * (clipped at the "@") only where the address visibly ends.
+ */
+const DOMAIN = String.raw`(?!v?\d+(?:\.\d+)*(?![\p{L}\p{N}-]))(?:\[[0-9A-Fa-f.:]+\]|[\p{L}\p{N}-]*\p{L}[\p{L}\p{N}-]*(?:\.[\p{L}\p{N}-]+)+\.?(?![/\p{L}\p{N}-])|[\p{L}\p{N}-]*\p{L}[\p{L}\p{N}-]*\.?${ADDRESS_END}|${ADDRESS_END})`;
+const EMAIL = new RegExp(
+  // A quoted local part (`"kestrel brumby"@…`) only with a full domain: in a transcript's JSON a
+  // string ending `\"` before an "@" (`"\"@scope/pkg"`) is not an address.
+  String.raw`(?<![\p{L}\p{N}/._%+-])(?:"[^"\n\\]{1,64}"${AT}[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}|[\p{L}\p{N}._%+-]+${AT}${DOMAIN})`,
+  "giu",
+);
 
 /**
  * The residue check's email pattern, deliberately LOOSER than {@link EMAIL}: spaces around the
@@ -283,15 +347,21 @@ const EMAIL =
 // Its DOMAIN is looser too (review 4: it was the rule's own, so a clipped `…@brumby-mail.o` passed
 // both): any address literal, or a first label holding two letters followed by a dot and anything
 // -- which keeps `react@18.3.1` and `checkout@v5.1.0` (a version, not a domain) out of it.
-const EMAIL_RESIDUE =
-  /[\p{L}\p{N}._%+"-]+\s*(?:@|＠|﹫|%40|\\u0040|&#0*64;|&#x0*40;|&commat;|[([]at[)\]])\s*(?:\[[0-9A-Fa-f.:]+\]|[\p{L}\p{N}-]*\p{L}[\p{L}\p{N}-]*\p{L}[\p{L}\p{N}-]*\.[\p{L}\p{N}.-]*)/giu;
+// Review 5: looser again than the rule, now that the rule takes clipped and dot-less addresses --
+// any domain with a letter, an address literal, or none (clipped at the "@"); the spaced "(at)"
+// spellings as before. Still not after a "/" (`owner/action@v5`) or before a digit-only "domain".
+const EMAIL_RESIDUE = new RegExp(
+  // A local part has a letter or digit: a lone quote before an "@" is JSON (`"@type":`), not one.
+  String.raw`(?<![\p{L}\p{N}/._%+"-])[._%+"-]*[\p{L}\p{N}][\p{L}\p{N}._%+"-]*(?:${AT}|\s*[([]at[)\]]\s*)${DOMAIN}`,
+  "giu",
+);
 
 /**
  * Addresses that name no one: the commit trailer's, GitHub's SSH user, and the reserved example
  * and test domains (RFC 2606 / 6761) the test suite writes. Everything else is redacted.
  */
 const isPublicEmail = (e: string) => {
-  const plain = e.replace(/%40|\\u0040|＠|﹫/i, "@");
+  const plain = e.replace(/%2540|%40|\\u0040|＠|﹫/i, "@");
   return (
     /^(?:noreply@anthropic\.com|git@github\.com)$/i.test(plain) ||
     /@(?:[\w-]+\.)*(?:example\.(?:com|net|org)|example|invalid|test|localhost)$/i.test(plain)
@@ -322,9 +392,15 @@ const drivePaths = (s: string) => [
   ...(s.match(
     /<(?:home|path|unc-path)>(?:(?:\\{1,2}|\/)[^\s"'<>]| [^\s"'<>\\/]+(?:\\{1,2}|\/))/g,
   ) ?? []),
-  // A share named by a network URI, or a network path to an IP address.
+  // A share named by a network URI, or a network path to an IP address or an intranet host.
   ...(s.match(/(?:smb|afp|nfs|cifs|webdav|davs?):\/\/(?!<)\S|\/\/\d{1,3}(?:\.\d{1,3}){3}[:/]/gi) ??
     []),
+  ...(s.match(
+    new RegExp(
+      String.raw`(?<![\w:/\\>])\/\/[A-Za-z0-9_$-]+(?:\.[A-Za-z0-9_$-]+)*\.${INTRANET_TLD}\/`,
+      "gi",
+    ),
+  ) ?? []),
   ...(s.match(/(?<![A-Za-z0-9])[A-Za-z]--[A-Za-z0-9]/g) ?? []),
   // Looser than the POSIX redaction rule (any segment characters), for the same reason as
   // EMAIL_RESIDUE: a check that matches only what the rules replace cannot fail.
@@ -372,13 +448,15 @@ console.log(`file:      ${targetLabel}`);
 console.log(`rules hit: ${applied.length ? applied.join(", ") : "none"}`);
 console.log(`username:  ${before} occurrence(s) before, ${after} after`);
 
+// Where, by line number only: the 70 characters either side it used to print were the very text it
+// protects -- a client and a job number came out whole (review 5). Open the file at those lines.
 if (after > 0) {
-  const sample = [...text.matchAll(new RegExp(`.{0,70}${escapeRe(USER)}.{0,70}`, "gi"))].slice(
-    0,
-    5,
-  );
-  console.log("remaining context:");
-  for (const s of sample) console.log(`  …${s[0].replace(/\s+/g, " ")}…`);
+  const one = new RegExp(escapeRe(USER), "i"); // not global: `test` keeps no position
+  const lines = text
+    .split("\n")
+    .flatMap((l, i) => (one.test(l) ? [i + 1] : []))
+    .slice(0, 20);
+  console.log(`remaining at line(s): ${lines.join(", ")}`);
 }
 
 const leftPaths = drivePaths(text);
