@@ -3862,7 +3862,8 @@ export function compareAgainstPdf(
   // and non-letter removed, `0.9` was found in `0.95`, `125` in `1250`, and two table cells "12"
   // and "5" read as "125" -- a value check that under-reports absence is the LENIENT direction,
   // not the safe one (2026-11-08, class B: 30% of the samples' numbers would have passed deleted).
-  const text = normalizeText(pdf.text);
+  // A wrap within one element ({@link SOFT_BREAK}) joined where a source token stands across it.
+  const text = normalizeText(resolveSoftBreaks(pdf.text, src.numbers, src.words));
   const lower = text.toLowerCase();
 
   const missingWords = [...src.words].filter((w) => !hasWord(lower, w, text));
@@ -3907,6 +3908,47 @@ export function compareAgainstPdf(
     splitDiagrams,
     failures,
   };
+}
+
+/**
+ * A line break that may fall inside a token (U+2028 LINE SEPARATOR): the CLI writes it into a
+ * page's text at a wrap within one element between two letters or digits, where Chrome's PDF
+ * cannot say whether the wrap split a token (`word-break: break-all` printed 77.531234 as "77.5"
+ * / "312" / "34") or fell at a space -- it writes no space at a line's end either way (task 18
+ * item 3).
+ */
+const SOFT_BREAK = String.fromCharCode(0x2028);
+
+/**
+ * Each soft break decided by the source: joined where one of the source's own numbers or words
+ * stands WHOLE across it ("77.5⏎312⏎34" where the source has 77.531234), a line break everywhere
+ * else ("LC3⏎77.5" stays two). Decided one break at a time -- read all one way, the wrap after
+ * "LC3" made "377.531234".
+ */
+function resolveSoftBreaks(
+  text: string,
+  numbers: Iterable<string>,
+  words: Iterable<string>,
+): string {
+  if (!text.includes(SOFT_BREAK)) return text;
+  const join = new Set<number>();
+  const soft = "\\u2028?";
+  const esc = (c: string) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const spanning = (re: RegExp) => {
+    for (const m of text.matchAll(re)) {
+      for (let k = m.index; k < m.index + m[0].length; k++) if (text[k] === SOFT_BREAK) join.add(k);
+    }
+  };
+  for (const n of numbers) {
+    spanning(new RegExp(`(?<![\\d.])${[...n].map(esc).join(soft)}(?!\\d|\\.\\d)`, "gu"));
+  }
+  for (const w of words) {
+    if ([...w].length < 2 || !/^\p{L}+$/u.test(w)) continue;
+    spanning(
+      new RegExp(`(?<!\\p{L})${[...w].map(esc).join(soft)}(?!\\p{L})`, w.length > 3 ? "giu" : "gu"),
+    );
+  }
+  return text.replace(new RegExp(SOFT_BREAK, "g"), (_c, at: number) => (join.has(at) ? "" : "\n"));
 }
 
 /** One report's own conservation: what its source holds that its own part of the PDF lacks. */
@@ -3999,7 +4041,10 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
       .slice(i === 0 ? 0 : starts[i], i + 1 < starts.length ? starts[i + 1] : pageTexts.length)
       .join("\n");
     const own = sourceTally(source);
-    const text = normalizeText(segment);
+    // A wrap within one element ({@link SOFT_BREAK}) joined where this report's own token stands
+    // whole across it, a line break everywhere else.
+    const page = resolveSoftBreaks(segment, own.numbers.keys(), own.words.keys());
+    const text = normalizeText(page);
     const lower = text.toLowerCase();
     // Each as many times as the source shows it: a token found fewer times is named with its
     // counts, "30.483 (2 of 3)"; one not found at all, by itself.
@@ -4008,13 +4053,14 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
         const found = count(t);
         return found >= n ? [] : [found === 0 ? t : `${t} (${found} of ${n})`];
       });
+    const neighbours = neighbourTally(page);
     // Maths left as prose prints its delimiters: a declared pair around text in this report's own
     // pages means the bake never read it. The LaTeX check looks for the standard delimiters only;
     // a report's own -- `@@`, a bare `$` -- were looked for only as the BAKE read them, so a config
     // it could not read hid both sides at once (task 18 item 1). Named "... printed as prose".
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const printed = declaredDelimiters(source).flatMap(([open, close]) =>
-      new RegExp(`${esc(open)}[^\\n]{0,200}?\\S[^\\n]{0,200}?${esc(close)}`).test(segment)
+      new RegExp(`${esc(open)}[^\\n]{0,200}?\\S[^\\n]{0,200}?${esc(close)}`).test(page)
         ? [`${open}..${close} printed as prose`]
         : [],
     );
@@ -4027,7 +4073,7 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
       missingNumbers: [
         ...short(own.numbers, (n) => countNumber(text, n)),
         // A number with the wrong neighbour is a changed value: "12 m" where the PDF has "12 N".
-        ...((pdf) => short(own.pairs, (p) => pdf.get(p) ?? 0))(neighbourTally(segment)),
+        ...short(own.pairs, (p) => neighbours.get(p) ?? 0),
       ],
     };
   });

@@ -658,16 +658,62 @@ async function inlineFonts(css: string, cacheDir: string): Promise<string> {
  * "0246", and a value check could not tell them from the numbers they are not (2026-11-08, class
  * B). Measured on the samples: kerned pieces touch (gap 0), word gaps and cells are 0.2–5 heights.
  */
+/**
+ * A line break that may fall INSIDE a token (U+2028): written at a wrap within one structure
+ * element between two letters or digits. The core joins it where a source token stands whole
+ * across it, and reads a line break everywhere else (task 18 item 3).
+ */
+const SOFT_BREAK = String.fromCharCode(0x2028);
+
 function pageText(items: unknown[]): string {
-  type Item = { str: string; transform: number[]; width: number; height: number; hasEOL?: boolean };
+  type Item = {
+    str: string;
+    transform: number[];
+    width: number;
+    height: number;
+    hasEOL?: boolean;
+    type?: string;
+    id?: string;
+  };
   let out = "";
-  let prev: { x: number; y: number; w: number; h: number } | null = null;
+  let prev: { x: number; y: number; w: number; h: number; mc: string } | null = null;
+  // The marked content each item is drawn in: Chrome gives every block element its own, so two
+  // pieces in one are one element's text, wrapped (measured: a `break-all` cell's "77.5", "312",
+  // "34" share one; separate cells and paragraphs do not).
+  const marks: string[] = [];
+  // A line ended (an end-of-line item): what follows decides whether it is a break or a wrap.
+  let ended: { mc: string } | null = null;
+  let lastMc = "";
+  const breakBefore = (str: string, mc: string) => {
+    if (ended === null) return;
+    // Within one element, between two letters or digits: the wrap may split a token (`word-break:
+    // break-all` printed 77.531234 as "77.5" / "312" / "34", and the build failed a correct PDF).
+    // Chrome writes no space at a line's end even at a word wrap, so which it was is the source's
+    // to say: the core joins it only where a source token stands whole across it.
+    const inToken =
+      ended.mc !== "" &&
+      ended.mc === mc &&
+      /[\p{L}\p{N}.,]$/u.test(out) &&
+      /^[\p{L}\p{N}.,]/u.test(str);
+    out += inToken ? SOFT_BREAK : "\n";
+    ended = null;
+  };
   for (const raw of items) {
     const it = raw as Partial<Item>;
+    if (it.type === "beginMarkedContentProps" || it.type === "beginMarkedContent") {
+      marks.push(it.id ?? "");
+      continue;
+    }
+    if (it.type === "endMarkedContent") {
+      marks.pop();
+      continue;
+    }
     if (typeof it.str !== "string" || !Array.isArray(it.transform)) continue;
+    const mc = marks[marks.length - 1] ?? "";
     const x = it.transform[4];
     const y = it.transform[5];
     const h = Math.abs(it.transform[3]) || it.height || 1;
+    if (it.str !== "") breakBefore(it.str, mc);
     if (prev !== null && it.str !== "") {
       const size = Math.max(h, prev.h);
       const dy = Math.abs(y - prev.y);
@@ -676,8 +722,11 @@ function pageText(items: unknown[]): string {
       // number apart from another stands 4.3 heights from it or more (measured 2026-11-08 on the
       // samples and the 48-report set).
       const digits = /[\d.,]$/.test(out) && /^[\d.,]/.test(it.str);
-      if (dy > size) out += "\n";
-      else if (
+      if (dy > size) {
+        // A new line without an end-of-line item: a wrap too, if within one element.
+        ended = { mc: prev.mc };
+        breakBefore(it.str, mc);
+      } else if (
         dy > 0.3 * size ||
         x - (prev.x + prev.w) > (digits ? 0.35 : 0.15) * size ||
         // A change of size: a subscript set smaller, touching its base (`λ` then `rf`).
@@ -687,12 +736,20 @@ function pageText(items: unknown[]): string {
       }
     }
     out += it.str;
-    if (it.str !== "") prev = { x, y, w: it.width ?? 0, h };
+    if (it.str !== "") {
+      prev = { x, y, w: it.width ?? 0, h, mc };
+      lastMc = mc;
+    }
     if (it.hasEOL) {
-      out += "\n";
+      // Held until the next item says whether it was a wrap; a second end in a row is a break.
+      // The line that ended is the last item that drew text: an empty end-of-line item opens
+      // each element (measured), and is no part of the line before it.
+      if (ended !== null) out += "\n";
+      ended = { mc: lastMc };
       prev = null;
     }
   }
+  if (ended !== null) out += "\n";
   return out;
 }
 
@@ -915,7 +972,8 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     obs.imagesPerPage.push(imagesHere);
 
     // Items are text runs or marked-content markers; only the former have text.
-    const items = (await page.getTextContent()).items;
+    // With the marked content, so pageText knows which element each piece is drawn in.
+    const items = (await page.getTextContent({ includeMarkedContent: true })).items;
     const text = pageText(items);
     // Text too small to read is still in the text layer: 0.17 pt and a `scale(0.01)` passed
     // every word check (class B, re-check 2). The size is the item's smaller axis on the page.

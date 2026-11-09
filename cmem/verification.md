@@ -176,6 +176,10 @@ occurrence deleted. Now (1% and 0%, the 1% being an unsigned number after a minu
   table row (a unit in a cell of its own pairs with its number) — because across other elements
   the page's reading order is the layout's; on the PDF side a line break is a space, so a
   wrapped pair still counts. The report's own maths delimiters are blanked from the source text.
+- **A token wrapped across lines (since 2026-11-08, #93).** At a wrap within one element (one
+  marked-content id) between two letters or digits, the page text carries a soft break; it is
+  joined only where one of the report's own tokens stands whole across it (`break-all` printing
+  77.531234 as "77.5" / "312" / "34"), and is a line break everywhere else.
 - **Number tokens keep** their sign (a "-" with nothing alphanumeric before it, so `M_{p}-0.7` is a
   binary minus), thousands separators, decimal part and exponent; `−` and the dashes read as "-".
   A comma is a thousands separator only inside a whole integer of groups (`1,250`, `12,300.5`);
@@ -208,8 +212,8 @@ is the side that does not depend on the bake); TeX sub/superscript marks in thei
 (`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
 ⚠️ Still NOT seen: text covered by an opaque box, or grey on grey; a diagram's drawing (only its
 labels are text) and an image's pixels; a one-letter unit is caught only beside its number (#92: in
-its run of text, or in the next cell of its row). A number broken across two lines fails (lines are never
-joined, else table rows would be) — the loud direction. 🔒 **Each of these is to be FIXED, not kept
+its run of text, or in the next cell of its row). (A number broken across two lines failed until #93; it is
+joined now where the source has it whole.) 🔒 **Each of these is to be FIXED, not kept
 (owner, 2026-11-08: "We need fixes not limits")**, (fixed so far: occurrences, size and white-page
 contrast, #89; maths with bare marks, by reading each report's own delimiters, #90; report
 identity and order, #91; a number's unit and operators, #92): the plan and order are roadmap task

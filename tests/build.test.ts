@@ -3384,6 +3384,38 @@ test("class B, task 18 item 2: a number with its neighbours", async () => {
   assert.deepEqual(missing(rows("m", "N"), "12 m\n5 N"), []);
 });
 
+test("class B, task 18 item 3: a token wrapped across lines", { timeout: TIMEOUT }, async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const heading = "MEMBER # 1 DESIGN REPORT";
+  const src = (body: string) => `<html><body><h2>${heading}</h2>${body}</body></html>`;
+  // The soft break the CLI writes at a wrap within one element (built from its code point).
+  const soft = String.fromCharCode(0x2028);
+  const missing = (body: string, pdf: string) => {
+    const r = core.compareEachReport([src(body)], [`${heading}\n${pdf.split("|").join(soft)}`])
+      .reports[0];
+    return [...r.missingWords, ...r.missingNumbers];
+  };
+  // 1. A wrap inside a number or a word joins it, where the source has it whole.
+  assert.deepEqual(missing("<p>LC3 77.531234</p>", "LC3|77.5|312|34"), []);
+  assert.deepEqual(missing("<p>Axial load</p>", "Ax|ial|load"), []);
+  // 2. ...nowhere else: a wrap at a space keeps its two tokens, and a changed piece is missing.
+  assert.deepEqual(missing("<p>values 12 5</p>", "values|12|5"), []);
+  assert.ok(
+    missing("<p>LC3 77.531234</p>", "LC3|77.5|312|35").includes("77.531234"),
+    "a changed piece passed",
+  );
+
+  // 3. End to end: Chrome wraps a narrow `break-all` cell inside its number and its word.
+  const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+  const dir = join(work, "task18-3-break-all");
+  mkdirSync(dir, { recursive: true });
+  const cell = `<div style="width:2.2em;word-break:break-all">Zorblaxian 77.531234</div>`;
+  writeFileSync(join(dir, "member_0_report.html"), sample.replace(/<\/body>/i, `${cell}</body>`));
+  const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+  assert.equal(r.code, 0, tail(r.out));
+  has(r.out, /PASS/);
+});
+
 test(
   "class B, task 18 item 2: a row's cells pair on the page Chrome prints",
   { timeout: TIMEOUT },

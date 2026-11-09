@@ -1197,7 +1197,8 @@ class-B re-check at the end:
 4. ✅ **DONE 2026-11-08 (known-issues #92)** — **2, a number with its neighbours:** checked with the token after it (a unit, single letters
    included; an operator; `%`) and the operator before it. `30.483 <` → `>`, `12.5+3` → `12.5-3`
    and `85%` → `85` passed. Option: pair a value with its row label too.
-5. **3, a number wrapped across lines:** joined only inside one structure element (Chrome tags its
+5. ✅ **DONE 2026-11-08 (known-issues #93; marked content was enough, the structure tree was not
+   needed)** — **3, a number wrapped across lines:** joined only inside one structure element (Chrome tags its
    PDFs: Table/TR/TD/TH/H3, measured), at a break directly between digits, with no space glyph at
    the line's end. Measure first whether Chrome emits that glyph at an ordinary word wrap.
 6. **4, the rest:** each filled shape (box, colour, alpha, paint order) and each text show's box in
@@ -1215,9 +1216,9 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 5 (item 3, a number wrapped across lines, via the structure tree). Group 4's
-last gap (a unit in a cell of its own) was fixed before it (owner, 2026-11-08): a table row's
-cells are one run.
+**Next step:** group 6 (item 4, the rest: backgrounds, covering boxes, contrast against them).
+Group 4's last gap (a unit in a cell of its own) was fixed before group 5 (owner, 2026-11-08): a
+table row's cells are one run.
 
 🔒 **Owner, 2026-11-08: "skips need fixes also, unless it will be fixed in a different class."**
 Nothing is set aside without a fix. Recorded for the class it belongs to:
