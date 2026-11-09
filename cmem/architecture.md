@@ -42,6 +42,11 @@ report is dropped in beside the samples. Only `scripts/sanitize-report.ts` moves
 | `src/report_core.ts` | **everything, browsers included** | every transform; **zero I/O** |
 | `src/report_runtime.ts` | Deno, Node, Bun | filesystem, process, browser discovery |
 | `main.ts` | Deno, Node, Bun | orchestration, reporting, the CLI |
+| `src/report_svg.ts` | everything (pure) | the verification's own reading of a drawing and its comparison with the PDF (task 18 group 8; not in the exports map) |
+| `src/report_filter.ts` | everything (pure) | the verification's own SVG filter primitives (task 18 8i; not in the exports map) |
+
+(The two verification modules came with class B, 2026-11-08/09; the title stays "three" for the
+three the package exports.)
 
 **The core performs no I/O — strings in, strings out.** That single constraint is what lets it run in a
 browser unchanged, and it is worth defending: the moment the core reads a file, the browser path dies.

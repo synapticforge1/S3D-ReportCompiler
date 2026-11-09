@@ -3515,10 +3515,10 @@ test(
     );
     assert.ok(read.shapes[6].dashed.length > 20, "a dashed line cut into its dashes");
     //    What it does not read is named, never passed.
-    // (A marker or a gradient is read since 8b, a <pattern> since 8g, a mask since 8h; a filter
-    // and a foreignObject are not, yet.)
+    // (A marker or a gradient is read since 8b, a <pattern> since 8g, a mask since 8h, a filter
+    // since 8i; a <switch> and a foreignObject are not, yet.)
     const odd = svgs.readSvg(
-      `<svg><path d="M0 0L9 9" filter="url(#f)"/><foreignObject width="9" height="9"/></svg>`,
+      `<svg><switch><path d="M0 0L9 9"/></switch><foreignObject width="9" height="9"/></svg>`,
     );
     assert.equal(odd.unread.length, 2, JSON.stringify(odd.unread));
 
@@ -4600,6 +4600,175 @@ test(
     );
     const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
     assert.equal(r.code, 0, tail(r.out));
+  },
+);
+
+// Group 8i: filters, one primitive (or chain) an element, laid out apart.
+const PROBE_8I = `<svg viewBox="0 0 300 150" width="600" height="300" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<filter id="i8-blur"><feGaussianBlur stdDeviation="2"/></filter>
+<filter id="i8-off"><feOffset dx="3" dy="2"/></filter>
+<filter id="i8-flood"><feFlood flood-color="#cc0000" flood-opacity="0.5"/></filter>
+<filter id="i8-sat"><feColorMatrix type="saturate" values="0.3"/></filter>
+<filter id="i8-tr"><feComponentTransfer><feFuncG type="linear" slope="0.5" intercept="0.2"/></feComponentTransfer></filter>
+<filter id="i8-drop" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="3" dy="3" stdDeviation="1" flood-color="#000000" flood-opacity="0.5"/></filter>
+<filter id="i8-dil"><feMorphology operator="dilate" radius="1.5"/></filter>
+<filter id="i8-in"><feFlood flood-color="#0000cc" result="f"/><feComposite in="f" in2="SourceAlpha" operator="in"/></filter>
+<filter id="i8-merge" width="150%"><feOffset dx="6" dy="0" result="o"/><feMerge><feMergeNode in="o"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect x="20" y="15" width="50" height="25" fill="#cc6600" filter="url(#i8-blur)"/>
+<rect x="120" y="15" width="50" height="25" fill="#cc6600" opacity="0.6" filter="url(#i8-off)"/>
+<rect x="220" y="15" width="50" height="25" fill="#cc6600" filter="url(#i8-flood)"/>
+<rect x="20" y="62" width="50" height="25" fill="#cc6600" filter="url(#i8-sat)"/>
+<rect x="120" y="62" width="50" height="25" fill="#cc6600" filter="url(#i8-tr)"/>
+<circle cx="245" cy="72" r="12" fill="#cc6600" filter="url(#i8-drop)"/>
+<rect x="20" y="110" width="50" height="25" fill="#cc6600" filter="url(#i8-dil)"/>
+<rect x="120" y="110" width="50" height="25" fill="#cc6600" filter="url(#i8-in)"/>
+<rect x="210" y="110" width="40" height="25" fill="#cc6600" filter="url(#i8-merge)"/>
+<rect x="285" y="5" width="10" height="10" fill="#333333"/>
+</svg>`;
+
+test(
+  "class B, task 18 group 8i: a filter, its image against the source run through it",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const fx = await import(pathToFileURL(join(ROOT, "src", "report_filter.ts")).href);
+    // 1. The reader: each filtered element is a filter use, its content not a shape of its own.
+    const read = svgs.readSvg(PROBE_8I);
+    assert.deepEqual(read.unread, []);
+    assert.equal(read.shapes.length, 1, "only the unfiltered square, which places the drawing");
+    assert.equal(read.filters.length, 9);
+    assert.ok(
+      read.filters.every((f: { linear: boolean }) => f.linear),
+      "linearRGB by default",
+    );
+    assert.deepEqual(
+      read.filters[0].region.map((v: number) => +v.toFixed(2)),
+      [15, 12.5, 75, 42.5],
+      "the box widened by a tenth",
+    );
+    // 2. The primitives: a blur keeps the alpha it spreads, an offset moves, a flood fills its region,
+    //    a linear transfer runs in linear light (Chrome's green 136 at slope 0.5, intercept 0.2 is
+    //    154, measured).
+    const one = fx.blank(21, 21);
+    one.data.set([1, 1, 1, 1], 4 * (10 * 21 + 10));
+    const spread = fx.blur(one, 2, 2);
+    let total = 0;
+    for (let k = 0; k < 21 * 21; k++) total += spread.data[4 * k + 3];
+    assert.ok(Math.abs(total - 1) < 1e-9, `a blur conserves: ${total}`);
+    assert.equal(fx.offset(one, 2, 1).data[4 * (11 * 21 + 12) + 3], 1);
+    assert.equal(fx.flood(4, 4, [1, 0, 0, 0.5], [1, 1, 3, 3]).data[4 * (2 * 4 + 2) + 3], 0.5);
+    assert.equal(fx.flood(4, 4, [1, 0, 0, 0.5], [1, 1, 3, 3]).data[3], 0);
+    const g = fx.blank(1, 1);
+    g.data.set([0, 136 / 255, 0, 1]);
+    const out = fx.runFilter(
+      {
+        primitives: [
+          {
+            tag: "fecomponenttransfer",
+            attrs: {},
+            funcs: { fefuncg: { type: "linear", slope: "0.5", intercept: "0.2" } },
+          },
+        ],
+        linear: true,
+        unit: [1, 1],
+        region: [0, 0, 1, 1],
+      },
+      g,
+    );
+    assert.equal(Math.round(out.data[1] * 255), 154);
+    // 3. The comparison: an image built from the source's own run matches; the same pixels against
+    //    a different deviation, or at another opacity, do not.
+    const base = [2, 0, 0, -2, 0, 300];
+    const use = read.filters[0];
+    const toPage = svgs.mul(use.e, base);
+    const [rx0, ry0, rx1, ry1] = use.region;
+    const [W, H] = [Math.round(2 * (rx1 - rx0)), Math.round(2 * (ry1 - ry0))];
+    const m = [2 * (rx1 - rx0), 0, 0, 2 * (ry1 - ry0), 2 * rx0, 300 - 2 * ry1];
+    const laid = svgs.filterExpected(use, m, W, H, toPage);
+    const data = new Uint8Array(W * H * 4);
+    for (let j = 0; j < H; j++)
+      for (let i = 0; i < W; i++) {
+        const k = 4 * ((j - laid.gj0) * laid.GW + (i - laid.gi0));
+        const a = laid.expected.data[k + 3];
+        const px = [0, 1, 2].map((c) => (a > 0 ? laid.expected.data[k + c] / a : 0));
+        data.set(
+          [...px.map((v: number) => Math.round(v * 255)), Math.round(a * 255)],
+          4 * (j * W + i),
+        );
+      }
+    const paint = {
+      page: 1,
+      order: 0,
+      m,
+      width: W,
+      height: H,
+      alpha: 1,
+      clips: [],
+      pixels: { width: W, height: H, data },
+    };
+    assert.equal(svgs.filterDifference(use, paint, toPage), null, "the source's own run");
+    const wider = { ...use, primitives: [{ ...use.primitives[0], attrs: { stddeviation: "3" } }] };
+    assert.match(String(svgs.filterDifference(wider, paint, toPage)), /: \d+ of \d+ pixels differ/);
+    assert.match(
+      String(svgs.filterDifference(use, { ...paint, alpha: 0.5 }, toPage)),
+      /at opacity 0\.50, 1\.00/,
+    );
+    // An image of only the left half: what the filter paints on the right lies beyond it.
+    const half = Math.floor(W / 2);
+    const left = new Uint8Array(half * H * 4);
+    for (let j = 0; j < H; j++)
+      left.set(data.subarray(4 * j * W, 4 * (j * W + half)), 4 * j * half);
+    const cropped = {
+      ...paint,
+      m: [m[0] * (half / W), 0, 0, m[3], m[4], m[5]],
+      width: half,
+      pixels: { width: half, height: H, data: left },
+    };
+    assert.match(
+      String(svgs.filterDifference(use, cropped, toPage)),
+      /paints \d+ pixel\(s\) beyond the image/,
+    );
+    // A drawing of labels alone is placed by its labels (it passed unchecked): two labels, runs
+    // where Chrome would set them; one moved fails, though either alone could place the drawing.
+    const words = svgs.readSvg(
+      `<svg viewBox="0 0 100 50" width="100" height="50"><text x="10" y="20" font-size="10">Alpha</text><text x="60" y="40" font-size="10">Omega</text></svg>`,
+    );
+    const runFor = (l: { text: string; x: number; y: number }, dx = 0) => ({
+      page: 1,
+      text: l.text,
+      x: 2 * l.x + dx,
+      y: 300 - 2 * l.y,
+      width: 60,
+      size: 20,
+      dx: 1,
+      dy: 0,
+    });
+    const labelRuns = words.labels.map((l: { text: string; x: number; y: number }) => runFor(l));
+    assert.deepEqual(svgs.compareSvg(words, [], labelRuns, new Set()).problems, []);
+    const moved = [labelRuns[0], runFor(words.labels[1], 25)];
+    assert.ok(
+      svgs
+        .compareSvg(words, [], moved, new Set())
+        .problems.some((p: string) => /the label "\w+" not where its source puts it/.test(p)),
+      "a label moved",
+    );
+    // The opacity is the image's, applied after the filter: its content is read at full strength.
+    assert.equal(read.filters[1].alpha, 0.6);
+    assert.equal(read.filters[1].content[0].fillAlpha, 1);
+
+    // 4. End to end: Chrome draws each as one image, and the build PASSES -- the images counted.
+    const dir = join(work, "task18-8i");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8I}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /graphics: 10 image paint\(s\), 10 expected/);
   },
 );
 

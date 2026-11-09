@@ -965,6 +965,42 @@ function imageDifference(a: Pixels, b: Pixels): string | null {
   return differ === 0 ? null : `${differ} of ${a.width * a.height} pixels differ`;
 }
 
+/** Every stylesheet of a report, in document order: a browser styles an inline SVG with all. */
+function reportCss(source: string): string {
+  return [
+    ...source.replace(/<!--[\s\S]*?-->/g, "").matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi),
+  ]
+    .map((m) => m[1])
+    .join("\n");
+}
+
+/** The text of an `image/svg+xml` data URI, or null when it does not decode. */
+function svgImageText(uri: string): string | null {
+  const m = /^data:[^,]*?(;base64)?,(.*)$/is.exec(uri);
+  try {
+    return m?.[1]
+      ? new TextDecoder().decode(
+          Uint8Array.from(atob(m[2].replace(/\s+/g, "")), (c) => c.charCodeAt(0)),
+        )
+      : decodeURIComponent(m?.[2] ?? "");
+  } catch {
+    return null;
+  }
+}
+
+/** How many filtered elements a report's drawings hold, inline and SVG images (task 18 8i). */
+function filteredElements(source: string): number {
+  const css = reportCss(source);
+  const inline = drawnSvgs(source).reduce((n, svg) => n + readSvg(svg, css).filters.length, 0);
+  const asImages = drawnImages(source)
+    .filter((uri) => /^data:image\/svg\+xml/i.test(uri))
+    .reduce((n, uri) => {
+      const text = svgImageText(uri);
+      return n + (text === null ? 0 : readSvg(text).filters.length);
+    }, 0);
+  return inline + asImages;
+}
+
 /** A rectangle of an image's pixels, [x, y, width, height] (group 8f: Chrome writes a slice so). */
 function cropPixels(p: Pixels, [x, y, w, h]: number[]): Pixels {
   if (x === 0 && y === 0 && w === p.width && h === p.height) return p;
@@ -2932,6 +2968,10 @@ try {
     console.log("\nVerifying against the source reports...");
 
     const expected = extractSourceTokens(sources);
+    // Each filtered element of a drawing is an image paint too (Chrome writes it as one, task 18
+    // group 8i), which the source's own count of images does not know: added here, per report.
+    const filteredImages = sources.map(filteredElements);
+    expected.expectedImages += filteredImages.reduce((a, b) => a + b, 0);
     const observed = await readPdf(candidatePdf);
     const check = compareAgainstPdf(expected, observed, entries.length);
 
@@ -2998,7 +3038,7 @@ try {
         // The first report owns the pages before its heading too (as compareEachReport reads it).
         const from = i === 0 ? 0 : starts[i] - 1;
         const drawn = observed.imagesPerPage.slice(from, end).reduce((a, b) => a + b, 0);
-        const want = extractSourceTokens([source]).expectedImages;
+        const want = extractSourceTokens([source]).expectedImages + filteredImages[i];
         if (drawn !== want) {
           check.failures.push(`${entries[i]}: ${drawn} image paint(s), ${want} image(s) expected`);
         }
@@ -3026,6 +3066,7 @@ try {
           alpha: q.alpha,
           width: q.pixels?.width ?? 0,
           height: q.pixels?.height ?? 0,
+          pixels: q.pixels,
         }));
         const decoded = new Map<string, Pixels | string>();
         const sizeOf = (uri: string) => {

@@ -14,6 +14,7 @@
  */
 
 import { decodeEntities } from "./report_core.ts";
+import { blank, PRIMITIVES, type Primitive, runFilter } from "./report_filter.ts";
 
 /** A transform as PDF and pdf.js write it, [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f. */
 export type Matrix = number[];
@@ -195,6 +196,24 @@ export type PdfImagePaint = {
   height: number;
   alpha: number;
   clips: PdfClip[];
+  /** Its pixels (group 8i: a filter's output is compared with them). */
+  pixels?: RasterPixels | null;
+};
+
+/**
+ * An element drawn through a `filter` (group 8i): its content as shapes in the drawing's
+ * coordinates, its user space to the drawing (`e`), its box and the filter region in that space
+ * ([x0, y0, x1, y1]), the primitives ready to run (lengths in user units, subregions in user
+ * units), whether they work in linearRGB, its opacity, and what it is named in a message.
+ */
+export type SvgFilterUse = {
+  what: string;
+  content: SvgShape[];
+  e: Matrix;
+  region: number[];
+  primitives: Primitive[];
+  linear: boolean;
+  alpha: number;
 };
 
 /** One text label of the source SVG. */
@@ -839,6 +858,173 @@ export function rasterDifference(
   }
   if (compared === 0) return "a pattern with no pixel clear of an edge to compare";
   return differ === 0 ? null : `pattern: ${differ} of ${compared} pixels differ${first}`;
+}
+
+/**
+ * How a filter's image differs from the source run through the filter (group 8i), or null. The
+ * expected raster is laid on the image's own pixel lattice, widened to the whole filter region;
+ * the content is painted there (3 by 3 points a pixel) and run through the primitives; each image
+ * pixel inside its clips is held, over the white page, to the range of the expected pixels within
+ * one of it, 12 levels outside (Chrome's blur and edges are its own; measured within that); and
+ * the expected result beyond the image must be clear. Where the content's edges are uncertain (a
+ * stroke's caps and corners), the pixels the filter spreads them to are skipped.
+ */
+export function filterDifference(
+  use: SvgFilterUse,
+  p: PdfImagePaint,
+  toPage: Matrix,
+): string | null {
+  if (!p.pixels) return "an image that does not decode";
+  if (Math.abs(p.alpha - use.alpha) > 0.02)
+    return `at opacity ${p.alpha.toFixed(2)}, ${use.alpha.toFixed(2)} in its source`;
+  const { width: W, height: H, data } = p.pixels;
+  const run = filterExpected(use, p.m, W, H, toPage);
+  if (typeof run === "string") return run;
+  const { expected, gi0, gj0, GW, GH, doubtful, ox, oy, ux, uy } = run;
+  const overWhite = (r: typeof expected, k: number) =>
+    [0, 1, 2].map((c) => r.data[4 * k + c] + (1 - r.data[4 * k + 3]));
+  let compared = 0;
+  let differ = 0;
+  let first = "";
+  for (let j = 0; j < H; j++) {
+    for (let i = 0; i < W; i++) {
+      const [px, py] = apply(p.m, (i + 0.5) / W, 1 - (j + 0.5) / H);
+      if (!p.clips.every((c) => polygonsContain(c.polygons, c.evenOdd, px, py))) continue;
+      const [gi, gj] = [i - gi0, j - gj0];
+      if (doubtful[gj * GW + gi]) continue;
+      const lo = [1, 1, 1];
+      const hi = [0, 0, 0];
+      for (let dj = -1; dj <= 1; dj++)
+        for (let di = -1; di <= 1; di++) {
+          const [a, b] = [gi + di, gj + dj];
+          if (a < 0 || b < 0 || a >= GW || b >= GH) continue;
+          const v = overWhite(expected, b * GW + a);
+          for (let c = 0; c < 3; c++) {
+            lo[c] = Math.min(lo[c], v[c]);
+            hi[c] = Math.max(hi[c], v[c]);
+          }
+        }
+      const k = 4 * (j * W + i);
+      const al = data[k + 3] / 255;
+      const got = [0, 1, 2].map((c) => (al * data[k + c] + (1 - al) * 255) / 255);
+      compared++;
+      if (got.some((g, c) => g < lo[c] - 12 / 255 || g > hi[c] + 12 / 255)) {
+        differ++;
+        if (!first) {
+          const want = [0, 1, 2].map((c) => (got[c] < lo[c] ? lo[c] : hi[c]));
+          const [ex, ey] = [ox + (i + 0.5) * ux, oy + (j + 0.5) * uy];
+          first = ` (first at (${ex.toFixed(1)}, ${ey.toFixed(1)}): ${hex(got)}, ${hex(want)} at most in its source)`;
+        }
+      }
+    }
+  }
+  // Nothing the filter paints may lie beyond the image (two pixels clear of its edge).
+  let beyond = 0;
+  for (let gj = 0; gj < GH; gj++) {
+    for (let gi = 0; gi < GW; gi++) {
+      const [i, j] = [gi + gi0, gj + gj0];
+      if (i >= -2 && j >= -2 && i < W + 2 && j < H + 2) continue;
+      if (doubtful[gj * GW + gi]) continue;
+      if (expected.data[4 * (gj * GW + gi) + 3] > 0.06) beyond++;
+    }
+  }
+  if (beyond > 0) return `paints ${beyond} pixel(s) beyond the image Chrome drew of it`;
+  if (compared === 0) return "an image with no pixel to compare";
+  return differ === 0 ? null : `: ${differ} of ${compared} pixels differ${first}`;
+}
+
+/**
+ * A filter's expected output on the lattice of an image of `W` by `H` pixels painted under `m`
+ * (its unit square on the page), widened to the filter region: the raster (premultiplied sRGB),
+ * where it sits against the image's pixels (`gi0`, `gj0`), and the pixels whose value the content's
+ * uncertain edges reach (`doubtful`); or why it cannot be laid out or run.
+ */
+export function filterExpected(use: SvgFilterUse, m: Matrix, W: number, H: number, toPage: Matrix) {
+  const U = mul(m, invert(toPage)); // the image's unit square in the element's user space
+  if (Math.abs(U[1]) > 1e-6 * Math.abs(U[0]) || Math.abs(U[2]) > 1e-6 * Math.abs(U[3]))
+    return "drawn turned, which this check does not run";
+  const [ux, uy] = [U[0] / W, -U[3] / H];
+  if (!(ux > 0 && uy > 0)) return "drawn flipped, which this check does not run";
+  const [ox, oy] = apply(U, 0, 1); // the top left of pixel (0, 0)
+  const [rx0, ry0, rx1, ry1] = use.region;
+  const gi0 = Math.floor((rx0 - ox) / ux) - 2;
+  const gj0 = Math.floor((ry0 - oy) / uy) - 2;
+  const GW = Math.ceil((rx1 - ox) / ux) + 2 - gi0;
+  const GH = Math.ceil((ry1 - oy) / uy) + 2 - gj0;
+  if (GW <= 0 || GH <= 0 || GW * GH > 4e6) return "a filter region this check cannot lay out";
+  const toGrid = (x: number, y: number) => [(x - ox) / ux - gi0, (y - oy) / uy - gj0];
+  // The source graphic, premultiplied sRGB, and where it is uncertain.
+  const source = blank(GW, GH);
+  const unsure = new Uint8Array(GW * GH);
+  for (let gj = 0; gj < GH; gj++) {
+    for (let gi = 0; gi < GW; gi++) {
+      const acc = [0, 0, 0, 0];
+      for (let a = 0; a < 3; a++) {
+        for (let b = 0; b < 3; b++) {
+          const ux2 = ox + (gi0 + gi + (a + 0.5) / 3) * ux;
+          const uy2 = oy + (gj0 + gj + (b + 0.5) / 3) * uy;
+          const [dx, dy] = apply(use.e, ux2, uy2);
+          const c = contentColour(use.content, dx, dy, 0);
+          if (c === null) {
+            unsure[gj * GW + gi] = 1;
+            continue;
+          }
+          for (let k = 0; k < 3; k++) acc[k] += (c[k] * c[3]) / 9;
+          acc[3] += c[3] / 9;
+        }
+      }
+      source.data.set(acc, 4 * (gj * GW + gi));
+    }
+  }
+  const region = [...toGrid(rx0, ry0), ...toGrid(rx1, ry1)];
+  let expected: ReturnType<typeof runFilter>;
+  try {
+    expected = runFilter(
+      {
+        primitives: use.primitives.map((q) =>
+          q.region
+            ? {
+                ...q,
+                region: [...toGrid(q.region[0], q.region[1]), ...toGrid(q.region[2], q.region[3])],
+              }
+            : q,
+        ),
+        linear: use.linear,
+        unit: [ux, uy],
+        region,
+      },
+      source,
+    );
+  } catch (e) {
+    return `${(e as Error).message} is not verified`;
+  }
+  // How far the chain carries an uncertain pixel: blurs (3 sigma), offsets, morphology.
+  let reachPx = 1;
+  for (const q of use.primitives) {
+    const v = (s: string | undefined) =>
+      (s ?? "0")
+        .split(/[\s,]+/)
+        .map(Number)
+        .filter(Number.isFinite);
+    if (q.tag === "fegaussianblur" || q.tag === "fedropshadow")
+      reachPx += (3 * Math.max(0, ...v(q.attrs.stddeviation))) / Math.min(ux, uy);
+    if (q.tag === "feoffset" || q.tag === "fedropshadow")
+      reachPx +=
+        Math.max(Math.abs(Number(q.attrs.dx ?? 0)) / ux, Math.abs(Number(q.attrs.dy ?? 0)) / uy) ||
+        0;
+    if (q.tag === "femorphology") reachPx += Math.max(0, ...v(q.attrs.radius)) / Math.min(ux, uy);
+  }
+  const reachI = Math.ceil(reachPx);
+  const doubtful = new Uint8Array(GW * GH);
+  for (let gj = 0; gj < GH; gj++)
+    for (let gi = 0; gi < GW; gi++)
+      if (unsure[gj * GW + gi])
+        for (let dj = -reachI; dj <= reachI; dj++)
+          for (let di = -reachI; di <= reachI; di++) {
+            const [a, b] = [gi + di, gj + dj];
+            if (a >= 0 && b >= 0 && a < GW && b < GH) doubtful[b * GW + a] = 1;
+          }
+  return { expected, gi0, gj0, GW, GH, doubtful, ox, oy, ux, uy };
 }
 
 /** A path's `d` as polylines, every command (arcs as their curve), curves in 16 segments. */
@@ -1590,10 +1776,14 @@ export function readSvg(
   unread: string[];
   viewport: number[] | null;
   images: SvgImage[];
+  filters: SvgFilterUse[];
 } {
   const root = parse(svg);
   const shapes: SvgShape[] = [];
   const images: SvgImage[] = [];
+  const filters: SvgFilterUse[] = [];
+  /** The copies of filtered elements being read for their content (their filter set aside). */
+  const filtering = new Set<Node>();
   const labels: SvgLabel[] = [];
   const unread = new Set<string>();
   // Every stylesheet rule that could restyle the drawing: the report's, then the drawing's own
@@ -2050,6 +2240,141 @@ export function readSvg(
       ],
     };
   };
+  /**
+   * An element's `filter` read as an {@link SvgFilterUse}, or why it cannot be: a `<filter>`
+   * (region in `filterUnits`, by default the box widened by a tenth all round; lengths in
+   * `primitiveUnits`; one `color-interpolation-filters` for all) of primitives this check runs,
+   * over content this check can paint (shapes; not text, images, masks or patterns).
+   */
+  const readFilterUse = (
+    value: string,
+    n: Node,
+    e: Matrix,
+    m: Matrix,
+    inh: Inherited,
+    depth: number,
+    outerClips: SvgClip[],
+    alpha: number,
+  ): string | null => {
+    const url = /^url\(\s*['"]?#([^'")]+)['"]?\s*\)$/i.exec(value.trim());
+    if (!url) return `the filter "${value.trim()}" of a <${n.tag}>`;
+    const target = ids.get(url[1]);
+    // a reference to nothing is no filter: the element is not drawn (CSS Filter Effects § 5)
+    if (target?.tag !== "filter") return null;
+    const bbox = bboxOf(n, ancestors);
+    if (!bbox) return `a filter on a <${n.tag}> this check cannot measure`;
+    const [bx, by, bw, bh] = [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]];
+    const units = (target.attrs.get("filterunits") ?? "objectBoundingBox").trim();
+    const pUnits = (target.attrs.get("primitiveunits") ?? "userSpaceOnUse").trim();
+    const len = (
+      node: Node,
+      a: string,
+      d: number | null,
+      whole: number,
+      origin: number,
+      inUnits: string,
+    ) => {
+      const v = node.attrs.get(a);
+      if (v === undefined)
+        return d === null ? null : inUnits === "objectBoundingBox" ? origin + d * whole : d;
+      const n2 = v.trim().endsWith("%") ? Number.parseFloat(v) / 100 : Number.parseFloat(v);
+      if (!Number.isFinite(n2)) return Number.NaN;
+      if (inUnits === "objectBoundingBox" || v.trim().endsWith("%")) return origin + n2 * whole;
+      return n2;
+    };
+    const rx = len(target, "x", -0.1, bw, bx, units) as number;
+    const ry = len(target, "y", -0.1, bh, by, units) as number;
+    const rw = len(target, "width", 1.2, bw, 0, units) as number;
+    const rh = len(target, "height", 1.2, bh, 0, units) as number;
+    if (
+      [rx, ry, rw, rh].some(Number.isNaN) ||
+      (units !== "objectBoundingBox" && !target.attrs.has("width"))
+    )
+      return "a filter region in percentages of its viewport";
+    const spaces = new Set<string>();
+    const primitives: Primitive[] = [];
+    // lengths of a primitive in user units: a fraction of the box under objectBoundingBox
+    const scaled = (v: string | undefined, horizontal: boolean[]) => {
+      if (v === undefined || pUnits !== "objectBoundingBox") return v;
+      return v
+        .trim()
+        .split(/[\s,]+/)
+        .map((x, k) => String(Number(x) * ((horizontal[k] ?? horizontal[0]) ? bw : bh)))
+        .join(" ");
+    };
+    for (const p of target.children.filter((c) => c.tag !== "#text")) {
+      if (!PRIMITIVES.has(p.tag)) return `the filter primitive <${p.tag}>`;
+      spaces.add(
+        (
+          own(p, "color-interpolation-filters", [target]) ??
+          own(target, "color-interpolation-filters", []) ??
+          "linearRGB"
+        )
+          .trim()
+          .toLowerCase(),
+      );
+      const attrs: Record<string, string> = Object.fromEntries(p.attrs);
+      if (p.tag === "fegaussianblur" || p.tag === "fedropshadow")
+        attrs.stddeviation =
+          scaled(attrs.stddeviation, [true, false]) ?? (p.tag === "fedropshadow" ? "2" : "0");
+      if (p.tag === "femorphology") attrs.radius = scaled(attrs.radius, [true, false]) ?? "0";
+      for (const [k, h] of [
+        ["dx", true],
+        ["dy", false],
+      ] as const)
+        if (attrs[k] !== undefined) attrs[k] = scaled(attrs[k], [h]) as string;
+      const prim: Primitive = { tag: p.tag, attrs };
+      if (p.tag === "feflood" || p.tag === "fedropshadow") {
+        const c = paintOf(own(p, "flood-color", [target]) ?? "black", [0, 0, 0]);
+        const o = Number.parseFloat(own(p, "flood-opacity", [target]) ?? "1");
+        if (!c) return `a flood coloured "${own(p, "flood-color", [target])}"`;
+        prim.flood = [c[0], c[1], c[2], (c[3] ?? 1) * (Number.isFinite(o) ? o : 1)];
+      }
+      if (p.tag === "fecomponenttransfer")
+        prim.funcs = Object.fromEntries(
+          p.children
+            .filter((c) => c.tag.startsWith("fefunc"))
+            .map((c) => [c.tag, Object.fromEntries(c.attrs)]),
+        );
+      if (p.tag === "femerge")
+        prim.nodes = p.children
+          .filter((c) => c.tag === "femergenode")
+          .map((c) => c.attrs.get("in"));
+      // a subregion of its own, in user units [x0, y0, x1, y1] (converted to pixels by the check)
+      if (["x", "y", "width", "height"].some((a) => p.attrs.has(a))) {
+        const sx = len(p, "x", null, bw, bx, pUnits) ?? rx;
+        const sy = len(p, "y", null, bh, by, pUnits) ?? ry;
+        const sw = len(p, "width", null, bw, 0, pUnits) ?? rw;
+        const sh = len(p, "height", null, bh, 0, pUnits) ?? rh;
+        if ([sx, sy, sw, sh].some(Number.isNaN))
+          return "a filter primitive's region in percentages";
+        prim.region = [sx, sy, sx + sw, sy + sh];
+      }
+      primitives.push(prim);
+    }
+    if (spaces.size > 1) return "a filter whose primitives work in different colour spaces";
+    // Its content: the element itself, walked as a copy with the filter set aside.
+    const copy: Node = { ...n, attrs: new Map(n.attrs) };
+    filtering.add(copy);
+    const [s, l, im, before] = [shapes.length, labels.length, images.length, filters.length];
+    walk(copy, e, inh, depth, outerClips);
+    filtering.delete(copy);
+    const content = shapes.splice(s);
+    if (labels.splice(l).length + images.splice(im).length + filters.splice(before).length > 0)
+      return "a filter over text, an image or another filter";
+    if (content.some((c) => c.fillPattern || c.strokePattern || c.mask))
+      return "a filter over a pattern or a mask";
+    filters.push({
+      what: n.tag,
+      content,
+      e: m,
+      region: [rx, ry, rx + rw, ry + rh],
+      primitives,
+      linear: [...spaces][0] !== "srgb",
+      alpha,
+    });
+    return null;
+  };
   const walk = (n: Node, e: Matrix, inh: Inherited, depth: number, outerClips: SvgClip[] = []) => {
     if (n.tag === "#text" || NOT_DRAWN.has(n.tag) || depth > 32) return;
     if (UNREAD.has(n.tag)) {
@@ -2071,7 +2396,10 @@ export function readSvg(
       fillOpacity: own(n, "fill-opacity", ancestors) ?? inh.fillOpacity,
       strokeOpacity: own(n, "stroke-opacity", ancestors) ?? inh.strokeOpacity,
       cap: own(n, "stroke-linecap", ancestors) ?? inh.cap,
-      opacity: inh.opacity * (Number.parseFloat(own(n, "opacity", ancestors) ?? "1") || 0),
+      // A filtered element's copy is read at opacity 1: its opacity applies to the filter's image.
+      opacity: filtering.has(n)
+        ? 1
+        : inh.opacity * (Number.parseFloat(own(n, "opacity", ancestors) ?? "1") || 0),
       markers: inh.markers,
       fillRule: own(n, "fill-rule", ancestors) ?? inh.fillRule,
       clipRule: own(n, "clip-rule", ancestors) ?? inh.clipRule,
@@ -2080,8 +2408,7 @@ export function readSvg(
       paintOrder: own(n, "paint-order", ancestors) ?? inh.paintOrder,
       mask: inh.mask,
     };
-    const filter = own(n, "filter", ancestors);
-    if (filter && filter !== "none") unread.add(`the filter of a <${n.tag}>`);
+    const filter = filtering.has(n) ? undefined : own(n, "filter", ancestors);
     // Markers inherit; `marker` sets all three.
     const all = own(n, "marker", ancestors);
     here.markers = [
@@ -2118,6 +2445,14 @@ export function readSvg(
         return;
       }
       if (c) clips = [...clips, c];
+    }
+    // A filter (group 8i): Chrome writes the element, filtered, as one image. Its content is read
+    // by walking a copy of it with the filter set aside; the filter is read for the drawing check
+    // to run on that content.
+    if (filter && filter.trim() !== "none") {
+      const why = readFilterUse(filter, n, e, m, inh, depth, outerClips, here.opacity);
+      if (why) unread.add(why);
+      return;
     }
     if (n.tag === "svg" && depth > 0) {
       // A nested drawing: its own viewport at x, y, its viewBox fitted by preserveAspectRatio,
@@ -2432,7 +2767,7 @@ export function readSvg(
     }
     walk(c, IDENTITY, start, 0, clips);
   }
-  return { shapes, labels, unread: [...unread], viewport, images };
+  return { shapes, labels, unread: [...unread], viewport, images, filters };
 }
 
 // ---------------------------------------------------------------------------
@@ -2698,11 +3033,35 @@ export function compareSvg(
       else votes.push({ base: b, n: 1 });
     }
   }
+  // With nothing else to place it, a drawing is placed by its labels (group 8i, found when a
+  // drawing of filtered elements alone PASSED unchecked -- and so did one of labels alone): a run
+  // with a label's text gives the scale (the sizes), the turn (its direction) and the place (its
+  // anchor). Each such placing is one vote; the label it came from is then trivially in place.
+  if (votes.length === 0) {
+    for (const l of svg.labels) {
+      for (const r of runs) {
+        if (r.text.replace(/\s+/g, "") !== l.text.replace(/\s+/g, "") || l.size <= 0) continue;
+        const s = r.size / (l.size * scaleOf(l.e));
+        const T: Matrix = [s * r.dx, s * r.dy, s * r.dy, -s * r.dx, 0, 0];
+        const f = l.anchor === "middle" ? 0.5 : l.anchor === "end" ? 1 : 0;
+        const [ax, ay] = [r.x + r.dx * r.width * f, r.y + r.dy * r.width * f];
+        const [lx, ly] = apply(l.e, l.x, l.y);
+        const [tx, ty] = apply(T, lx, ly);
+        const b: Matrix = [T[0], T[1], T[2], T[3], ax - tx, ay - ty];
+        const vote = votes.find((t) => sameMatrix(t.base, b));
+        if (vote) vote.n++;
+        else votes.push({ base: b, n: 1 });
+      }
+    }
+  }
   const base = votes.sort((a, b) => b.n - a.n)[0]?.base;
   if (base === undefined) {
-    if (duties.length > 0 || svg.images.length > 0)
+    const things = duties.length + svg.images.length + svg.filters.length + svg.labels.length;
+    if (things > 0)
       problems.push(
-        `none of its ${duties.length + svg.images.length} shape(s) and image(s) drawn as in its source`,
+        svg.filters.length > 0 && duties.length + svg.images.length + svg.labels.length === 0
+          ? `its ${svg.filters.length} filtered element(s) cannot be placed: nothing else in it is drawn to place them by`
+          : `none of its ${things} shape(s), image(s), filter(s) and label(s) drawn as in its source`,
       );
     return { compared: 0, problems, images: [] };
   }
@@ -3111,9 +3470,50 @@ export function compareSvg(
             : `${name} ${clipWhy(first)}`,
     );
   }
+  // Each filtered element (group 8i): a free image painted within its filter region, its pixels
+  // the source's content run through the filter by this check's own primitives.
+  for (const use of svg.filters) {
+    const toPage = mul(use.e, base);
+    const [x0, y0, x1, y1] = use.region;
+    const regionOnPage = polygonBox([
+      [apply(toPage, x0, y0), apply(toPage, x1, y0), apply(toPage, x1, y1), apply(toPage, x0, y1)],
+    ]);
+    const slackPt = 1.5;
+    const within = (p: PdfImagePaint) => {
+      const b = polygonBox(
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+        ].map(([u, v]) => [apply(p.m, u, v)]),
+      );
+      return (
+        b[0] >= regionOnPage[0] - slackPt &&
+        b[1] >= regionOnPage[1] - slackPt &&
+        b[2] <= regionOnPage[2] + slackPt &&
+        b[3] <= regionOnPage[3] + slackPt
+      );
+    };
+    let why = "not painted as one image within its filter region";
+    let right: PdfImagePaint | null = null;
+    for (const p of imagePaints) {
+      if (used.has(imageKey(p)) || !p.pixels || !within(p)) continue;
+      const w = filterDifference(use, p, toPage);
+      if (w === null) {
+        right = p;
+        break;
+      }
+      why = w;
+    }
+    if (right) {
+      used.add(imageKey(right));
+      matchedImages.push(right);
+    } else missing.push(`a <${use.what}>'s filter ${why}`);
+  }
   if (missing.length > 0)
     problems.push(
-      `${missing.length} of ${duties.length + svg.images.length} -- ${missing.slice(0, 3).join("; ")}`,
+      `${missing.length} of ${duties.length + svg.images.length + svg.filters.length} -- ${missing.slice(0, 3).join("; ")}`,
     );
   // Nothing else painted among them: a path between its first and last matched one, page by page.
   const extra = new Set<string>();
@@ -3234,7 +3634,9 @@ export function compareSvg(
   }
   // Each label where the source puts it: a run with its text, on its baseline, at its anchor, on
   // a page its shapes are drawn on.
-  const pages = new Set(matched.map((v) => v.page));
+  const pages = new Set([...matched, ...matchedImages].map((v) => v.page));
+  // a drawing of labels alone: any page of its report
+  if (pages.size === 0) for (const r of runs) pages.add(r.page);
   let placed = 0;
   for (const l of svg.labels) {
     const at = mul(l.e, base);

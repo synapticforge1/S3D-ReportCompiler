@@ -225,8 +225,11 @@ drawing before its first or after its last shape; since #100 a gradient's stop o
 luminosity mask read as a second shading); since #101 a drawing's `<image>`, by where it is painted
 and pixel for pixel (a `slice` as Chrome's crop); since #102 a `<pattern>` paint, its raster pixel
 by pixel against the pattern's own content (within the range its edges can blur to); since #103 a
-`mask`, its value where the shape is. ⚠️ Not yet verified, and named as such: a filter, an
-`<image>` of SVG, a mask inside a mask, `foreignObject`, WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
+`mask`, its value where the shape is; since #104 a `filter`, its image against the source run
+through the verification's own primitives (`src/report_filter.ts`). ⚠️ Not yet verified, and
+named as such: lighting, turbulence, displacement, convolution, `feTile` / `feImage`; a drawing
+of filtered elements alone (unplaceable); an `<image>` of SVG; a mask inside a mask;
+`foreignObject`; `<switch>`; WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
 style — of HTML text and of SVG labels.
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in
