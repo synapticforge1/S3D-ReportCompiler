@@ -130,6 +130,7 @@ import {
 import * as rt from "./src/report_runtime.ts";
 import {
   compareSvg,
+  filterShows,
   type PdfRun,
   type PdfShading,
   type PdfClip,
@@ -991,15 +992,19 @@ function svgImageText(uri: string): string | null {
   }
 }
 
-/** How many filtered elements a report's drawings hold, inline and SVG images (task 18 8i). */
+/**
+ * How many filtered elements a report's drawings hold, inline and SVG images (task 18 8i) -- those
+ * that can show: one its viewport cuts away is painted as nothing (8k).
+ */
 function filteredElements(source: string): number {
   const css = reportCss(source);
-  const inline = drawnSvgs(source).reduce((n, svg) => n + readSvg(svg, css).filters.length, 0);
+  const shown = (read: ReturnType<typeof readSvg>) => read.filters.filter(filterShows).length;
+  const inline = drawnSvgs(source).reduce((n, svg) => n + shown(readSvg(svg, css)), 0);
   const asImages = drawnImages(source)
     .filter((uri) => /^data:image\/svg\+xml/i.test(uri))
     .reduce((n, uri) => {
       const text = svgImageText(uri);
-      return n + (text === null ? 0 : readSvg(text).filters.length);
+      return n + (text === null ? 0 : shown(readSvg(text)));
     }, 0);
   return inline + asImages;
 }

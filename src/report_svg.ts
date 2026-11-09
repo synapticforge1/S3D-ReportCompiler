@@ -296,7 +296,49 @@ export type SvgFilterUse = {
   alpha: number;
   /** What each feImage of an element paints, its shapes in the user space (task 18 8k). */
   feImages?: SvgShape[][];
+  /** The clips around the element, in the drawing's coordinates -- the viewport's among them. */
+  clips?: SvgClip[];
 };
+
+/**
+ * Whether a filtered element can show at all: its result lies within the filter region and its
+ * last primitive's subregion, and the clips around it (the viewport's) may cut all of that away --
+ * Chrome then paints no image (measured, task 18 8k: an feImage past a 200-wide viewport, none).
+ */
+export function filterShows(use: SvgFilterUse): boolean {
+  let [x0, y0, x1, y1] = use.region;
+  const last = use.primitives[use.primitives.length - 1]?.region;
+  if (last)
+    [x0, y0, x1, y1] = [
+      Math.max(x0, last[0]),
+      Math.max(y0, last[1]),
+      Math.min(x1, last[2]),
+      Math.min(y1, last[3]),
+    ];
+  if (!(x1 > x0 && y1 > y0)) return false;
+  const clips = use.clips ?? [];
+  if (clips.length === 0) return true;
+  const n = 24;
+  for (let i = 0; i <= n; i++)
+    for (let j = 0; j <= n; j++) {
+      const [x, y] = apply(
+        use.e,
+        x0 + ((x1 - x0) * (i + (0.01 * (n / 2 - i)) / n)) / n,
+        y0 + ((y1 - y0) * (j + (0.01 * (n / 2 - j)) / n)) / n,
+      );
+      if (clips.every((c) => clipContains(c, x, y))) return true;
+    }
+  // or a clip's corner within the result (a clip smaller than the lattice's step)
+  const back = invert(use.e);
+  return clips.every((c) =>
+    clipPolygons(c).some((poly) =>
+      poly.some(([px, py]) => {
+        const [u, v] = apply(back, px, py);
+        return u >= x0 && u <= x1 && v >= y0 && v <= y1;
+      }),
+    ),
+  );
+}
 
 /** One text label of the source SVG. */
 export type SvgLabel = {
@@ -972,6 +1014,54 @@ export function filterDifference(
   if (Math.abs(p.alpha - use.alpha) > 0.02)
     return `at opacity ${p.alpha.toFixed(2)}, ${use.alpha.toFixed(2)} in its source`;
   const { width: W, height: H, data } = p.pixels;
+  // A lone feImage of a raster within its region: Chrome draws the source's own pixels on the
+  // subregion (measured: a 4x2 PNG painted 4x2) -- the image itself, placed and pixel for pixel.
+  const only = use.primitives.length === 1 ? use.primitives[0] : null;
+  const href =
+    only?.tag === "feimage" ? (only.attrs.href ?? only.attrs["xlink:href"] ?? "").trim() : "";
+  const src = href.startsWith("data:") ? pixelsOf(href) : null;
+  if (only && src && src.width === W && src.height === H) {
+    const [rx0, ry0, rx1, ry1] = use.region;
+    const sub = only.region ?? [rx0, ry0, rx1, ry1];
+    const fit = mul(
+      mul(
+        viewBoxMatrix(
+          [0, 0, W, H],
+          sub[2] - sub[0],
+          sub[3] - sub[1],
+          only.attrs.preserveaspectratio,
+        ),
+        [1, 0, 0, 1, sub[0], sub[1]],
+      ),
+      toPage,
+    );
+    const unit = mul([W, 0, 0, -H, 0, H], fit);
+    const corners = [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+    ];
+    const size = Math.hypot(unit[0], unit[1]) + Math.hypot(unit[2], unit[3]);
+    if (
+      corners.some(
+        ([u, v]) =>
+          Math.hypot(...[0, 1].map((k) => apply(unit, u, v)[k] - apply(p.m, u, v)[k])) >
+          Math.max(0.5, 0.01 * size),
+      )
+    )
+      return "its image not placed on its subregion";
+    for (let k = 0; k < W * H; k++) {
+      const [a, b] = [src.data[4 * k + 3] / 255, data[4 * k + 3] / 255];
+      for (let c = 0; c < 3; c++)
+        if (
+          Math.abs(
+            a * src.data[4 * k + c] + (1 - a) * 255 - (b * data[4 * k + c] + (1 - b) * 255),
+          ) > 2
+        )
+          return "its image's pixels are not its source's";
+    }
+    return null;
+  }
   const run = filterExpected(use, p.m, W, H, toPage, pixelsOf);
   if (typeof run === "string") return run;
   const { expected, gi0, gj0, GW, GH, doubtful, ox, oy, ux, uy } = run;
@@ -1076,14 +1166,48 @@ function feImageRaster(
     [1, 0, 0, 1, x0, y0],
   );
   const back = invert(fit);
+  // Chrome scales an image smoothly (measured: a red of 37 between source pixels of 0 and 60),
+  // its edges clamped: bilinear between pixel centres, premultiplied
+  const texel = (x: number, y: number) => {
+    const [cx, cy] = [
+      Math.max(0, Math.min(px.width - 1, x)),
+      Math.max(0, Math.min(px.height - 1, y)),
+    ];
+    const k = 4 * (cy * px.width + cx);
+    const a = px.data[k + 3] / 255;
+    return [(px.data[k] / 255) * a, (px.data[k + 1] / 255) * a, (px.data[k + 2] / 255) * a, a];
+  };
+  const smooth = (u: number, v: number) => {
+    const [x0, y0] = [Math.floor(u - 0.5), Math.floor(v - 0.5)];
+    const [fx, fy] = [u - 0.5 - x0, v - 0.5 - y0];
+    const [p00, p10, p01, p11] = [
+      texel(x0, y0),
+      texel(x0 + 1, y0),
+      texel(x0, y0 + 1),
+      texel(x0 + 1, y0 + 1),
+    ];
+    return p00.map(
+      (_, c) =>
+        p00[c] * (1 - fx) * (1 - fy) +
+        p10[c] * fx * (1 - fy) +
+        p01[c] * (1 - fx) * fy +
+        p11[c] * fx * fy,
+    );
+  };
+  // each pixel by 3 by 3 points: inside the image's rectangle, its smooth colour; else nothing
+  // (the rectangle's edge antialiased, as Chrome draws it)
   for (let j = 0; j < GH; j++) {
     for (let i = 0; i < GW; i++) {
-      const [x, y] = toUser(i + 0.5, j + 0.5);
-      const [u, v] = apply(back, x, y);
-      if (u < 0 || v < 0 || u >= px.width || v >= px.height) continue;
-      const k = 4 * (Math.floor(v) * px.width + Math.floor(u));
-      const a = px.data[k + 3] / 255;
-      out.data.set([0, 1, 2].map((c) => (px.data[k + c] / 255) * a).concat(a), 4 * (j * GW + i));
+      const acc = [0, 0, 0, 0];
+      for (let a = 0; a < 3; a++)
+        for (let b = 0; b < 3; b++) {
+          const [x, y] = toUser(i + (a + 0.5) / 3, j + (b + 0.5) / 3);
+          const [u, v] = apply(back, x, y);
+          if (u < 0 || v < 0 || u >= px.width || v >= px.height) continue;
+          const s = smooth(u, v);
+          for (let c = 0; c < 4; c++) acc[c] += s[c] / 9;
+        }
+      out.data.set(acc, 4 * (j * GW + i));
     }
   }
   return out;
@@ -2411,6 +2535,7 @@ export function readSvg(
         e: mul(f.e, t),
         alpha: f.alpha * opacity,
         content: f.content.map((s) => carryShape(s, t)),
+        clips: [...around, ...(f.clips ?? []).map((c) => carryClip(c, t))],
       });
     for (const fo of inner.foreign)
       foreign.push({ ...fo, box: fo.box.map(([x, y]) => apply(t, x, y)) });
@@ -3066,6 +3191,7 @@ export function readSvg(
       linear: [...spaces][0] !== "srgb",
       alpha,
       feImages: feImageContent,
+      clips: outerClips,
     });
     return null;
   };
@@ -3642,6 +3768,8 @@ export function compareSvg(
 ): SvgCheck {
   const problems = svg.unread.map((u) => `${u} is not verified`);
   const imageKey = (p: PdfImagePaint) => `${p.page}:${p.order}:image`;
+  // The filtered elements that can show: one whose clips cut all of it away paints nothing.
+  const shown = svg.filters.filter(filterShows);
   // Each source image placed (its crop and where it lands), or why it cannot be.
   const placings = svg.images.map((img) => {
     const size = sizeOf(img.uri);
@@ -3786,13 +3914,76 @@ export function compareSvg(
       }
     }
   }
+  // Still nothing (filtered elements alone, task 18 8k): the drawing's own viewport clip places it
+  // -- Chrome clips a drawing to its viewport before its filters' images (measured: the 400 by 200
+  // drawing's clip exact, (150, 745.87) to (1077.43, 1209.59), before each blur's image). A
+  // rectangle clip on an image paint with the viewport's proportions maps the viewport onto it.
+  // Every drawing on the page has such a clip: a candidate stands only when each of this drawing's
+  // filters then finds an unused image inside its region, the first such in paint order.
+  if (votes.length === 0 && svg.viewport && shown.length > 0) {
+    const [vx0, vy0, vx1, vy1] = svg.viewport;
+    const [vw, vh] = [vx1 - vx0, vy1 - vy0];
+    const explains = (cand: Matrix) =>
+      shown.every((use) => {
+        const toPage = mul(use.e, cand);
+        const [x0, y0, x1, y1] = use.region;
+        const r = polygonBox([
+          [
+            apply(toPage, x0, y0),
+            apply(toPage, x1, y0),
+            apply(toPage, x1, y1),
+            apply(toPage, x0, y1),
+          ],
+        ]);
+        return imagePaints.some((p) => {
+          if (used.has(imageKey(p))) return false;
+          const b = polygonBox([
+            [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 1],
+            ].map(([u, v]) => apply(p.m, u, v)),
+          ]);
+          return (
+            b[0] >= r[0] - 1.5 && b[1] >= r[1] - 1.5 && b[2] <= r[2] + 1.5 && b[3] <= r[3] + 1.5
+          );
+        });
+      });
+    for (const p of imagePaints) {
+      if (votes.length > 0) break;
+      if (used.has(imageKey(p))) continue;
+      for (const c of p.clips) {
+        if (c.polygons.length !== 1 || c.polygons[0].length < 4) continue;
+        const b = polygonBox(c.polygons);
+        const [cw, ch] = [b[2] - b[0], b[3] - b[1]];
+        if (cw <= 0 || ch <= 0 || Math.abs(cw / ch - vw / vh) > 0.002 * (vw / vh)) continue;
+        // the clip is that rectangle (its corners on its box)
+        if (
+          !c.polygons[0].every(
+            ([x, y]) =>
+              [b[0], b[2]].some((v) => Math.abs(v - x) < 0.01) &&
+              [b[1], b[3]].some((v) => Math.abs(v - y) < 0.01),
+          )
+        )
+          continue;
+        // the drawing's y runs down, the page's up: its top (vy0) to the clip's top (b[3])
+        const s = cw / vw;
+        const cand: Matrix = [s, 0, 0, -s, b[0] - s * vx0, b[3] + s * vy0];
+        if (explains(cand)) {
+          votes.push({ base: cand, n: 1 });
+          break;
+        }
+      }
+    }
+  }
   const base = votes.sort((a, b) => b.n - a.n)[0]?.base;
   if (base === undefined) {
-    const things = duties.length + svg.images.length + svg.filters.length + svg.labels.length;
+    const things = duties.length + svg.images.length + shown.length + svg.labels.length;
     if (things > 0)
       problems.push(
-        svg.filters.length > 0 && duties.length + svg.images.length + svg.labels.length === 0
-          ? `its ${svg.filters.length} filtered element(s) cannot be placed: nothing else in it is drawn to place them by`
+        shown.length > 0 && duties.length + svg.images.length + svg.labels.length === 0
+          ? `its ${shown.length} filtered element(s) cannot be placed: nothing else in it is drawn to place them by`
           : `none of its ${things} shape(s), image(s), filter(s) and label(s) drawn as in its source`,
       );
     return { compared: 0, problems, images: [] };
@@ -4204,7 +4395,7 @@ export function compareSvg(
   }
   // Each filtered element (group 8i): a free image painted within its filter region, its pixels
   // the source's content run through the filter by this check's own primitives.
-  for (const use of svg.filters) {
+  for (const use of shown) {
     const toPage = mul(use.e, base);
     const [x0, y0, x1, y1] = use.region;
     const regionOnPage = polygonBox([
@@ -4263,7 +4454,7 @@ export function compareSvg(
   }
   if (missing.length > 0)
     problems.push(
-      `${missing.length} of ${duties.length + svg.images.length + svg.filters.length} -- ${missing.slice(0, 3).join("; ")}`,
+      `${missing.length} of ${duties.length + svg.images.length + shown.length} -- ${missing.slice(0, 3).join("; ")}`,
     );
   // Nothing else painted among them: a path between its first and last matched one, page by page.
   const extra = new Set<string>();

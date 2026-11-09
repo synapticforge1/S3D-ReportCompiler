@@ -5044,6 +5044,40 @@ test(
   },
 );
 
+// Group 8k part 2: an feImage whose subregion leaves its filter region (Chrome samples the PNG
+// bilinearly into device pixels) -- and one the viewport cuts away, which Chrome paints as nothing;
+// drawings made of filtered elements alone -- no shape to place them; the drawing's own viewport
+// clip does.
+const PROBE_8K2 = [
+  `<svg viewBox="0 0 200 100" width="400" height="200"><defs><filter id="k82-p"><feImage href="data:image/png;base64,${PNG_4X2}" x="140" y="50" width="30" height="20" preserveAspectRatio="none"/></filter></defs><rect x="10" y="10" width="20" height="20" fill="#333333"/><rect x="120" y="30" width="50" height="30" fill="#cc6600" filter="url(#k82-p)"/></svg>`,
+  `<svg viewBox="0 0 200 100" width="400" height="200"><defs><filter id="k82-f"><feImage href="data:image/png;base64,${PNG_4X2}" x="215" y="85" width="30" height="20" preserveAspectRatio="none"/></filter></defs><rect x="190" y="60" width="50" height="30" fill="#cc6600" filter="url(#k82-f)"/><rect x="185" y="5" width="10" height="10" fill="#333333"/></svg>`,
+  // an <img> cropped by a box of the drawings' proportions, painted first: its clip is no
+  // drawing's viewport (images are paired after drawings, so it is unused when they are placed)
+  `<div style="width:400px;height:200px;overflow:hidden"><img src="data:image/png;base64,${PNG_4X2}" style="width:500px;height:250px;display:block"></div>`,
+  `<svg viewBox="0 0 200 100" width="400" height="200"><defs><filter id="k82-b"><feGaussianBlur stdDeviation="2"/></filter></defs><rect x="40" y="30" width="60" height="40" fill="#008800" filter="url(#k82-b)"/></svg>`,
+  `<svg viewBox="0 0 200 100" width="400" height="200"><defs><filter id="k82-c"><feGaussianBlur stdDeviation="2"/></filter></defs><rect x="20" y="30" width="40" height="40" fill="#008800" filter="url(#k82-c)"/><circle cx="140" cy="50" r="20" fill="#000088" filter="url(#k82-c)"/></svg>`,
+].join("\n");
+
+test(
+  "class B, task 18 group 8k part 2: an feImage past its region; filtered elements alone",
+  { timeout: TIMEOUT },
+  () => {
+    const dir = join(work, "task18-8k2");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8K2}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    // the sample's own image, the cropped <img>, the feImage past its region, three blurs -- none
+    // for the cut-away one
+    has(r.out, /graphics: 6 image paint\(s\), 6 expected/);
+    has(r.out, /PASS/);
+  },
+);
+
 test(
   "class B, task 18 item 5: each image drawn as its source, pixel for pixel",
   { timeout: TIMEOUT },

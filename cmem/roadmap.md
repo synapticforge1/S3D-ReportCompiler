@@ -1260,8 +1260,13 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
   (distant), fractal noise, feImage, filter properties from stylesheets. **Open, each measured:**
   turbulence type `turbulence` (178 px), stitching, feTile's period (228 px), displacement (2
   px), specular from a spot (77 px) -- the run code exists, refused by name until it matches;
-  Skia's per-point noise code is the missing source. Then: feImage past its region, a drawing of
-  filtered elements alone, an `<image>` outside the document.
+  Skia's per-point noise code is the missing source. ✅ **Part 2 DONE 2026-11-09 (known-issues
+  #107):** an feImage past its region (bilinear, as Chrome), a drawing of filtered elements alone
+  (placed by its viewport clip), a filter its viewport cuts away (no image). **Next (owner,
+  2026-11-09: "a linked image must fetch the image for inclusion into the pdf for fidelity of the
+  documents"):** linked images fetched and inlined at the bake -- every report's one link today is
+  SkyCiv's loader GIF, which the bake removes; a drawn linked image would print blank (the CSP
+  allows `data:` only) and is not in the image count, so it would vanish unnoticed.
 Then group 7b (WebP decoders); then the fresh class-B re-check. Earlier:
 group 8's geometry FIRST (owner, 2026-11-08: "can we work on group 8 then come
 back to the SVG and WebP issues?"): the diagrams, and any filled shape as cover and background.
