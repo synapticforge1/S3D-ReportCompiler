@@ -221,9 +221,9 @@ else painted among them, every label at its anchor; the report's stylesheets rea
 reads them. An SVG `<img>` is checked the same way, with only its own stylesheet (#98). Since #99
 also each shape's CLIPS (viewports, markers, nested drawings, `clip-path`), compared as regions
 at sample points; its fill rule, cap, join, miter limit and paint order; and nothing painted on the
-drawing before its first or after its last shape. ⚠️ Not yet verified, and named as such: a
-filter, a mask, a `<pattern>` paint, a gradient with stop-opacity, `<image>`, `foreignObject`,
-WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
+drawing before its first or after its last shape; since #100 a gradient's stop opacity (Chrome's
+luminosity mask read as a second shading). ⚠️ Not yet verified, and named as such: a filter, a
+mask, a `<pattern>` paint, `<image>`, `foreignObject`, WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
 style — of HTML text and of SVG labels.
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in

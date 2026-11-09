@@ -1246,6 +1246,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       strokeShading?: PdfShading;
       fillOther?: string;
       strokeOther?: string;
+      // Group 8e: a gradient's alpha, as its own shading (a gradient with stop-opacity).
+      fillAlphaShading?: PdfShading;
+      strokeAlphaShading?: PdfShading;
       // Group 8d: every clip in force, as polygons on the page; the line cap, join, miter limit.
       clips: PdfClip[];
       cap: number;
@@ -1504,31 +1507,105 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       else if (fn === pdfjs.OPS.transform) gs = { ...gs, m: mul(args as number[], gs.m) };
       else if (fn === pdfjs.OPS.setTextRenderingMode) gs = { ...gs, mode: Number(args[0]) };
       else if (fn === pdfjs.OPS.setFillRGBColor || fn === pdfjs.OPS.setFillGray) {
-        gs = { ...gs, fill: rgb(args), fillShading: undefined, fillOther: undefined };
+        gs = {
+          ...gs,
+          fill: rgb(args),
+          fillShading: undefined,
+          fillAlphaShading: undefined,
+          fillOther: undefined,
+        };
       } else if (fn === pdfjs.OPS.setStrokeRGBColor || fn === pdfjs.OPS.setStrokeGray) {
-        gs = { ...gs, stroke: rgb(args), strokeShading: undefined, strokeOther: undefined };
+        gs = {
+          ...gs,
+          stroke: rgb(args),
+          strokeShading: undefined,
+          strokeAlphaShading: undefined,
+          strokeOther: undefined,
+        };
       } else if (fn === pdfjs.OPS.setFillColorN || fn === pdfjs.OPS.setStrokeColorN) {
         // A pattern paint (task 18 group 8b): Chrome paints an SVG gradient as a shading pattern,
         // its definition in pdf.js's objects, its matrix to the page; a gradient with transparent
         // stops as a tiling pattern (measured), named so the comparison can say so.
         const stroke = fn === pdfjs.OPS.setStrokeColorN;
         let shading: PdfShading | undefined;
+        let alphaShading: PdfShading | undefined;
         let other: string | undefined;
-        if (args[0] === "Shading") {
-          const id = String(args[1]);
+        /** A shading pdf.js holds by id, under a matrix to the page; undefined when it does not. */
+        const shadingOf = (id: string, matrix: number[]): PdfShading | undefined => {
           const store = id.startsWith("g_") ? page.commonObjs : page.objs;
           try {
             const ir = store.get(id) as unknown;
-            const mx = Array.from((args[2] ?? [1, 0, 0, 1, 0, 0]) as ArrayLike<number>);
-            if (Array.isArray(ir)) shading = { ir, matrix: mx };
-            else other = "a shading pdf.js did not give";
+            return Array.isArray(ir) ? { ir, matrix } : undefined;
           } catch {
-            other = "a shading pdf.js did not give";
+            return undefined;
+          }
+        };
+        const matrixOfArg = (a: unknown) =>
+          Array.from((a ?? [1, 0, 0, 1, 0, 0]) as ArrayLike<number>);
+        if (args[0] === "Shading") {
+          shading = shadingOf(String(args[1]), matrixOfArg(args[2]));
+          if (!shading) other = "a shading pdf.js did not give";
+        } else if (args[0] === "TilingPattern") {
+          // Group 8e: an SVG gradient with stop-opacity, as Chrome writes it (measured 2026-11-09):
+          // a tiling pattern holding a LUMINOSITY soft-mask group filled with one shading (the
+          // alpha), then -- the mask set -- the colour shading filled. Read as those two shadings,
+          // the pattern's matrix multiplied in; any other tiling pattern stays named, unread.
+          const ir = args[2] as { fnArray: number[]; argsArray: unknown[][] } | undefined;
+          const pm = matrixOfArg(args[3]);
+          let inMask = false;
+          let maskSet = false;
+          let current: { id: string; matrix: number[] } | null = null;
+          const filled: { id: string; matrix: number[]; mask: boolean }[] = [];
+          let strange = !ir;
+          ir?.fnArray.forEach((f, k) => {
+            const a = ir.argsArray[k] ?? [];
+            if (f === pdfjs.OPS.beginGroup) {
+              const smask = (a[0] as { smask?: { subtype?: string } } | undefined)?.smask;
+              if (smask?.subtype === "Luminosity" && !inMask && !maskSet) inMask = true;
+              else strange = true;
+            } else if (f === pdfjs.OPS.endGroup) {
+              if (!inMask) strange = true;
+              inMask = false;
+            } else if (f === pdfjs.OPS.setGState) {
+              for (const [key, value] of (a[0] as [string, unknown][]) ?? []) {
+                if (key === "SMask") maskSet = value === true;
+                else if (key !== "ca" && key !== "CA" && key !== "BM") strange = true;
+              }
+            } else if (f === pdfjs.OPS.setFillColorN || f === pdfjs.OPS.setStrokeColorN) {
+              if (a[0] !== "Shading") strange = true;
+              else if (f === pdfjs.OPS.setFillColorN)
+                current = { id: String(a[1]), matrix: matrixOfArg(a[2]) };
+            } else if (f === pdfjs.OPS.constructPath) {
+              if (FILLS.has(Number(a[0]))) {
+                if (current) filled.push({ ...current, mask: inMask });
+                else strange = true;
+              } else if (Number(a[0]) !== pdfjs.OPS.endPath) strange = true;
+            } else if (
+              f !== pdfjs.OPS.paintFormXObjectBegin &&
+              f !== pdfjs.OPS.paintFormXObjectEnd &&
+              f !== pdfjs.OPS.save &&
+              f !== pdfjs.OPS.restore &&
+              f !== pdfjs.OPS.clip &&
+              f !== pdfjs.OPS.eoClip
+            ) {
+              strange = true;
+            }
+          });
+          const mask = filled.filter((x) => x.mask);
+          const colour = filled.filter((x) => !x.mask);
+          if (!strange && mask.length === 1 && colour.length === 1 && maskSet) {
+            alphaShading = shadingOf(mask[0].id, mul(mask[0].matrix, pm));
+            shading = shadingOf(colour[0].id, mul(colour[0].matrix, pm));
+          }
+          if (!shading || !alphaShading) {
+            shading = undefined;
+            alphaShading = undefined;
+            other = "a TilingPattern paint";
           }
         } else other = `a ${String(args[0])} paint`;
         gs = stroke
-          ? { ...gs, strokeShading: shading, strokeOther: other }
-          : { ...gs, fillShading: shading, fillOther: other };
+          ? { ...gs, strokeShading: shading, strokeAlphaShading: alphaShading, strokeOther: other }
+          : { ...gs, fillShading: shading, fillAlphaShading: alphaShading, fillOther: other };
       } else if (fn === pdfjs.OPS.setLineWidth) {
         gs = { ...gs, lw: Number(args[0]) };
       } else if (fn === pdfjs.OPS.setGState) {
@@ -1665,6 +1742,10 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
             join: gs.join,
             miter: gs.miter,
             ...(fills && gs.fillShading ? { fillShading: gs.fillShading } : {}),
+            ...(fills && gs.fillAlphaShading ? { fillAlphaShading: gs.fillAlphaShading } : {}),
+            ...(strokes && gs.strokeAlphaShading
+              ? { strokeAlphaShading: gs.strokeAlphaShading }
+              : {}),
             ...(fills && gs.fillOther ? { fillOther: gs.fillOther } : {}),
             ...(strokes && gs.strokeShading ? { strokeShading: gs.strokeShading } : {}),
             ...(strokes && gs.strokeOther ? { strokeOther: gs.strokeOther } : {}),

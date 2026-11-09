@@ -4046,6 +4046,140 @@ test(
   },
 );
 
+// Group 8e: gradients with stop-opacity -- uniform, radial with an rgba() stop, a rotated stroke
+// gradient in percent, and fill-opacity on top.
+const PROBE_8E = `<svg viewBox="0 0 200 100" width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+<defs><linearGradient id="e8-u"><stop offset="0" stop-color="#ff0000" stop-opacity="0.5"/><stop offset="1" stop-color="#0000ff" stop-opacity="0.5"/></linearGradient>
+<radialGradient id="e8-r"><stop offset="0" stop-color="#ffffff" stop-opacity="0.2"/><stop offset="1" stop-color="rgba(0,128,0,0.7)"/></radialGradient>
+<linearGradient id="e8-s" x1="0" y1="0" x2="0" y2="1" gradientTransform="rotate(20)"><stop offset="0.1" stop-color="#000000"/><stop offset="0.9" stop-color="#cc6600" stop-opacity="30%"/></linearGradient></defs>
+<rect x="10" y="10" width="60" height="40" fill="url(#e8-u)"/>
+<circle cx="110" cy="30" r="20" fill="url(#e8-r)"/>
+<rect x="150" y="10" width="40" height="40" fill="none" stroke="url(#e8-s)" stroke-width="6"/>
+<rect x="10" y="60" width="80" height="30" fill="url(#e8-s)" fill-opacity="0.5"/>
+</svg>`;
+
+test(
+  "class B, task 18 group 8e: a gradient with stop-opacity, colour and alpha",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    // 1. The reader keeps each stop's opacity (stop-opacity, a percentage, a colour's own alpha).
+    const read = svgs.readSvg(PROBE_8E);
+    assert.deepEqual(read.unread, []);
+    const opacities = (k: number) =>
+      (read.shapes[k].fillGradient ?? read.shapes[k].strokeGradient).stops.map(
+        (s: { opacity: number }) => +s.opacity.toFixed(3),
+      );
+    assert.deepEqual(
+      [opacities(0), opacities(1), opacities(2)],
+      [
+        [0.5, 0.5],
+        [0.2, 0.7],
+        [1, 0.3],
+      ],
+    );
+    // 2. The matcher, against Chrome's writing (measured 2026-11-09): the colour as one shading,
+    //    the alpha as a grey one (a luminosity soft mask), both under the pattern's matrix.
+    const base = [2.25, 0, 0, -2.25, 150, 700];
+    const hex2 = (v: number) =>
+      Math.round(v * 255)
+        .toString(16)
+        .padStart(2, "0");
+    type G = {
+      kind: string;
+      geometry: number[];
+      transform: number[];
+      units: string;
+      stops: { offset: number; colour: number[]; opacity: number }[];
+    };
+    type Plain = Record<string, unknown>;
+    const shadingFor = (g: G, lines: { points: number[][] }[], m: number[], alpha: boolean) => {
+      const xs = lines.flatMap((l) => l.points.map((p) => p[0]));
+      const ys = lines.flatMap((l) => l.points.map((p) => p[1]));
+      const [bx, by] = [Math.min(...xs), Math.min(...ys)];
+      const box =
+        g.units === "userSpaceOnUse"
+          ? [1, 0, 0, 1, 0, 0]
+          : [Math.max(...xs) - bx, 0, 0, Math.max(...ys) - by, bx, by];
+      const stops = g.stops.map((s) => [
+        s.offset,
+        alpha ? `#${hex2(s.opacity).repeat(3)}` : `#${s.colour.map(hex2).join("")}`,
+      ]);
+      const [a, b, c, d, e] = g.geometry;
+      const ir =
+        g.kind === "linear"
+          ? ["RadialAxial", "axial", null, stops, [a, b], [c, d], null, null]
+          : ["RadialAxial", "radial", null, stops, [d, e], [a, b], 0, c];
+      return { ir, matrix: svgs.mul(svgs.mul(g.transform, box), m) };
+    };
+    const build = () =>
+      read.shapes.map((s: Plain & { lines: { points: number[][] }[]; e: number[] }, k: number) => {
+        const m = svgs.mul(s.e, base);
+        const g = (s.fillGradient ?? s.strokeGradient) as G;
+        const as = s.fillGradient ? "fill" : "stroke";
+        return {
+          page: 1,
+          order: k,
+          fill: null,
+          stroke: null,
+          fillAlpha: s.fillAlpha,
+          strokeAlpha: s.strokeAlpha,
+          lineWidth: s.strokeWidth,
+          lines: as === "fill" ? s.lines : s.dashed,
+          m,
+          [`${as}Shading`]: shadingFor(g, s.lines, m, false),
+          [`${as}AlphaShading`]: shadingFor(g, s.lines, m, true),
+        };
+      });
+    const check = (edit: (v: Plain[]) => void = () => {}) => {
+      const vectors = build();
+      edit(vectors);
+      return svgs.compareSvg(read, vectors, [], new Set()).problems as string[];
+    };
+    assert.deepEqual(check(), [], "colour and alpha as Chrome writes them");
+    const fails = (what: string, edit: (v: Plain[]) => void, pattern: RegExp) => {
+      const problems = check(edit);
+      assert.ok(
+        problems.some((p) => pattern.test(p)),
+        `${what} passed: ${JSON.stringify(problems)}`,
+      );
+    };
+    fails(
+      "its opacity lost",
+      (v) => delete v[0].fillAlphaShading,
+      /drawn without its gradient's stop opacity/,
+    );
+    fails(
+      "its opacity changed",
+      (v) => {
+        const s = v[1].fillAlphaShading as { ir: unknown[]; matrix: number[] };
+        v[1].fillAlphaShading = {
+          ...s,
+          ir: [
+            ...s.ir.slice(0, 3),
+            [
+              [0, "#ffffff"],
+              [1, "#ffffff"],
+            ],
+            ...s.ir.slice(4),
+          ],
+        };
+      },
+      /gradient opacity 1\.00 at/,
+    );
+    // 3. End to end: Chrome draws them, and the build PASSES.
+    const dir = join(work, "task18-8e");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8E}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+  },
+);
+
 test(
   "class B, task 18 item 5: each image drawn as its source, pixel for pixel",
   { timeout: TIMEOUT },

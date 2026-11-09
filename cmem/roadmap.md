@@ -1236,9 +1236,9 @@ drawn before the first or after the last match; colour names, `hsl()`, colour al
 
 **Next step, in order (owner: fixes not limits):** the items still named "not verified", each
 measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-measured):
-- **8e — a gradient with stop-opacity:** a tiling pattern holding a luminosity soft-mask group
-  filled with one shading (the alpha ramp), then the colour shading — both readable as 8b reads
-  shadings.
+- ✅ **8e — a gradient with stop-opacity, DONE 2026-11-09 (known-issues #100):** a tiling pattern
+  holding a luminosity soft-mask group filled with one shading (the alpha ramp), then the colour
+  shading — read as those two shadings, compared colour and alpha.
 - **8f — `<image>` in an SVG:** a plain image paint (a 2×2 PNG drawn 2×2): 7a's pixel check.
 - **8g — `<pattern>`:** Chrome rasterises the pattern over the shape's whole box into ONE image
   inside a tiling pattern (223×112 for a 60×40 rect): compare pixels against the pattern's own

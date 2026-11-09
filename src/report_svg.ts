@@ -77,8 +77,8 @@ export type Gradient = {
   /** linear: x1 y1 x2 y2; radial: cx cy r fx fy -- in `units`. */
   geometry: number[];
   spread: string;
-  /** Offset 0-1, RGB 0-1. */
-  stops: { offset: number; colour: number[] }[];
+  /** Offset 0-1, RGB 0-1; its `stop-opacity` (times its colour's own alpha), 1 when opaque. */
+  stops: { offset: number; colour: number[]; opacity?: number }[];
 };
 
 /** A PDF shading as pdf.js gives it (`["RadialAxial", kind, bbox, stops, p0, p1, r0, r1]`), with its matrix. */
@@ -112,6 +112,9 @@ export type PdfVector = {
   /** A paint this reader cannot evaluate (a tiling pattern), named. */
   fillOther?: string;
   strokeOther?: string;
+  /** Group 8e: a gradient's alpha as its own (grey) shading, read from a luminosity soft mask. */
+  fillAlphaShading?: PdfShading;
+  strokeAlphaShading?: PdfShading;
   /** Group 8d: every clip in force (page space), the fill rule, line cap / join (PDF codes), miter limit. */
   clips?: PdfClip[];
   evenOdd?: boolean;
@@ -467,6 +470,20 @@ function radialT(x: number, y: number, p0: number[], r0: number, p1: number[], r
 
 /** A source gradient's colour at a point of the shape, in the shape's own coordinates. */
 export function gradientColour(g: Gradient, x: number, y: number, box: number[]): number[] {
+  return stopColour(g.stops, gradientT(g, x, y, box));
+}
+
+/** A source gradient's alpha at a point of the shape: its stops' opacities, as its colours run. */
+export function gradientAlpha(g: Gradient, x: number, y: number, box: number[]): number {
+  const t = gradientT(g, x, y, box);
+  return stopColour(
+    g.stops.map((s) => ({ offset: s.offset, colour: [s.opacity ?? 1] })),
+    t,
+  )[0];
+}
+
+/** Where a point of the shape falls along a gradient, 0 to 1, its spread applied. */
+function gradientT(g: Gradient, x: number, y: number, box: number[]): number {
   // To the gradient's space: the shape's bounding box as the unit square, then its transform.
   let to: Matrix = IDENTITY;
   if (g.units !== "userSpaceOnUse") {
@@ -485,7 +502,7 @@ export function gradientColour(g: Gradient, x: number, y: number, box: number[])
     const [cx, cy, r, fx, fy] = g.geometry;
     t = radialT(u, v, [fx, fy], 0, [cx, cy], r);
   }
-  return stopColour(g.stops, spreadOf(t, g.spread));
+  return spreadOf(t, g.spread);
 }
 
 /** A PDF shading's colour at a point on the page (default user space), as pdf.js describes it. */
@@ -1346,7 +1363,7 @@ export function readSvg(
         length("fy", geometry[1]) ?? geometry[1],
       );
     const holder = chain.find((c) => c.children.some((k) => k.tag === "stop"));
-    const stops: { offset: number; colour: number[] }[] = [];
+    const stops: Gradient["stops"] = [];
     let last = 0;
     for (const s of holder?.children.filter((k) => k.tag === "stop") ?? []) {
       const o = s.attrs.get("offset") ?? "0";
@@ -1360,13 +1377,19 @@ export function readSvg(
         [0, 0, 0],
       );
       if (!colour) return { unread: `a gradient stop coloured "${own(s, "stop-color") ?? ""}"` };
-      // A stop colour's own alpha is a stop opacity too.
-      const opacity = Number.parseFloat(own(s, "stop-opacity") ?? "1") * (colour[3] ?? 1);
-      // Chrome draws a gradient with transparent stops as a tiling pattern under a luminosity
-      // mask (measured), which this reader does not yet evaluate.
-      if (Number.isFinite(opacity) && opacity < 1)
-        return { unread: "a gradient with stop-opacity" };
-      stops.push({ offset, colour });
+      // A stop colour's own alpha is a stop opacity too. Chrome draws a gradient with transparent
+      // stops as a tiling pattern: its alpha a luminosity mask of its own shading (group 8e).
+      const raw = own(s, "stop-opacity") ?? "1";
+      const value = Number.parseFloat(raw);
+      const opacity =
+        Math.max(
+          0,
+          Math.min(
+            1,
+            Number.isFinite(value) ? (raw.trim().endsWith("%") ? value / 100 : value) : 1,
+          ),
+        ) * (colour[3] ?? 1);
+      stops.push({ offset, colour: colour.slice(0, 3), opacity });
     }
     if (stops.length === 0) return null;
     return {
@@ -2159,6 +2182,11 @@ export function compareSvg(
     }
     const shading = c.as === "fill" ? c.v.fillShading : c.v.strokeShading;
     if (!shading) return "drawn without its gradient";
+    // Group 8e: its alpha too, wherever either side has one -- the source's stop opacities, the
+    // PDF's luminosity mask (a grey shading: its luminance is the alpha).
+    const alphaShading = c.as === "fill" ? c.v.fillAlphaShading : c.v.strokeAlphaShading;
+    const translucent = g.stops.some((s) => (s.opacity ?? 1) < 1);
+    if (translucent && !alphaShading) return "drawn without its gradient's stop opacity";
     const box = bounds(d.shape.lines);
     for (const [x, y] of samples(d)) {
       const want = gradientColour(g, x, y, box);
@@ -2167,6 +2195,14 @@ export function compareSvg(
       if (got === null) return "a gradient this reader cannot read";
       if (got.some((v, i) => Math.abs(v - want[i]) > 6 / 255)) {
         return `gradient ${hex(got)} at (${x.toFixed(1)}, ${y.toFixed(1)}), ${hex(want)} in its source`;
+      }
+      if (alphaShading) {
+        const grey = shadingColour(alphaShading, px, py);
+        if (grey === null) return "a gradient's opacity this reader cannot read";
+        const gotAlpha = 0.2126 * grey[0] + 0.7152 * grey[1] + 0.0722 * grey[2];
+        const wantAlpha = gradientAlpha(g, x, y, box);
+        if (Math.abs(gotAlpha - wantAlpha) > 6 / 255)
+          return `gradient opacity ${gotAlpha.toFixed(2)} at (${x.toFixed(1)}, ${y.toFixed(1)}), ${wantAlpha.toFixed(2)} in its source`;
       }
     }
     return null;
