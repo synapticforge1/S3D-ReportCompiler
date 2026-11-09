@@ -48,6 +48,8 @@ symbol	.	drawnSvgs	function	export declare function drawnSvgs(source: string): s
 symbol	.	extractSourceTokens	function	export declare function extractSourceTokens(sources: string[]): SourceTokens
 symbol	.	findBrokenReferences	function	export declare function findBrokenReferences(reports: BakedReport[]): ReferenceCheck
 symbol	.	findLeftoverMath	function	export declare function findLeftoverMath(baked: string): string[]
+symbol	.	inlineLinkedImages	function	export declare function inlineLinkedImages(html: string, found: Map<string, string>): string
+symbol	.	linkedImages	function	export declare function linkedImages(body: string): string[]
 symbol	.	mathStats	variable	export declare const mathStats: { converted: number; failed: number; firstFailure: string; }
 symbol	.	mathStyleSheet	function	export declare function mathStyleSheet(): string
 symbol	.	parseDelimiters	function	export declare function parseDelimiters(src: string): Delim[]
@@ -57,6 +59,7 @@ symbol	.	resetBakeState	function	export declare function resetBakeState(): void
 symbol	.	scopeCss	function	export declare function scopeCss(css: string, scope: string, prefix: string): string
 symbol	.	seenOpeners	variable	export declare const seenOpeners: Set<string>
 symbol	.	skippedDelims	variable	export declare const skippedDelims: Set<string>
+symbol	.	sniffImageType	function	export declare function sniffImageType(bytes: Uint8Array): string | null
 symbol	.	sortReportNames	function	export declare function sortReportNames(names: string[]): string[]
 symbol	.	svgStyleWarnings	variable	export declare const svgStyleWarnings: Set<string>
 symbol	.	textNumbers	function	export declare function textNumbers(text: string): Set<string>
@@ -76,6 +79,7 @@ symbol	./runtime	exit	function	export declare function exit(code: number): never
 symbol	./runtime	fileExists	function	export declare function fileExists(file: string): Promise<boolean>
 symbol	./runtime	fileIdentity	function	export declare function fileIdentity(file: string): Promise<string | null>
 symbol	./runtime	findChrome	function	export declare function findChrome(): Promise<string | null>
+symbol	./runtime	fromFileUrl	function	export declare function fromFileUrl(href: string): Promise<string>
 symbol	./runtime	isBrowser	variable	export declare const isBrowser: boolean
 symbol	./runtime	joinPath	function	export declare function joinPath(...parts: string[]): string
 symbol	./runtime	listFiles	function	export declare function listFiles(dir: string): Promise<string[]>
