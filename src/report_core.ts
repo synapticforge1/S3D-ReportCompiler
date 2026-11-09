@@ -3788,6 +3788,8 @@ function sourceTally(raw: string): {
     expectedImages += drawn.filter((t) => !/\ssrc\s*=\s*["']data:image\/svg\+xml/i.test(t)).length;
     // Each top-level inline SVG as a reader sees it, in order, for the geometry check
     // ({@link drawnSvgs}): nesting balanced, so an inner <svg> stays inside its outer one.
+    // Since task 18 8f its raster `<image>`s are image paints too (Chrome paints one as an image,
+    // measured): counted here, and checked with the drawing.
     for (let from = 0; ;) {
       const open = html.slice(from).search(/<svg(?=[\s/>])/i);
       if (open < 0) break;
@@ -3804,7 +3806,13 @@ function sourceTally(raw: string): {
         }
       }
       if (end < 0) break;
-      svgSources.push(html.slice(start, end));
+      const svg = html.slice(start, end);
+      svgSources.push(svg);
+      expectedImages += (svg.match(SOURCE_TAG) ?? []).filter((t) =>
+        /^<image\b(?:"[^"]*"|'[^']*'|[^"'>])*?\s(?:xlink:)?href\s*=\s*["']data:(?!image\/svg\+xml)/i.test(
+          t,
+        ),
+      ).length;
       from = end;
     }
     // Each one's data URI, in order, for the pixel check ({@link drawnImages}).

@@ -963,6 +963,17 @@ function imageDifference(a: Pixels, b: Pixels): string | null {
   return differ === 0 ? null : `${differ} of ${a.width * a.height} pixels differ`;
 }
 
+/** A rectangle of an image's pixels, [x, y, width, height] (group 8f: Chrome writes a slice so). */
+function cropPixels(p: Pixels, [x, y, w, h]: number[]): Pixels {
+  if (x === 0 && y === 0 && w === p.width && h === p.height) return p;
+  const data = new Uint8Array(w * h * 4);
+  for (let row = 0; row < h; row++) {
+    const at = ((y + row) * p.width + x) * 4;
+    data.set(p.data.subarray(at, at + w * 4), row * w * 4);
+  }
+  return { width: w, height: h, data };
+}
+
 /** A drawn source image decoded, or why it cannot be. */
 async function decodeSource(uri: string): Promise<Pixels | string> {
   const m = /^data:([^;,]*)((?:;[^;,]*)*),(.*)$/s.exec(uri);
@@ -1138,7 +1149,15 @@ type PdfDetail = {
   /** Pages with text an opaque fill or image painted after it covers, half of it or more. */
   coveredTextPages: Set<number>;
   /** Every image painted, in order: its page and its pixels as pdf.js decodes them. */
-  paintedImages: { page: number; pixels: Pixels | null }[];
+  /** Each painted image's pixels; since group 8f also where (its matrix), its clips and alpha. */
+  paintedImages: {
+    page: number;
+    order: number;
+    m: number[];
+    clips: PdfClip[];
+    alpha: number;
+    pixels: Pixels | null;
+  }[];
   /** Every path painted, in its own coordinates under its transform (task 18 group 8b). */
   vectors: PdfVector[];
   /** Every run of text, its baseline origin, width and size (task 18 group 8b). */
@@ -1349,6 +1368,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       fill: number[];
       alpha: number;
       image?: string;
+      /** An image's matrix and the clips in force (group 8f). */
+      m?: number[];
+      clips?: PdfClip[];
       polygons: number[][][];
       evenOdd: boolean;
       clip: Box | null;
@@ -1682,6 +1704,8 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           fill: [1, 1, 1],
           alpha: gs.alpha * groupAlpha[groupAlpha.length - 1],
           image: String(args[0]),
+          m: gs.m,
+          clips: gs.clips,
           polygons: [outline([[0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 4]], gs.m)[0]],
           evenOdd: false,
           clip: gs.clip,
@@ -1758,7 +1782,14 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     // Each painted image's pixels, in paint order, for the pixel check (task 18 item 5).
     for (const q of paints) {
       if (q.image !== undefined)
-        obs.paintedImages.push({ page: p, pixels: await pdfImage(page, q.image) });
+        obs.paintedImages.push({
+          page: p,
+          order: q.order,
+          m: q.m ?? [1, 0, 0, 1, 0, 0],
+          clips: q.clips ?? [],
+          alpha: q.alpha,
+          pixels: await pdfImage(page, q.image),
+        });
     }
 
     // Each visible text show against what is actually behind it, and anything drawn over it
@@ -2817,27 +2848,53 @@ try {
         imagesDrawn += expected.length;
         const isSvg = (uri: string) => /^data:image\/svg\+xml/i.test(uri);
         const raster = expected.filter((e) => !isSvg(e.uri));
-        for (let k = 0; k < Math.min(painted.length, raster.length); k++) {
-          const ours = await decodeSource(raster[k].uri);
-          const theirs = painted[k].pixels;
-          const why =
-            typeof ours === "string"
-              ? ours
-              : theirs === null
-                ? "the PDF's image does not decode"
-                : imageDifference(ours, theirs);
-          if (why !== null)
-            check.failures.push(
-              `${entries[i]}: image ${raster[k].n} is not its source's -- ${why}`,
-            );
-          else imagesCompared++;
-        }
-        // And each drawing as its source draws it (task 18 group 8b): its shapes, paths in the
-        // PDF; its labels, where they stand. A diagram's drawing was not checked at all -- only
-        // that its title and caption were on one page.
+        // Each drawing as its source draws it (task 18 group 8b): its shapes, paths in the PDF; its
+        // labels, where they stand. A diagram's drawing was not checked at all -- only that its
+        // title and caption were on one page. FIRST since group 8f: a drawing's own <image>s are
+        // image paints, matched by where they are painted, so the <img>s pair with the rest.
         const vectors = observed.vectors.filter((v) => v.page > from && v.page <= end);
         const runs = observed.runs.filter((r) => r.page > from && r.page <= end);
         const used = new Set<string>();
+        const imagePaints = painted.map((q) => ({
+          page: q.page,
+          order: q.order,
+          m: q.m,
+          clips: q.clips,
+          alpha: q.alpha,
+          width: q.pixels?.width ?? 0,
+          height: q.pixels?.height ?? 0,
+        }));
+        const decoded = new Map<string, Pixels | string>();
+        const sizeOf = (uri: string) => {
+          const d = decoded.get(uri);
+          return d && typeof d !== "string" ? [d.width, d.height] : null;
+        };
+        /** A drawing compared, its images' pixels too: decoded first, as their size places them. */
+        const compareDrawing = async (read: ReturnType<typeof readSvg>, label: string) => {
+          for (const img of read.images) {
+            if (!decoded.has(img.uri)) decoded.set(img.uri, await decodeSource(img.uri));
+            const d = decoded.get(img.uri);
+            if (typeof d === "string") check.failures.push(`${label} -- an <image> -- ${d}`);
+          }
+          imagesDrawn += read.images.length;
+          const result = compareSvg(read, vectors, runs, used, imagePaints, sizeOf);
+          for (const match of result.images) {
+            const ours = decoded.get(match.uri);
+            const theirs = painted.find(
+              (q) => q.page === match.page && q.order === match.order,
+            )?.pixels;
+            const why =
+              !ours || typeof ours === "string"
+                ? "its source does not decode"
+                : !theirs
+                  ? "the PDF's image does not decode"
+                  : imageDifference(cropPixels(ours, match.crop), theirs);
+            if (why !== null)
+              check.failures.push(`${label} -- an <image> is not its source's -- ${why}`);
+            else imagesCompared++;
+          }
+          return result;
+        };
         // An SVG image: its own document, so only its own stylesheet styles it (the page's do not
         // reach into an image).
         for (const { uri, n } of expected.filter((e) => isSvg(e.uri))) {
@@ -2862,7 +2919,7 @@ try {
             );
             continue;
           }
-          const result = compareSvg(read, vectors, runs, used);
+          const result = await compareDrawing(read, `${entries[i]}: image ${n} (an SVG)`);
           imagesCompared += result.problems.length === 0 ? 1 : 0;
           drawingsCompared += result.compared;
           for (const problem of result.problems) {
@@ -2880,11 +2937,28 @@ try {
           .map((m) => m[1])
           .join("\n");
         for (const [k, svg] of drawnSvgs(source).entries()) {
-          const result = compareSvg(readSvg(svg, outerCss), vectors, runs, used);
+          const label = `${entries[i]}: drawing ${k + 1}`;
+          const result = await compareDrawing(readSvg(svg, outerCss), label);
           drawingsCompared += result.compared;
-          for (const problem of result.problems) {
-            check.failures.push(`${entries[i]}: drawing ${k + 1} -- ${problem}`);
-          }
+          for (const problem of result.problems) check.failures.push(`${label} -- ${problem}`);
+        }
+        // And what each <img> shows (task 18 item 5): the report's drawn images, in order, against
+        // the images painted on its own pages that no drawing claimed, pixel for pixel.
+        const free = painted.filter((q) => !used.has(`${q.page}:${q.order}:image`));
+        for (let k = 0; k < Math.min(free.length, raster.length); k++) {
+          const ours = await decodeSource(raster[k].uri);
+          const theirs = free[k].pixels;
+          const why =
+            typeof ours === "string"
+              ? ours
+              : theirs === null
+                ? "the PDF's image does not decode"
+                : imageDifference(ours, theirs);
+          if (why !== null)
+            check.failures.push(
+              `${entries[i]}: image ${raster[k].n} is not its source's -- ${why}`,
+            );
+          else imagesCompared++;
         }
       }
     }

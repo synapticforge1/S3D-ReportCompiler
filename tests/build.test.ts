@@ -4180,6 +4180,155 @@ test(
   },
 );
 
+// Group 8f: a drawing's own <image> -- a 4x2 PNG fitted (meet), sliced on whole pixels (xMin, and
+// x-mid where the slice falls mid-pixel), stretched, turned and faded.
+const PNG_4X2 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAIUlEQVR4nAXBMQEAAAzCsGrqPWEIQwSylgAeBoswb2Z2PkeCB4FdgMvyAAAAAElFTkSuQmCC";
+const PROBE_8F = `<svg viewBox="0 0 200 100" width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+<image x="10" y="10" width="40" height="40" href="data:image/png;base64,${PNG_4X2}"/>
+<image x="60" y="10" width="40" height="40" preserveAspectRatio="xMinYMax slice" href="data:image/png;base64,${PNG_4X2}"/>
+<image x="110" y="10" width="30" height="40" preserveAspectRatio="xMidYMid slice" href="data:image/png;base64,${PNG_4X2}"/>
+<image x="150" y="10" width="40" height="40" preserveAspectRatio="none" href="data:image/png;base64,${PNG_4X2}"/>
+<image x="10" y="60" width="40" height="20" transform="rotate(10 30 70)" opacity="0.5" href="data:image/png;base64,${PNG_4X2}"/>
+</svg>`;
+
+test(
+  "class B, task 18 group 8f: an <image> in a drawing, placed and pixel for pixel",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    // 1. Counted as image paints (Chrome paints each as an image), and read with its placing.
+    assert.equal(core.extractSourceTokens([`<body>${PROBE_8F}</body>`]).expectedImages, 5);
+    const read = svgs.readSvg(PROBE_8F);
+    assert.deepEqual(read.unread, []);
+    assert.equal(read.images.length, 5);
+    // The crops Chrome writes (measured 2026-11-09): the whole image; under slice only the whole
+    // pixels the viewport shows -- 0..2 for xMin, 1..3 where x-mid falls at 1.25..2.75.
+    const crops = read.images.map((img: unknown) => svgs.imagePlacement(img, 4, 2).crop);
+    assert.deepEqual(crops, [
+      [0, 0, 4, 2],
+      [0, 0, 2, 2],
+      [1, 0, 2, 2],
+      [0, 0, 4, 2],
+      [0, 0, 4, 2],
+    ]);
+    const corner = (k: number, u: number, v: number) => {
+      const m = svgs.imagePlacement(read.images[k], 4, 2).unit;
+      return [m[0] * u + m[2] * v + m[4], m[1] * u + m[3] * v + m[5]].map(
+        (x: number) => +x.toFixed(6),
+      );
+    };
+    assert.deepEqual(
+      [corner(0, 0, 1), corner(0, 1, 0)],
+      [
+        [10, 20],
+        [50, 40],
+      ],
+      "meet: fitted, centred",
+    );
+    // x-mid slice into 30 wide at x 110: the image scaled to 80 wide starts at 85, so its pixels
+    // 1..3 land at 105..145, then the viewport (110..140) clips them
+    assert.deepEqual(
+      [corner(2, 0, 1), corner(2, 1, 0)],
+      [
+        [105, 10],
+        [145, 50],
+      ],
+      "slice: its pixels where they fall",
+    );
+
+    // 2. The matcher, against paints placed as Chrome places them, under one base.
+    const base = [2.25, 0, 0, -2.25, 150, 700];
+    type Plain = Record<string, unknown>;
+    const build = (): Plain[] =>
+      read.images.map((img: { alpha: number }, k: number) => {
+        const p = svgs.imagePlacement(img, 4, 2);
+        return {
+          page: 1,
+          order: k,
+          m: svgs.mul(p.unit, base),
+          width: p.crop[2],
+          height: p.crop[3],
+          alpha: img.alpha,
+          clips: [],
+        };
+      });
+    const check = (edit: (v: Plain[]) => void = () => {}) => {
+      const paints = build();
+      edit(paints);
+      return svgs.compareSvg(read, [], [], new Set(), paints, () => [4, 2]) as {
+        problems: string[];
+        images: { crop: number[] }[];
+      };
+    };
+    // The slice viewports clip their images: the paints of 1 and 2 carry that clip, as Chrome's do.
+    const withClips = (v: Plain[]) => {
+      for (const k of [1, 2]) {
+        const [x, y, w, h] = read.images[k].box;
+        const at = (px: number, py: number) => [base[0] * px + base[4], base[3] * py + base[5]];
+        v[k].clips = [
+          { polygons: [[at(x, y), at(x + w, y), at(x + w, y + h), at(x, y + h)]], evenOdd: false },
+        ];
+      }
+    };
+    const good = check(withClips);
+    assert.deepEqual(good.problems, [], "the images as Chrome paints them");
+    assert.equal(good.images.length, 5, "each matched, its crop for the pixel check");
+    const fails = (what: string, edit: (v: Plain[]) => void, pattern: RegExp) => {
+      const { problems } = check((v) => {
+        withClips(v);
+        edit(v);
+      });
+      assert.ok(
+        problems.some((p) => pattern.test(p)),
+        `${what} passed: ${JSON.stringify(problems)}`,
+      );
+    };
+    fails(
+      "moved",
+      (v) => (v[0].m = svgs.mul([1, 0, 0, 1, 3, 0], v[0].m as number[])),
+      /an <image> at \(10, 10\) not painted where its source puts it/,
+    );
+    // Flipped and stretched about its own first corner, which stays put: the other two catch it.
+    fails(
+      "flipped",
+      (v) => (v[3].m = svgs.mul([1, 0, 0, -1, 0, 0], v[3].m as number[])),
+      /an <image> at \(150, 10\) not painted where/,
+    );
+    fails(
+      "stretched",
+      (v) => (v[3].m = svgs.mul([1.5, 0, 0, 1, 0, 0], v[3].m as number[])),
+      /an <image> at \(150, 10\) not painted where/,
+    );
+    fails(
+      "the whole image for a slice",
+      (v) => (v[1].width = 4),
+      /painted 4x2, its source's 2x2 pixels/,
+    );
+    fails("its opacity", (v) => (v[4].alpha = 1), /at opacity 1\.00, 0\.50 in its source/);
+    fails("unclipped", (v) => (v[2].clips = []), /clipped differently/);
+    fails(
+      "an image added",
+      (v) => v.push({ ...v[0], order: 9, m: svgs.mul([20, 0, 0, -20, 160, 90], base) }),
+      /drawn among its shapes that its source does not have \(first: an image/,
+    );
+
+    // 3. End to end: Chrome paints them, the build PASSES, all five pixel for pixel. The drawing
+    //    comes FIRST in the body, so its images are painted before the report's own <img>: that
+    //    one must still pair with its own paint, not with a drawing's.
+    const dir = join(work, "task18-8f");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const first = sample.replace(/<body\b[^>]*>/i, (tag) => `${tag}${PROBE_8F}`);
+    assert.notEqual(first, sample);
+    writeFileSync(join(dir, "member_0_report.html"), first);
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /images: {3}6 of 6 identical to their sources, pixel for pixel/);
+  },
+);
+
 test(
   "class B, task 18 item 5: each image drawn as its source, pixel for pixel",
   { timeout: TIMEOUT },

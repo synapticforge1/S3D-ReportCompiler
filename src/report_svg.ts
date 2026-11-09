@@ -84,6 +84,31 @@ export type Gradient = {
 /** A PDF shading as pdf.js gives it (`["RadialAxial", kind, bbox, stops, p0, p1, r0, r1]`), with its matrix. */
 export type PdfShading = { ir: unknown[]; matrix: Matrix };
 
+/**
+ * One raster `<image>` of the source SVG (group 8f): its data URI, its viewport (x, y, width,
+ * height) in its user space, `preserveAspectRatio`, its transform within the drawing, its alpha,
+ * and the clips around it (with its own viewport's, for `slice`).
+ */
+export type SvgImage = {
+  uri: string;
+  box: number[];
+  par: string;
+  e: Matrix;
+  alpha: number;
+  clips: SvgClip[];
+};
+
+/** One image the PDF paints: the unit square under `m`, its pixel size, clips and alpha. */
+export type PdfImagePaint = {
+  page: number;
+  order: number;
+  m: Matrix;
+  width: number;
+  height: number;
+  alpha: number;
+  clips: PdfClip[];
+};
+
 /** One text label of the source SVG. */
 export type SvgLabel = {
   text: string;
@@ -1072,7 +1097,7 @@ const NOT_DRAWN = new Set([
 ]);
 
 /** What this reader does not compare, named in a failure rather than passed. */
-const UNREAD = new Set(["foreignobject", "image", "switch"]);
+const UNREAD = new Set(["foreignobject", "switch"]);
 
 /** The SVG elements a stylesheet rule could restyle here. */
 const SVG_TAGS = new Set([
@@ -1276,9 +1301,16 @@ export function readSvg(
   svg: string,
   /** The report's stylesheets outside the drawing: a browser styles an SVG with them too. */
   outerCss = "",
-): { shapes: SvgShape[]; labels: SvgLabel[]; unread: string[]; viewport: number[] | null } {
+): {
+  shapes: SvgShape[];
+  labels: SvgLabel[];
+  unread: string[];
+  viewport: number[] | null;
+  images: SvgImage[];
+} {
   const root = parse(svg);
   const shapes: SvgShape[] = [];
+  const images: SvgImage[] = [];
   const labels: SvgLabel[] = [];
   const unread = new Set<string>();
   // Every stylesheet rule that could restyle the drawing: the report's, then the drawing's own
@@ -1813,6 +1845,32 @@ export function readSvg(
       return; // a shape draws no children
     }
     switch (n.tag) {
+      case "image": {
+        // A raster image (group 8f): Chrome paints it as an image (measured), checked by where it
+        // is painted and, by the caller, pixel for pixel. An SVG one, or one not embedded, is not.
+        const uri = (n.attrs.get("href") ?? n.attrs.get("xlink:href") ?? "").trim();
+        const [w, h] = [num("width", Number.NaN), num("height", Number.NaN)];
+        if (!/^data:image\/(?!svg\+xml)/i.test(uri)) {
+          unread.add(`an <image> of "${uri.slice(0, 40)}"`);
+          return;
+        }
+        if (!(w > 0 && h > 0)) {
+          if (Number.isNaN(w) || Number.isNaN(h)) unread.add("an <image> sized by its own pixels");
+          return;
+        }
+        if (!here.visible) return;
+        const par = (n.attrs.get("preserveaspectratio") ?? "xMidYMid meet").trim();
+        const box = [num("x"), num("y"), w, h];
+        // `slice` overflows its viewport, which clips it.
+        const own = /\bslice\b/.test(par)
+          ? [
+              ...clips,
+              { parts: [{ polygons: [rectPolygon(box[0], box[1], w, h, m)], evenOdd: false }] },
+            ]
+          : clips;
+        images.push({ uri, box, par, e: m, alpha: here.opacity, clips: own });
+        return;
+      }
       case "text": {
         // The text and its own tspans: a tspan with its own x or y is a label of its own.
         const size = Number.parseFloat(here.size) || 16;
@@ -1938,7 +1996,7 @@ export function readSvg(
     }
     walk(c, IDENTITY, start, 0, clips);
   }
-  return { shapes, labels, unread: [...unread], viewport };
+  return { shapes, labels, unread: [...unread], viewport, images };
 }
 
 // ---------------------------------------------------------------------------
@@ -2023,8 +2081,45 @@ function sameMatrix(a: Matrix, b: Matrix): boolean {
   );
 }
 
-/** Outcome of {@link compareSvg}. */
-export type SvgCheck = { compared: number; problems: string[] };
+/**
+ * Outcome of {@link compareSvg}; `images` names each source image matched to a paint, with the
+ * source's pixel crop the paint must show (the caller compares the pixels).
+ */
+export type SvgCheck = {
+  compared: number;
+  problems: string[];
+  images: { uri: string; page: number; order: number; crop: number[] }[];
+};
+
+/**
+ * Where a source image is painted (group 8f, measured on Chrome 2026-11-09): its pixels fitted to
+ * its viewport by `preserveAspectRatio`; under `slice`, only the WHOLE pixels its viewport shows
+ * are written (a 4x2 image sliced into 30x40 at x-mid is written as its pixels 1 to 3, placed
+ * where they fall, then clipped). `crop` is [x, y, width, height] in source pixels; `unit` maps
+ * the PDF image's unit square (row 0 at the top, v = 1) into the drawing.
+ */
+export function imagePlacement(
+  img: SvgImage,
+  iw: number,
+  ih: number,
+): { crop: number[]; unit: Matrix } {
+  const [x, y, w, h] = img.box;
+  const fit = mul(viewBoxMatrix([0, 0, iw, ih], w, h, img.par), [1, 0, 0, 1, x, y]);
+  let crop = [0, 0, iw, ih];
+  if (/\bslice\b/.test(img.par)) {
+    const back = invert(fit);
+    const [x0, y0] = apply(back, x, y);
+    const [x1, y1] = apply(back, x + w, y + h);
+    const snap = (v: number) => Math.round(v * 1e6) / 1e6;
+    const cx0 = Math.max(0, Math.floor(snap(Math.min(x0, x1))));
+    const cy0 = Math.max(0, Math.floor(snap(Math.min(y0, y1))));
+    const cx1 = Math.min(iw, Math.ceil(snap(Math.max(x0, x1))));
+    const cy1 = Math.min(ih, Math.ceil(snap(Math.max(y0, y1))));
+    crop = [cx0, cy0, cx1 - cx0, cy1 - cy0];
+  }
+  const toPixels: Matrix = [crop[2], 0, 0, -crop[3], crop[0], crop[1] + crop[3]];
+  return { crop, unit: mul(mul(toPixels, fit), img.e) };
+}
 
 /**
  * One source drawing against the paths and text the PDF draws for its report: every fill and
@@ -2038,8 +2133,17 @@ export function compareSvg(
   vectors: PdfVector[],
   runs: PdfRun[],
   used: Set<string>,
+  /** Group 8f: the images the PDF paints, and each source image's pixel size (its decoded URI). */
+  imagePaints: PdfImagePaint[] = [],
+  sizeOf: (uri: string) => number[] | null = () => null,
 ): SvgCheck {
   const problems = svg.unread.map((u) => `${u} is not verified`);
+  const imageKey = (p: PdfImagePaint) => `${p.page}:${p.order}:image`;
+  // Each source image placed (its crop and where it lands), or why it cannot be.
+  const placings = svg.images.map((img) => {
+    const size = sizeOf(img.uri);
+    return { img, placing: size ? imagePlacement(img, size[0], size[1]) : null };
+  });
   type Duty = { shape: SvgShape; kind: "fill" | "stroke" };
   // A stroke draws nothing where it has no length and butt caps -- an SVG length a browser cannot
   // read is 0, and a client set's chart with a collapsed range writes `y1="NaN"` (408 grid lines
@@ -2135,11 +2239,29 @@ export function compareSvg(
       else votes.push({ base, n: 1 });
     }
   }
+  // An image votes too (group 8f): the base its paint implies, its crop's pixels where the source
+  // puts them -- so a drawing of an image alone is placed.
+  for (const { placing } of placings) {
+    if (!placing) continue;
+    const seen: Matrix[] = [];
+    for (const p of imagePaints) {
+      if (used.has(imageKey(p)) || p.width !== placing.crop[2] || p.height !== placing.crop[3])
+        continue;
+      const b = mul(invert(placing.unit), p.m);
+      if (seen.some((s) => sameMatrix(s, b))) continue;
+      seen.push(b);
+      const vote = votes.find((t) => sameMatrix(t.base, b));
+      if (vote) vote.n++;
+      else votes.push({ base: b, n: 1 });
+    }
+  }
   const base = votes.sort((a, b) => b.n - a.n)[0]?.base;
   if (base === undefined) {
-    if (duties.length > 0)
-      problems.push(`none of its ${duties.length} shape(s) drawn as in its source`);
-    return { compared: 0, problems };
+    if (duties.length > 0 || svg.images.length > 0)
+      problems.push(
+        `none of its ${duties.length + svg.images.length} shape(s) and image(s) drawn as in its source`,
+      );
+    return { compared: 0, problems, images: [] };
   }
   /**
    * Where a gradient is compared: points inside a fill (a 5 by 5 grid of its box, those inside
@@ -2286,6 +2408,21 @@ export function compareSvg(
       const along = dense(centre, Math.max(tol, length(centre) / 24));
       points.push(...along.filter((_, i) => i % Math.max(1, Math.floor(along.length / 24)) === 0));
     }
+    return clipsDisagree(src, pdf, edges, onShape, points, tol);
+  };
+  /**
+   * The points test itself, shared by shapes and images: `seeds` over the area, and points either
+   * side of every clip edge that lie on it (`onArea`); a point near an edge is skipped.
+   */
+  const clipsDisagree = (
+    src: SvgClip[],
+    pdf: PdfClip[],
+    edges: number[][][],
+    onArea: (x: number, y: number) => boolean,
+    seeds: number[][],
+    tol: number,
+  ): string | null => {
+    const points = [...seeds];
     for (const p of edges) {
       // about 48 probes a polygon, none closer than the tolerance
       const ring = dense(
@@ -2301,7 +2438,7 @@ export function compareSvg(
         const [nx, ny] = [-(by - ay) / len, (bx - ax) / len];
         for (const s of [-2.5, 2.5]) {
           const q = [mx + nx * s * tol, my + ny * s * tol];
-          if (onShape(q[0], q[1])) points.push(q);
+          if (onArea(q[0], q[1])) points.push(q);
         }
       }
     }
@@ -2372,8 +2509,93 @@ export function compareSvg(
         `a <${shape.what}>'s ${strokeFirst ? "stroke" : "fill"} painted first, its ${strokeFirst ? "fill" : "stroke"} first in its source`,
       );
   }
+  // Each image (group 8f): a free paint whose unit square lands where the source puts its crop
+  // (three corners, so neither flipped nor turned), its pixel size the crop's, at its alpha, cut by
+  // the same clips. Its pixels are the caller's to compare.
+  const imageMatches: SvgCheck["images"] = [];
+  const matchedImages: PdfImagePaint[] = [];
+  for (const { img, placing } of placings) {
+    const name = `an <image> at (${img.box[0]}, ${img.box[1]})`;
+    if (!placing) {
+      missing.push(`${name}: its source does not decode`);
+      continue;
+    }
+    const at = mul(placing.unit, base);
+    const corners = [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+    ];
+    const want = corners.map(([u, v]) => apply(at, u, v));
+    const tol = Math.max(0.5, 0.01 * Math.hypot(want[1][0] - want[0][0], want[2][1] - want[0][1]));
+    const placed = imagePaints.filter(
+      (p) =>
+        p.page === (matched[0]?.page ?? p.page) &&
+        !used.has(imageKey(p)) &&
+        corners.every(([u, v], k) => {
+          const [px, py] = apply(p.m, u, v);
+          return Math.hypot(px - want[k][0], py - want[k][1]) <= tol;
+        }),
+    );
+    // Its clips, asked as a shape's are: over the image as painted, and either side of every edge.
+    const clipWhy = (p: PdfImagePaint) => {
+      const toDrawing = invert(base);
+      const pdf = p.clips.map((k) => ({
+        polygons: k.polygons.map((q) => q.map(([x, y]) => apply(toDrawing, x, y))),
+        evenOdd: k.evenOdd,
+      }));
+      const area = [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+      ].map(([u, v]) => apply(placing.unit, u, v));
+      const box = polygonBox([area]);
+      const ctol = Math.max(
+        0.75 / Math.max(scaleOf(base), 1e-9),
+        0.01 * Math.hypot(box[2] - box[0], box[3] - box[1]),
+      );
+      const seeds: number[][] = [];
+      for (let i = 0; i < 7; i++)
+        for (let j = 0; j < 7; j++) seeds.push(apply(placing.unit, (i + 0.5) / 7, (j + 0.5) / 7));
+      const edges = [...img.clips.flatMap(clipPolygons), ...pdf.flatMap((k) => k.polygons)];
+      return clipsDisagree(
+        img.clips,
+        pdf,
+        edges,
+        (x, y) => polygonsContain([area], false, x, y),
+        seeds,
+        ctol,
+      );
+    };
+    const right = placed.find(
+      (p) =>
+        p.width === placing.crop[2] &&
+        p.height === placing.crop[3] &&
+        Math.abs(p.alpha - img.alpha) <= 0.02 &&
+        clipWhy(p) === null,
+    );
+    if (right) {
+      used.add(imageKey(right));
+      matchedImages.push(right);
+      imageMatches.push({ uri: img.uri, page: right.page, order: right.order, crop: placing.crop });
+      continue;
+    }
+    const [first] = placed;
+    missing.push(
+      !first
+        ? `${name} not painted where its source puts it`
+        : first.width !== placing.crop[2] || first.height !== placing.crop[3]
+          ? `${name} painted ${first.width}x${first.height}, its source's ${placing.crop[2]}x${placing.crop[3]} pixels`
+          : Math.abs(first.alpha - img.alpha) > 0.02
+            ? `${name} at opacity ${first.alpha.toFixed(2)}, ${img.alpha.toFixed(2)} in its source`
+            : `${name} ${clipWhy(first)}`,
+    );
+  }
   if (missing.length > 0)
-    problems.push(`${missing.length} of ${duties.length} -- ${missing.slice(0, 3).join("; ")}`);
+    problems.push(
+      `${missing.length} of ${duties.length + svg.images.length} -- ${missing.slice(0, 3).join("; ")}`,
+    );
   // Nothing else painted among them: a path between its first and last matched one, page by page.
   const extra = new Set<string>();
   // Where the source has a stroked element that draws nothing (no length, butt caps): its point.
@@ -2401,13 +2623,45 @@ export function compareSvg(
         b[3] <= onPage[3] + 1)
     );
   };
-  for (const page of new Set(matched.map((v) => v.page))) {
-    const orders = matched.filter((v) => v.page === page).map((v) => v.order);
+  // An image paint lies on the drawing as a path does: its unit square inside the placed region.
+  const imageOnDrawing = (p: PdfImagePaint) => {
+    const b = polygonBox(
+      [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+      ].map(([u, v]) => [apply(p.m, u, v)]),
+    );
+    return (
+      b[0] >= onPage[0] - 1 &&
+      b[1] >= onPage[1] - 1 &&
+      b[2] <= onPage[2] + 1 &&
+      b[3] <= onPage[3] + 1
+    );
+  };
+  const pagesDrawn = new Set([...matched.map((v) => v.page), ...matchedImages.map((p) => p.page)]);
+  for (const page of pagesDrawn) {
+    const orders = [...matched, ...matchedImages]
+      .filter((v) => v.page === page)
+      .map((v) => v.order);
     let [lo, hi] = [Math.min(...orders), Math.max(...orders)];
-    const here = vectors.filter((v) => v.page === page).sort((a, b) => a.order - b.order);
+    // Paths and images alike, in paint order, each with whether it lies on the drawing.
+    const here = [
+      ...vectors
+        .filter((v) => v.page === page)
+        .map((v) => ({ order: v.order, on: () => onDrawing(v) })),
+      ...imagePaints
+        .filter((p) => p.page === page)
+        .map((p) => ({ order: p.order, on: () => imageOnDrawing(p) })),
+    ].sort((a, b) => a.order - b.order);
     const at = (order: number) => here.findIndex((v) => v.order === order);
-    for (let k = at(lo) - 1; k >= 0 && onDrawing(here[k]); k--) lo = here[k].order;
-    for (let k = at(hi) + 1; k < here.length && onDrawing(here[k]); k++) hi = here[k].order;
+    for (let k = at(lo) - 1; k >= 0 && here[k].on(); k--) lo = here[k].order;
+    for (let k = at(hi) + 1; k < here.length && here[k].on(); k++) hi = here[k].order;
+    for (const p of imagePaints) {
+      if (p.page === page && p.order >= lo && p.order <= hi && !used.has(imageKey(p)))
+        extra.add(imageKey(p));
+    }
     for (const v of vectors) {
       if (v.page !== page || v.order < lo || v.order > hi) continue;
       // A path a reader cannot see draws nothing: Chrome writes the NaN grid line as one with no
@@ -2444,8 +2698,12 @@ export function compareSvg(
     const [first] = [...extra];
     const [page, order, kind] = first.split(":");
     const v = vectors.find((x) => x.page === Number(page) && x.order === Number(order));
+    const image = imagePaints.find((x) => x.page === Number(page) && x.order === Number(order));
     let what = "";
-    if (v) {
+    if (kind === "image" && image) {
+      const at = apply(mul(image.m, invert(base)), 0, 1);
+      what = ` (first: an image ${image.width}x${image.height} from (${at[0].toFixed(1)}, ${at[1].toFixed(1)}))`;
+    } else if (v) {
       const p0 = v.lines[0]?.points[0] ?? [0, 0];
       const at = apply(mul(v.m, invert(base)), p0[0], p0[1]);
       const points = v.lines.reduce((n, l) => n + l.points.length, 0);
@@ -2490,5 +2748,9 @@ export function compareSvg(
       );
     }
   }
-  return { compared: matched.length + placed, problems };
+  return {
+    compared: matched.length + matchedImages.length + placed,
+    problems,
+    images: imageMatches,
+  };
 }
