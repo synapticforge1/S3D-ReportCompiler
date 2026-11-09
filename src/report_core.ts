@@ -3740,7 +3740,10 @@ function sourceTally(raw: string): {
   expectedImages: number;
   /** The drawn images' data URIs, in order ({@link drawnImages}). */
   imageSources: string[];
+  /** The drawn inline SVGs, in order ({@link drawnSvgs}). */
+  svgSources: string[];
 } {
+  const svgSources: string[] = [];
   const words = new Map<string, number>();
   const numbers = new Map<string, number>();
   let pairs = new Map<string, number>();
@@ -3781,6 +3784,27 @@ function sourceTally(raw: string): {
       /^<img\b[\s\S]*?\ssrc\s*=\s*["']data:/i.test(t),
     );
     expectedImages += drawn.length;
+    // Each top-level inline SVG as a reader sees it, in order, for the geometry check
+    // ({@link drawnSvgs}): nesting balanced, so an inner <svg> stays inside its outer one.
+    for (let from = 0; ;) {
+      const open = html.slice(from).search(/<svg(?=[\s/>])/i);
+      if (open < 0) break;
+      const start = from + open;
+      let depth = 0;
+      let end = -1;
+      for (const m of html
+        .slice(start)
+        .matchAll(/<(\/?)svg(?=[\s/>])(?:"[^"]*"|'[^']*'|[^"'>])*>/gi)) {
+        depth += m[1] ? -1 : m[0].endsWith("/>") ? 0 : 1;
+        if (depth === 0) {
+          end = start + (m.index ?? 0) + m[0].length;
+          break;
+        }
+      }
+      if (end < 0) break;
+      svgSources.push(html.slice(start, end));
+      from = end;
+    }
     // Each one's data URI, in order, for the pixel check ({@link drawnImages}).
     for (const t of drawn) {
       const src = /\ssrc\s*=\s*(["'])(data:[^"']*)\1/i.exec(t)?.[2];
@@ -3853,7 +3877,24 @@ function sourceTally(raw: string): {
     );
   }
 
-  return { words, numbers, pairs, expectedImages, imageSources };
+  return { words, numbers, pairs, expectedImages, imageSources, svgSources };
+}
+
+/**
+ * The inline SVG drawings a reader of one source report sees, in order: each top-level `<svg>`
+ * element, whole, read by the verification's own extraction (an SVG's `<title>` and `<desc>` left
+ * out, as they are never drawn). For comparing each drawing's shapes and labels with the paths and
+ * text the finished PDF draws (roadmap task 18 group 8).
+ *
+ * @param source one raw source report
+ * @example
+ * ```ts
+ * import { drawnSvgs } from "@jrmarcum/s3d-reportcompiler";
+ * console.log(drawnSvgs('<body><svg><line x1="0" y1="0" x2="9" y2="9"/></svg></body>').length); // 1
+ * ```
+ */
+export function drawnSvgs(source: string): string[] {
+  return sourceTally(source).svgSources;
 }
 
 /**
