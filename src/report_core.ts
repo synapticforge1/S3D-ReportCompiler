@@ -165,16 +165,57 @@ function decodeJsString(literal: string): string {
 }
 
 /**
- * Slice a balanced `[...]` array starting at `key:`, ignoring brackets that
- * occur inside string literals.
+ * Where a config key's value is, and what: an array literal, a variable holding one (resolved),
+ * or something only running the script could tell (`unreadable`, naming it). `null` when no
+ * script sets the key at all.
+ *
+ * Until 2026-11-08 a key that did not hold an array literal counted as NOT DECLARED, so
+ * `inlineMath: D` (a variable) fell back to the default delimiters: the report's own were never
+ * applied, its maths printed as prose, and the guard -- which reads the delimiters read here --
+ * said nothing (class B, roadmap task 18 item 1). A variable holding a literal is read; anything
+ * else is refused, never guessed.
  */
-function sliceArrayLiteral(src: string, key: string): string | null {
+function configArray(
+  scripts: string[],
+  key: string,
+): { array: string } | { unreadable: string } | null {
   // The key as JavaScript allows it: bare, or quoted either way (a JSON-style config,
   // `"inlineMath": [...]`, used to go unread, and the fallback delimiters stood in for it).
-  const at = src.search(new RegExp(`(?<![\\w$])(["']?)${key}\\1\\s*:\\s*\\[`));
-  if (at < 0) return null;
+  const keyRe = new RegExp(`(?<![\\w$])(["']?)${key}\\1\\s*:\\s*`);
+  for (let s = 0; s < scripts.length; s++) {
+    const m = keyRe.exec(scripts[s]);
+    if (m === null) continue;
+    const valueAt = m.index + m[0].length;
+    const value = scripts[s].slice(valueAt);
+    if (value.startsWith("[")) {
+      const array = sliceArrayAt(scripts[s], valueAt);
+      return array === null ? { unreadable: `${key}: ${value.slice(0, 40)}` } : { array };
+    }
+    const name = /^([A-Za-z_$][\w$]*)\s*(?=[,}\n;]|$)/.exec(value)?.[1];
+    if (name === undefined) return { unreadable: `${key}: ${value.slice(0, 40).trim()}` };
+    // The variable's last assignment of an array before the key: in this script, then in the
+    // scripts that ran before it (`scripts` is latest first).
+    const assign = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}\\s*=(?!=)\\s*`, "g");
+    const lastArray = (text: string) => {
+      let found: string | null = null;
+      for (const a of text.matchAll(assign)) {
+        const at = (a.index ?? 0) + a[0].length;
+        found = text[at] === "[" ? sliceArrayAt(text, at) : null;
+      }
+      return found;
+    };
+    for (const text of [scripts[s].slice(0, m.index), ...scripts.slice(s + 1)]) {
+      const array = lastArray(text);
+      if (array !== null) return { array };
+      if (assign.test(text)) break; // assigned, but not an array literal
+    }
+    return { unreadable: `${key}: ${name}` };
+  }
+  return null;
+}
 
-  const start = src.indexOf("[", at + key.length);
+/** The balanced `[...]` starting at `start`, brackets inside string literals ignored. */
+function sliceArrayAt(src: string, start: number): string | null {
   let depth = 0;
   let quote: string | null = null;
 
@@ -201,9 +242,8 @@ const PAIR_RE = /\[\s*(['"])((?:\\.|(?!\1)[^\\])*)\1\s*,\s*(['"])((?:\\.|(?!\3)[
  */
 export const skippedDelims: Set<string> = new Set();
 
-/** Delimiter pairs from one config key, refusing degenerate ones. */
-function readPairs(src: string, key: string, display: boolean): Delim[] {
-  const arr = sliceArrayLiteral(src, key);
+/** Delimiter pairs from one config key's array, refusing degenerate ones. */
+function readPairs(arr: string | null, display: boolean): Delim[] {
   if (!arr) return [];
 
   const out: Delim[] = [];
@@ -240,18 +280,26 @@ export function parseDelimiters(src: string): Delim[] {
   // and those configured) silent (2026-11-07 review). Each key from the LAST script that sets it,
   // as a later MathJax config overrides an earlier one.
   const scripts = liveScripts(src).reverse();
-  const lastWith = (key: string) => scripts.find((s) => sliceArrayLiteral(s, key) !== null) ?? "";
-  const displayCfg = lastWith("displayMath");
-  const inlineCfg = lastWith("inlineMath");
-  const found = [
-    ...readPairs(displayCfg, "displayMath", true),
-    ...readPairs(inlineCfg, "inlineMath", false),
-  ];
+  const display = configArray(scripts, "displayMath");
+  const inline = configArray(scripts, "inlineMath");
+  // A key set to what only running the script could tell: refused, named, never guessed.
+  const unreadable = [display, inline].flatMap((c) =>
+    c !== null && "unreadable" in c ? [c.unreadable] : [],
+  );
+  if (unreadable.length > 0) {
+    throw new Error(
+      `cannot read its maths delimiters: ${unreadable.map((u) => `\`${u}\``).join(", ")} is not ` +
+        "an array literal, nor a variable assigned one -- refusing rather than guess which " +
+        "delimiters MathJax would apply",
+    );
+  }
+  const arrayOf = (c: typeof display) => (c !== null && "array" in c ? c.array : null);
+  const found = [...readPairs(arrayOf(display), true), ...readPairs(arrayOf(inline), false)];
   // The fallback is for a report with NO config. A config that was read but whose every pair was
   // refused declared its own delimiters, just unusable ones: falling back then applied delimiters
   // it never declared (a bare `$` once turned prose into maths). No delimiters instead -- the
   // guard, which looks for every standard one, refuses whatever maths the report holds.
-  const declared = displayCfg !== "" || inlineCfg !== "";
+  const declared = display !== null || inline !== null;
   if (found.length === 0) return declared ? [] : FALLBACK_DELIMS;
 
   // Longest opener first, so $$ is tried before $ and [mathin] before any

@@ -606,6 +606,15 @@ All three real sets PASS with the baked HTML unchanged (`487321f2…`, `da92578d
   48 set's (a counts-only probe).
 - ⚠️ A test helper that builds a report with a heading also expects the heading's own tokens (the
   "1" of `MEMBER # 1`): leave the heading out when asserting a body's exact numbers.
+- ⚠️ **`$'` in a `String.replace` replacement string is "the text after the match"** (and `$&`,
+  `` $` ``, `$1` are special too): planting a config with `['$','$']` wrote garbage into the
+  report, and the test looked like a code bug. Plant with a FUNCTION replacement.
+- The section-inversion harness must find a test whose name the formatter put on its own line
+  (`test(\n  "…"`), and its end at the next top-level `test(` — a formatted multi-argument test
+  closes with `},\n);`, not `});`. The first version split the wrong test and reported sections
+  that do not exist.
+- **Measure vacuity by deleting ONE occurrence**, not all (task 18 group 1): it found the counting
+  asymmetries — a surplus on the PDF side hides a lost occurrence.
 
 ⚠️ **CI caught what Windows could not (2026-11-05, the first v1.1.6 tag):** the redactor test failed
 on GitHub's Ubuntu runner — `fromHere` only knew a DRIVE-letter checkout, so a POSIX checkout

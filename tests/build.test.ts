@@ -3342,6 +3342,92 @@ test("class B, re-check 2: every occurrence, no line-split words, capitals only 
 });
 
 test(
+  "class B, task 18 item 1: the maths config, resolved or refused",
+  { timeout: TIMEOUT },
+  async () => {
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    const opens = (head: string) =>
+      core
+        .parseDelimiters(`<html><head>${head}</head><body></body></html>`)
+        .map((d: { open: string }) => d.open);
+
+    // 1. A variable holding the array is read (it fell back to the defaults, and `@@` was prose).
+    assert.ok(
+      opens(
+        `<script>var D = [['@@','@@']]; MathJax = {tex2jax: {inlineMath: D}};</script>`,
+      ).includes("@@"),
+      "a variable's delimiters were not read",
+    );
+    //    ...from an earlier script too, and the last assignment wins.
+    assert.deepEqual(
+      opens(
+        `<script>var D = [['%%','%%']]; D = [['@@','@@']];</script><script>MathJax = {tex2jax: {inlineMath: D}};</script>`,
+      ),
+      ["@@"],
+    );
+    // 2. Anything only running the script could tell is refused, never guessed.
+    for (const value of ["makeDelims()", "D", "D.concat(E)"]) {
+      const head = `<script>${value === "D" ? "var D = f();" : ""} MathJax = {tex2jax: {inlineMath: ${value}}};</script>`;
+      assert.throws(
+        () => opens(head),
+        /cannot read its maths delimiters/,
+        `inlineMath: ${value} was guessed`,
+      );
+    }
+
+    // 3. End to end, on a committed sample.
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const build = (what: string, html: string) => {
+      const dir = join(work, `task18-1-${what}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "member_0_report.html"), html);
+      return run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    };
+    //    The sample's own config through a variable, plus a delimiter of its own: baked, and PASS.
+    const viaVariable = sample
+      .replace(/inlineMath:\s*\[/, "inlineMath: DI, inlineUnused: [")
+      // The sample's own inline pairs, and one of its own (a function: `$'` in a replacement
+      // STRING is "the text after the match").
+      .replace(
+        "MathJax.Hub.Config(",
+        () =>
+          "var DI = [['$','$'], ['\\\\(','\\\\)'], ['[mathin]','[mathin]'], ['@@','@@']]; MathJax.Hub.Config(",
+      )
+      .replace(/<\/body>/i, "<p>@@x_{1} = 4471@@</p></body>");
+    const ok = build("variable", viaVariable);
+    assert.equal(ok.code, 0, tail(ok.out));
+    has(ok.out, /PASS/);
+    //    A config only running it could tell: refused by name, nothing written.
+    const refused = build(
+      "unreadable",
+      sample.replace(/inlineMath:\s*\[/, "inlineMath: makeDelims(), inlineUnused: ["),
+    );
+    assert.equal(refused.code, 1, tail(refused.out));
+    has(
+      refused.out,
+      /Cannot tell which maths delimiters/,
+      /member_0_report\.html: cannot read its maths delimiters/,
+    );
+    //    The verifier reads the delimiters itself: a pair printed as prose fails, even where the bake
+    //    (rightly, as a browser) applied none -- here a config inside <noscript>.
+    const printed = build(
+      "printed",
+      sample
+        .replace(
+          /<\/head>/i,
+          "<noscript><script>MathJax.Hub.Config({tex2jax:{inlineMath:[['@@','@@']]}})</script></noscript></head>",
+        )
+        .replace(/<\/body>/i, "<p>@@x = 4471@@</p></body>"),
+    );
+    assert.equal(printed.code, 1, tail(printed.out));
+    has(
+      printed.out,
+      /maths printed as prose, its delimiters shown -- member_0_report\.html: @@\.\.@@/,
+    );
+  },
+);
+
+test(
   "class B: what the PDF draws -- invisible and white text, cut images, cut diagrams",
   { timeout: TIMEOUT },
   () => {

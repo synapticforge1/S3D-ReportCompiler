@@ -192,15 +192,18 @@ white page (contrast under 3:1, its alpha composited first; the real sets' lowes
 template with white text on a band would fail here until backgrounds are read, task 18 item 4);
 text too SMALL to read (under 2 pt; the real sets' smallest is 3.61). Both measured figures are on
 every build's `legible:` line; an image drawn but not seen (under 2 pt on a side, or less than half
-inside its clipping box); TeX sub/superscript marks in their braced form left in the printed text
+inside its clipping box); a report's OWN declared maths delimiters printed around text in its own
+pages (read from the source by the verification's own reader, over-inclusively, since 2026-11-08,
+#90 — the bake refuses a config it cannot read, and the guard checks what the bake read, so this
+is the side that does not depend on the bake); TeX sub/superscript marks in their braced form left in the printed text
 (`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
 ⚠️ Still NOT seen: text covered by an opaque box, or grey on grey; a diagram's drawing (only its
 labels are text) and an image's pixels; a one-letter unit (`12 m` → `12 N` — a single letter is in
 every report, so alone it proves nothing). A number broken across two lines fails (lines are never
 joined, else table rows would be) — the loud direction. 🔒 **Each of these is to be FIXED, not kept
 (owner, 2026-11-08: "We need fixes not limits")**, along with re-check 2's ASCII operators and `%` (its
-occurrence, size and white-page contrast gaps are fixed, #89): the plan and order are roadmap task
-18.
+occurrence, size and white-page contrast gaps are fixed, #89; maths with bare marks, by reading
+each report's own delimiters, #90): the plan and order are roadmap task 18.
 
 Two extraction rules that were bugs first:
 

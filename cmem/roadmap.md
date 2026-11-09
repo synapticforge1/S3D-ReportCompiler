@@ -1187,7 +1187,7 @@ class-B re-check at the end:
      smallest real text is 3.61 pt).
    - **4, its first part:** contrast against the white page, under about 1.5:1 fails (`#eeeeee`
      passed).
-2. **1, maths config.** `parseDelimiters` treats a config key it cannot read (`inlineMath: D`, a
+2. ✅ **DONE 2026-11-08 (known-issues #90)** — **1, maths config.** `parseDelimiters` treats a config key it cannot read (`inlineMath: D`, a
    variable) as no config and uses the fallback; nothing reads the real delimiters. Fix: resolve a
    `var`/`let`/`const` holding a literal, otherwise FAIL "cannot read the maths delimiters"; the
    verifier reads the delimiters with its own code (§9), and any pair of them printed in the PDF
@@ -1215,7 +1215,7 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 2 (item 1, the maths config).
+**Next step:** group 3 (item 7, report identity and order).
 
 🔒 **Owner, 2026-11-08: "skips need fixes also, unless it will be fixed in a different class."**
 Nothing is set aside without a fix. Recorded for the class it belongs to:
