@@ -111,11 +111,14 @@ import {
   extractSourceTokens,
   findBrokenReferences,
   findLeftoverMath,
+  inlineLinkedImages,
+  linkedImages,
   MATHJAX_FONTS,
   mathStats,
   mathStyleSheet,
   type PdfObservations,
   skippedDelims,
+  sniffImageType,
   sortReportNames,
   svgStyleWarnings,
   bakeRemovals,
@@ -504,6 +507,9 @@ function fontSource(url: string): string {
 
 /** How long one font may take to download (each is under 100 kB). */
 const FONT_FETCH_TIMEOUT_MS = 60_000;
+
+/** How long one linked image may take to download. */
+const LINK_FETCH_TIMEOUT_MS = 60_000;
 
 /** The font cache's write failure is said once a build, not once a font. */
 let fontCacheWarned = false;
@@ -2507,6 +2513,97 @@ if (unbakeable.length > 0) {
     "\nNothing was written. Give the report a literal tex2jax config (SkyCiv's own exports have one).",
   );
   rt.exit(1);
+}
+
+// Linked images (owner, 2026-11-09: "a linked image must fetch the image for inclusion into the
+// pdf for fidelity of the documents"). The document loads nothing from outside, so an image a
+// report links to would print BLANK -- and, uncounted by the verification (it counts embedded
+// images), vanish unnoticed. Each is fetched as a browser opening the report would find it --
+// resolved against the report's own file URL; http(s) from the web -- typed by its bytes, and
+// embedded in the body AND the source, so the verification checks each against what was fetched.
+// One that cannot be had stops the build, by name.
+{
+  const fetched = new Map<string, string>(); // absolute URL -> data: URI
+  const failures: string[] = [];
+  let fromWeb = 0;
+  let embedded = 0;
+  for (let i = 0; i < bodies.length; i++) {
+    const links = linkedImages(bodies[i]);
+    if (links.length === 0) continue;
+    const found = new Map<string, string>();
+    const base = zipPath === null ? await rt.toFileUrl(rt.joinPath(htmlDir, entries[i])) : null;
+    for (const link of links) {
+      let url: URL;
+      try {
+        // in a zip a report has no folder: only an absolute link resolves
+        url = base === null ? new URL(link) : new URL(link, base);
+      } catch {
+        failures.push(
+          `${entries[i]}: "${link}" -- ${base === null ? "a zip holds reports only; a relative link has no file to name" : "not a link a browser can follow"}`,
+        );
+        continue;
+      }
+      url.hash = "";
+      const key = url.href;
+      if (!fetched.has(key)) {
+        let bytes: Uint8Array;
+        try {
+          if (url.protocol === "file:") {
+            bytes = await rt.readFile(await rt.fromFileUrl(key));
+          } else if (url.protocol === "http:" || url.protocol === "https:") {
+            const res = await fetch(key, { signal: AbortSignal.timeout(LINK_FETCH_TIMEOUT_MS) });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            bytes = new Uint8Array(await res.arrayBuffer());
+            fromWeb++;
+          } else {
+            throw new Error(`a ${url.protocol} link, which this tool does not fetch`);
+          }
+        } catch (e) {
+          const why =
+            (e as Error).name === "TimeoutError"
+              ? `did not download within ${LINK_FETCH_TIMEOUT_MS / 1000} s`
+              : (e as Error).message;
+          failures.push(`${entries[i]}: "${link}" -- ${why}`);
+          continue;
+        }
+        const type = sniffImageType(bytes);
+        if (type === null) {
+          failures.push(`${entries[i]}: "${link}" -- not an image (${bytes.length} bytes)`);
+          continue;
+        }
+        let binary = "";
+        for (const b of bytes) binary += String.fromCharCode(b);
+        fetched.set(key, `data:${type};base64,${btoa(binary)}`);
+      }
+      const uri = fetched.get(key);
+      if (uri !== undefined) found.set(link, uri);
+    }
+    bodies[i] = inlineLinkedImages(bodies[i], found);
+    sources[i] = inlineLinkedImages(sources[i], found);
+    embedded += found.size;
+  }
+  // Each one embedded, or the build stops: none may print blank.
+  for (let i = 0; i < bodies.length && failures.length === 0; i++) {
+    for (const link of linkedImages(bodies[i]))
+      failures.push(`${entries[i]}: "${link}" -- not embedded`);
+  }
+  if (embedded > 0) {
+    console.log(
+      `  links:    ${embedded} linked image(s) embedded` +
+        (fromWeb > 0 ? ` (${fromWeb} from the web)` : ""),
+    );
+  }
+  if (failures.length > 0) {
+    console.error("");
+    console.error("ERROR: a linked image could not be embedded.");
+    for (const f of failures.slice(0, 20)) console.error(`  ${f}`);
+    if (failures.length > 20) console.error(`  ...and ${failures.length - 20} more`);
+    console.error("");
+    console.error("It would print blank. Put the image where the link points (beside the report,");
+    console.error("for a relative link), or embed it in the report, then re-run.");
+    await noteEarlierPdf();
+    rt.exit(1);
+  }
 }
 
 console.log(`  delims:   ${[...delimSignatures][0] ?? "none"}`);

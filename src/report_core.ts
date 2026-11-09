@@ -3927,6 +3927,133 @@ export function drawnImages(source: string): string[] {
 }
 
 /**
+ * Every image a baked body still LINKS to rather than embeds, in order, each once: what an
+ * `<img>` draws in the print (its `src`, or with none its `srcset`'s first candidate), an SVG
+ * `<image>`'s `href` / `xlink:href` -- not `data:`, not `#…`; entity-decoded. The document's policy loads nothing from outside (`img-src data:`), so each
+ * would print blank: the caller fetches them (relative to the report, or from the web) and
+ * {@link inlineLinkedImages} embeds them (owner, 2026-11-09: "a linked image must fetch the image
+ * for inclusion into the pdf for fidelity of the documents"). Read from the BAKED body, so the
+ * spinner the bake removes is never fetched.
+ *
+ * @param body one report's baked body ({@link bakeBody})
+ * @example
+ * ```ts
+ * import { linkedImages } from "@jrmarcum/s3d-reportcompiler";
+ * console.log(linkedImages('<img src="fig.png"><img src="data:image/png;base64,AAAA">')); // ["fig.png"]
+ * ```
+ */
+export function linkedImages(body: string): string[] {
+  const out = new Set<string>();
+  for (const t of body.matchAll(startTagRe("img|image"))) {
+    const a = attrsOf(t[0]);
+    const urls =
+      t[1].toLowerCase() === "img"
+        ? [imgChoice(a).src ?? ""]
+        : ["href", "xlink:href"].map((n) => decodeEntities(a.get(n) ?? "").trim());
+    for (const u of urls) if (isLinked(u)) out.add(u);
+  }
+  return [...out];
+}
+
+/**
+ * The image an `<img>` draws in the print: its `src`, or -- with none -- its `srcset`'s first
+ * candidate; and whether its `srcset` is dropped (it links something: a browser picks among the
+ * candidates by its screen's pixel density, which a print has none of).
+ */
+function imgChoice(a: Map<string, string>): { src: string | null; dropSet: boolean } {
+  const set = a.has("srcset") ? srcsetUrls(a.get("srcset") ?? "") : [];
+  const own = a.has("src") ? decodeEntities(a.get("src") ?? "").trim() : null;
+  return { src: own ?? set[0] ?? null, dropSet: set.some(isLinked) };
+}
+
+/** A reference that is neither embedded (`data:`) nor inside the document (`#…`). */
+function isLinked(u: string): boolean {
+  return u !== "" && !/^data:/i.test(u) && !u.startsWith("#");
+}
+
+/** A `srcset`'s candidate URLs, entity-decoded (each "url [descriptor]", comma-separated). */
+function srcsetUrls(srcset: string): string[] {
+  return decodeEntities(srcset)
+    .split(",")
+    .map((c) => c.trim().split(/\s+/)[0] ?? "")
+    .filter((u) => u !== "");
+}
+
+/**
+ * An image's type from its first bytes -- never its file name or a server's word for it: PNG,
+ * JPEG, GIF, WebP, BMP, AVIF, or SVG (text whose first element is `<svg>`); else null.
+ *
+ * @param bytes the image's bytes
+ * @example
+ * ```ts
+ * import { sniffImageType } from "@jrmarcum/s3d-reportcompiler";
+ * console.log(sniffImageType(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))); // "image/gif"
+ * ```
+ */
+export function sniffImageType(bytes: Uint8Array): string | null {
+  const at = (i: number, ...v: number[]) => v.every((x, k) => bytes[i + k] === x);
+  if (at(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return "image/png";
+  if (at(0, 0xff, 0xd8, 0xff)) return "image/jpeg";
+  if (at(0, 0x47, 0x49, 0x46, 0x38)) return "image/gif";
+  if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return "image/webp";
+  if (at(0, 0x42, 0x4d)) return "image/bmp";
+  if (at(4, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66)) return "image/avif";
+  const head = new TextDecoder().decode(bytes.subarray(0, 4096)).replace(/^﻿/, "");
+  if (
+    /^\s*(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*|<!DOCTYPE[^>]*>\s*)*<svg[\s/>]/i.test(head)
+  )
+    return "image/svg+xml";
+  return null;
+}
+
+/**
+ * The HTML with each linked image embedded: an `<img>`'s `src`, an `<image>`'s `href` /
+ * `xlink:href`, replaced by its `data:` URI from `found` (keyed as {@link linkedImages} gives the
+ * link), written double-quoted. An `<img>` whose `srcset` links anything loses its `srcset` and
+ * `sizes`: a browser picks a candidate by its screen's pixel density, which a print has none of,
+ * so the `src` -- the image the report names for every reader -- is the one drawn. Nothing else
+ * of any tag changes. Run on a report's body AND its source, so the verification checks each
+ * embedded image against the bytes fetched.
+ *
+ * @param html a baked body or a source report
+ * @param found each link's `data:` URI
+ * @example
+ * ```ts
+ * import { inlineLinkedImages } from "@jrmarcum/s3d-reportcompiler";
+ * const found = new Map([["fig.png", "data:image/png;base64,AAAA"]]);
+ * console.log(inlineLinkedImages("<img src=fig.png>", found)); // <img src="data:image/png;base64,AAAA">
+ * ```
+ */
+export function inlineLinkedImages(html: string, found: Map<string, string>): string {
+  return html.replace(startTagRe("img|image"), (tag: string, tagName: string) => {
+    const isImg = tagName.toLowerCase() === "img";
+    const a = attrsOf(tag);
+    const choice = isImg ? imgChoice(a) : { src: null, dropSet: false };
+    const head = /^<[^\s/>]+/.exec(tag)?.[0] ?? "";
+    let rest = tag
+      .slice(head.length)
+      .replace(
+        TAG_ATTR,
+        (all, name: string, eq?: string, dq?: string, sq?: string, bare?: string) => {
+          const n = name.toLowerCase();
+          if (choice.dropSet && (n === "srcset" || n === "sizes")) return "";
+          if (eq === undefined) return all;
+          const isLink = isImg ? n === "src" : n === "href" || n === "xlink:href";
+          const uri = isLink ? found.get(decodeEntities(dq ?? sq ?? bare ?? "").trim()) : undefined;
+          return uri === undefined ? all : `${name}="${uri}"`;
+        },
+      );
+    // a srcset dropped from an <img> with no src: its first candidate is the src
+    if (choice.dropSet && !a.has("src") && choice.src !== null) {
+      const src =
+        found.get(choice.src) ?? choice.src.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+      rest = ` src="${src}"${rest}`;
+    }
+    return head + rest;
+  });
+}
+
+/**
  * What was actually found in the finished PDF, read back from disk.
  *
  * `imagePaints` counts paint operations, not images: a figure straddling a page

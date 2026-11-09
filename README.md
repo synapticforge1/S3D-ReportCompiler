@@ -204,6 +204,13 @@ you keep a clone: it builds the npm package from your working tree and installs 
   `.mathjax-fonts/`; later builds there work offline. Only complete font files are kept — a
   network login page, or a download cut short, stops the build with a plain message and nothing
   cached.
+- **A report's linked images, every build.** An image a report links to rather than embeds (an
+  `<img src="fig.png">`, an SVG `<image href="…">`) is fetched as a browser opening the report
+  would find it — beside the report, or from the web — typed by its bytes, embedded, and checked
+  pixel for pixel like any other (the build prints `links:`). One that cannot be had (missing,
+  not an image, an HTTP error) stops the build by name: it would otherwise print blank. A zip
+  holds reports only, so its reports' relative links stop the build. SkyCiv's loading spinner
+  is removed, never fetched; SkyCiv's own exports embed every figure, so they fetch nothing.
 - **A supported runtime** — every current Node LTS line, Bun, and Deno's LTS line, each measured
   with the sample reports producing byte-identical output:
 

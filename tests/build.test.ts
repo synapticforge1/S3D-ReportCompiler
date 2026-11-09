@@ -1835,21 +1835,32 @@ test("the bake carries no event handlers or javascript: URLs", async () => {
 });
 
 test("the render loads nothing from another host", { timeout: TIMEOUT }, async () => {
-  // A report pointing at a counting server on 127.0.0.1 in six spellings. The document's policy
-  // must block every load (0 requests), and the build must count all six, not 1 of them.
-  let hits = 0;
-  const counting: Handler = (_req, res) => {
-    hits++;
-    res.writeHead(404);
-    res.end();
+  // A report pointing at a counting server on 127.0.0.1 in six spellings. The four images the
+  // BUILD fetches, once each, and embeds (owner, 2026-11-09: "a linked image must fetch the image
+  // for inclusion into the pdf"); the render itself loads nothing -- the two CSS backgrounds,
+  // which the document's policy blocks, are never requested, and the build counts both.
+  const hits = new Map<string, number>();
+  const png = Buffer.from(PNG_4X2, "base64");
+  const counting: Handler = (req, res) => {
+    const path = req.url ?? "";
+    hits.set(path, (hits.get(path) ?? 0) + 1);
+    if (/^\/[a-d]\.png$/.test(path)) {
+      res.writeHead(200, { "content-type": "image/png" });
+      res.end(png);
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
   };
   const r = await withFakeJsr(counting, (origin) => {
     const src = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
     // alt="": a broken <img> otherwise draws Chrome's broken-image icon, which counts as an
     // image paint (blocked and 404 alike) and fails the build for a reason this test is not about.
+    // Each 40 px wide: the 4 by 2 image at its own size is under 2 pt, which the check calls unseen.
+    const w = `style="width:40px"`;
     const refs =
-      `<img alt="" src="${origin}/a.png"><img alt="" src='${origin}/b.png'>` +
-      `<img alt="" src=${origin}/c.png><img alt="" srcset="${origin}/d.png 2x">` +
+      `<img alt="" ${w} src="${origin}/a.png"><img alt="" ${w} src='${origin}/b.png'>` +
+      `<img alt="" ${w} src=${origin}/c.png><img alt="" ${w} srcset="${origin}/d.png 2x">` +
       `<p style="background:url(${origin}/e.png)">ref</p>`;
     let v = src.replace(/<body([^>]*)>/i, (m) => `${m}${refs}`);
     v = v.replace("</head>", `<style>.x{background:url("${origin}/f.png")}</style></head>`);
@@ -1860,8 +1871,17 @@ test("the render loads nothing from another host", { timeout: TIMEOUT }, async (
     return runAsync([MAIN, dir, join(dir, "out", "c.pdf")], { env: process.env });
   });
   assert.equal(r.code, 0, r.out);
-  has(r.out, /baked HTML still has 0 script\(s\) and 6 external ref\(s\)/, /PASS/);
-  assert.equal(hits, 0, `the render made ${hits} request(s) to another host`);
+  has(
+    r.out,
+    /links: {4}4 linked image\(s\) embedded \(4 from the web\)/,
+    /baked HTML still has 0 script\(s\) and 2 external ref\(s\)/,
+    /PASS/,
+  );
+  assert.deepEqual(
+    Object.fromEntries([...hits].sort()),
+    { "/a.png": 1, "/b.png": 1, "/c.png": 1, "/d.png": 1 },
+    "the build fetches each image once; the render requests nothing",
+  );
 });
 
 test(
@@ -5075,6 +5095,110 @@ test(
     // for the cut-away one
     has(r.out, /graphics: 6 image paint\(s\), 6 expected/);
     has(r.out, /PASS/);
+  },
+);
+
+// Linked images (owner, 2026-11-09: "a linked image must fetch the image for inclusion into the
+// pdf for fidelity of the documents"): each fetched -- beside the report, in a subfolder, from the
+// web -- embedded, and checked pixel for pixel against what was fetched; one that cannot be had
+// stops the build by name. Before, each printed blank and the image count never knew of it.
+test(
+  "class B, task 18: a linked image is fetched and embedded, and checked",
+  { timeout: TIMEOUT },
+  async () => {
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    // what is linked: an <img>'s src (entities decoded), else its srcset's first; an <image>'s
+    // href -- never data:, #…, or the srcset beside a src
+    assert.deepEqual(
+      core.linkedImages(
+        `<img src="a.png?x=1&amp;y=2"><img srcset="b.png 2x, c.png 3x"><img src="d.png" srcset="e.png 2x">` +
+          `<img src="data:image/png;base64,AAAA"><svg><image xlink:href="f.png"/><use href="#g"/><image href="#h"/></svg>`,
+      ),
+      ["a.png?x=1&y=2", "b.png", "d.png", "f.png"],
+    );
+    //   embedded: each link double-quoted, a linked srcset and its sizes gone, its first candidate
+    //   the src when there is none; every other attribute as written
+    const found = new Map([
+      ["b.png", "data:image/png;base64,BB"],
+      ["d.png", "data:image/png;base64,DD"],
+      ["f.png", "data:image/png;base64,FF"],
+      ["q.png?x=1&y=2", "data:image/png;base64,QQ"],
+    ]);
+    //   a link read as a browser reads it: its entities decoded
+    assert.equal(
+      core.inlineLinkedImages(`<img src="q.png?x=1&amp;y=2">`, found),
+      `<img src="data:image/png;base64,QQ">`,
+    );
+    assert.equal(
+      core.inlineLinkedImages(
+        `<img alt='x' srcset="b.png 2x" sizes="9px"><img src=d.png srcset="e.png 2x" class=k><svg><image x="1" xlink:href='f.png'/></svg><img src="z.png">`,
+        found,
+      ),
+      `<img src="data:image/png;base64,BB" alt='x'  ><img src="data:image/png;base64,DD"  class=k><svg><image x="1" xlink:href="data:image/png;base64,FF"/></svg><img src="z.png">`,
+    );
+    //   typed by its bytes
+    assert.equal(core.sniffImageType(Buffer.from(PNG_4X2, "base64")), "image/png");
+    assert.equal(
+      core.sniffImageType(new TextEncoder().encode('<?xml version="1.0"?>\n<svg/>')),
+      "image/svg+xml",
+    );
+    assert.equal(core.sniffImageType(new TextEncoder().encode("<html>login</html>")), null);
+
+    // End to end: an <img> beside the report, an SVG <image> in a subfolder (a space in its
+    // name), an <img> by srcset alone, and one from the web.
+    const png = Buffer.from(PNG_4X2, "base64");
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const build = (dir: string, body: string, files: Record<string, Uint8Array | string>) => {
+      mkdirSync(join(dir, "sub dir"), { recursive: true });
+      for (const [name, bytes] of Object.entries(files)) writeFileSync(join(dir, name), bytes);
+      writeFileSync(
+        join(dir, "member_0_report.html"),
+        sample.replace(/<\/body>/i, () => `${body}</body>`),
+      );
+      return () => runAsync([MAIN, dir, join(dir, "out", "c.pdf")], {});
+    };
+    await withFakeJsr(
+      (req, res) => {
+        if (req.url === "/web.png") {
+          res.writeHead(200, { "content-type": "image/png" });
+          res.end(png);
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      },
+      async (base) => {
+        const dir = join(work, "task18-links");
+        const r = await build(
+          dir,
+          `<p><img src="fig.png" style="width:40px"></p>` +
+            `<svg viewBox="0 0 100 50" width="200" height="100"><rect x="0" y="0" width="10" height="10" fill="#333333"/><image x="20" y="10" width="40" height="20" preserveAspectRatio="none" href="sub%20dir/fig%20b.png"/></svg>` +
+            `<p><img srcset="fig.png 2x" style="width:40px"></p><p><img src="${base}/web.png" style="width:40px"></p>`,
+          { "fig.png": png, "sub dir/fig b.png": png },
+        )();
+        assert.equal(r.code, 0, tail(r.out));
+        has(r.out, /links: {4}3 linked image\(s\) embedded \(1 from the web\)/);
+        //   the sample's own, three <img>s and the <image>, each identical to what was fetched
+        has(r.out, /images: {3}5 of 5 identical to their sources, pixel for pixel/, /PASS/);
+
+        // One that cannot be had stops the build, named: missing, not an image, a 404.
+        const bad = join(work, "task18-links-bad");
+        const b = await build(
+          bad,
+          `<img src="gone.png"><img src="page.png"><img src="${base}/missing.png">`,
+          { "page.png": "<html>login</html>" },
+        )();
+        assert.equal(b.code, 1, tail(b.out));
+        has(
+          b.out,
+          /ERROR: a linked image could not be embedded/,
+          /"gone\.png" -- /,
+          /"page\.png" -- not an image \(18 bytes\)/,
+          /missing\.png" -- HTTP 404/,
+        );
+        assert.ok(!existsSync(join(bad, "out", "c.pdf")), "no PDF");
+      },
+    );
   },
 );
 

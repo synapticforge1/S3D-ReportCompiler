@@ -1262,11 +1262,12 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
   px), specular from a spot (77 px) -- the run code exists, refused by name until it matches;
   Skia's per-point noise code is the missing source. ✅ **Part 2 DONE 2026-11-09 (known-issues
   #107):** an feImage past its region (bilinear, as Chrome), a drawing of filtered elements alone
-  (placed by its viewport clip), a filter its viewport cuts away (no image). **Next (owner,
-  2026-11-09: "a linked image must fetch the image for inclusion into the pdf for fidelity of the
-  documents"):** linked images fetched and inlined at the bake -- every report's one link today is
-  SkyCiv's loader GIF, which the bake removes; a drawn linked image would print blank (the CSP
-  allows `data:` only) and is not in the image count, so it would vanish unnoticed.
+  (placed by its viewport clip), a filter its viewport cuts away (no image). ✅ **Linked images
+  DONE 2026-11-09 (known-issues #108; owner: "a linked image must fetch the image for inclusion
+  into the pdf for fidelity of the documents"):** fetched (beside the report or from the web),
+  embedded in body and source, checked pixel for pixel; one that cannot be had stops the build.
+  Not covered: a CSS `url()` background image (none in any real report; the CSP blocks it, the
+  external-ref warning names an http one) -- class B's re-check takes it.
 Then group 7b (WebP decoders); then the fresh class-B re-check. Earlier:
 group 8's geometry FIRST (owner, 2026-11-08: "can we work on group 8 then come
 back to the SVG and WebP issues?"): the diagrams, and any filled shape as cover and background.

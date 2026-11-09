@@ -241,6 +241,12 @@ export async function toFileUrl(file: string): Promise<string> {
   return url.pathToFileURL(await realPath(file)).href;
 }
 
+/** The path a file:// URL names (a share's too), percent-escapes decoded. */
+export async function fromFileUrl(href: string): Promise<string> {
+  const url = await import("node:url");
+  return url.fileURLToPath(href);
+}
+
 /**
  * Current working directory, for defaulting the input and output folders.
  *
