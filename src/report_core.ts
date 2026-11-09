@@ -3738,11 +3738,14 @@ function sourceTally(raw: string): {
   /** Each number with its neighbours ({@link neighbourTally}). */
   pairs: Map<string, number>;
   expectedImages: number;
+  /** The drawn images' data URIs, in order ({@link drawnImages}). */
+  imageSources: string[];
 } {
   const words = new Map<string, number>();
   const numbers = new Map<string, number>();
   let pairs = new Map<string, number>();
   let expectedImages = 0;
+  const imageSources: string[] = [];
   {
     let html = withoutSpinner(readerVisible(raw));
 
@@ -3774,9 +3777,15 @@ function sourceTally(raw: string): {
     // baker's mistakes. An external image cannot render hermetically anyway,
     // and the bake step warns separately if any survives. Tags read quote-aware: a ">" inside
     // an earlier attribute's value hid the src from `[^>]*`.
-    expectedImages += (html.match(SOURCE_TAG) ?? []).filter((t) =>
+    const drawn = (html.match(SOURCE_TAG) ?? []).filter((t) =>
       /^<img\b[\s\S]*?\ssrc\s*=\s*["']data:/i.test(t),
-    ).length;
+    );
+    expectedImages += drawn.length;
+    // Each one's data URI, in order, for the pixel check ({@link drawnImages}).
+    for (const t of drawn) {
+      const src = /\ssrc\s*=\s*(["'])(data:[^"']*)\1/i.exec(t)?.[2];
+      if (src !== undefined) imageSources.push(decodeEntities(src));
+    }
 
     // "<" is a relational operator inside mathematics -- "30.483<\lambda_{rf}".
     // A <[^>]+> stripper would consume from there to the next ">" and swallow
@@ -3844,7 +3853,24 @@ function sourceTally(raw: string): {
     );
   }
 
-  return { words, numbers, pairs, expectedImages };
+  return { words, numbers, pairs, expectedImages, imageSources };
+}
+
+/**
+ * The images a reader of one source report sees, in order: each `<img>`'s `data:` URI, read by the
+ * verification's own extraction -- the same images {@link extractSourceTokens} counts, the
+ * loading spinner and what is never drawn left out. For comparing them, pixel for pixel, with
+ * the images the finished PDF draws (roadmap task 18 item 5).
+ *
+ * @param source one raw source report
+ * @example
+ * ```ts
+ * import { drawnImages } from "@jrmarcum/s3d-reportcompiler";
+ * console.log(drawnImages('<body><img src="data:image/png;base64,AAAA"></body>')); // ["data:image/png;base64,AAAA"]
+ * ```
+ */
+export function drawnImages(source: string): string[] {
+  return sourceTally(source).imageSources;
 }
 
 /**

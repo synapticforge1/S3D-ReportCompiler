@@ -43,6 +43,7 @@ symbol	.	cssWarnings	variable	export declare const cssWarnings: Set<string>
 symbol	.	decodeEntities	function	export declare function decodeEntities(s: string): string
 symbol	.	decodeReport	function	export declare function decodeReport(bytes: Uint8Array, name: string): string
 symbol	.	delimSignatures	variable	export declare const delimSignatures: Set<string>
+symbol	.	drawnImages	function	export declare function drawnImages(source: string): string[]
 symbol	.	extractSourceTokens	function	export declare function extractSourceTokens(sources: string[]): SourceTokens
 symbol	.	findBrokenReferences	function	export declare function findBrokenReferences(reports: BakedReport[]): ReferenceCheck
 symbol	.	findLeftoverMath	function	export declare function findLeftoverMath(baked: string): string[]
