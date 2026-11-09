@@ -1245,9 +1245,13 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
 - ✅ **8g — `<pattern>`, DONE 2026-11-09 (known-issues #102):** Chrome rasterises it over the
   drawing's whole VIEWPORT at a pixel a point into one image inside a tiling pattern; each pixel
   on the painted area is held to the range of colours the source paints within a pixel of it.
-- **8h — `mask` and `filter`:** a mask is an alpha soft-mask group holding the mask as an IMAGE,
-  the masked element still a vector path; a filter (blur) rasterises the element into one image
-  of the filter region. Same pixel method; which filter primitives, to measure.
+- ✅ **8h — `mask`, DONE 2026-11-09 (known-issues #103):** soft masks tracked on the PDF side
+  (a group with one is the mask's definition; Chrome's first pass, under nothing, not recorded);
+  a matched path's mask value against the source's luminance times alpha, at points.
+- **8i — `filter`:** a filter (blur) rasterises the element into ONE image of the filter region
+  (335×224 for the probe's blur; a flood measured nothing yet). Compare its pixels with the
+  source evaluated and filtered by the verification's own primitives, by the range method of
+  #102; which primitives Chrome writes how, to measure first.
 - `foreignObject` (its text did not reach the page in the probe, to re-measure), `<switch>`, and
   a style rule the reader cannot match.
 Then group 7b (WebP decoders); then the fresh class-B re-check. Earlier:

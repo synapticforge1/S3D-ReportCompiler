@@ -57,6 +57,8 @@ export type SvgShape = {
   /** Group 8g: a pattern the fill or stroke paints with, in place of `fill` / `stroke`. */
   fillPattern?: SvgPattern;
   strokePattern?: SvgPattern;
+  /** Group 8h: the mask over it (its own, or an ancestor's). */
+  mask?: SvgMask;
 };
 
 /** One region of a clip: polygons under a fill rule, itself clipped by `within` when set. */
@@ -86,6 +88,68 @@ export type Gradient = {
 
 /** An image's pixels, RGBA, row 0 at the top. */
 export type RasterPixels = { width: number; height: number; data: Uint8Array };
+
+/**
+ * A soft mask as the PDF defines it (group 8h): its subtype, its transfer function (256 values,
+ * as pdf.js gives it), and what its group paints, in order -- fills on the page, or images.
+ */
+export type PdfMask = {
+  subtype: "Alpha" | "Luminosity";
+  transfer?: number[];
+  items: (
+    | { kind: "fill"; polygons: number[][][]; evenOdd: boolean; colour: number[]; alpha: number }
+    | { kind: "image"; m: Matrix; pixels: RasterPixels | null }
+  )[];
+};
+
+/** A soft mask's value, 0 to 1, at a point of the page: its group composited, then its transfer. */
+export function pdfMaskValue(mask: PdfMask, x: number, y: number): number {
+  let rgba = [0, 0, 0, 0];
+  for (const it of mask.items) {
+    if (it.kind === "fill") {
+      if (polygonsContain(it.polygons, it.evenOdd, x, y)) rgba = over(it.colour, it.alpha, rgba);
+    } else if (it.pixels) {
+      const [u, v] = apply(invert(it.m), x, y);
+      if (u < 0 || u >= 1 || v <= 0 || v > 1) continue;
+      const { width: w, height: h, data } = it.pixels;
+      const k =
+        4 * (Math.min(h - 1, Math.floor((1 - v) * h)) * w + Math.min(w - 1, Math.floor(u * w)));
+      rgba = over([data[k] / 255, data[k + 1] / 255, data[k + 2] / 255], data[k + 3] / 255, rgba);
+    }
+  }
+  // Luminosity: the group over a black backdrop, its luminance; Alpha: its alpha.
+  const value =
+    mask.subtype === "Luminosity"
+      ? (0.2125 * rgba[0] + 0.7154 * rgba[1] + 0.0721 * rgba[2]) * rgba[3]
+      : rgba[3];
+  return mask.transfer ? mask.transfer[Math.round(value * 255)] / 255 : value;
+}
+
+/**
+ * An SVG `<mask>` over a shape (group 8h): luminance or alpha, its region and the matrix from
+ * its content to the drawing, its content read as the drawing's shapes are.
+ */
+export type SvgMask = {
+  type: "luminance" | "alpha";
+  region: number[][];
+  toDrawing: Matrix;
+  content: SvgShape[];
+};
+
+/**
+ * A source mask's value at a point of the drawing: 0 outside its region; else its content there,
+ * as luminance times alpha (measured: Chrome's #808080 is 128 -- sRGB luminance, not linear) or
+ * alpha; `null` within `tol` of an edge.
+ */
+export function svgMaskValue(m: SvgMask, x: number, y: number, tol: number): number | null {
+  if (edgeDistance([m.region], x, y) < tol) return null;
+  if (!polygonsContain([m.region], false, x, y)) return 0;
+  const back = invert(m.toDrawing);
+  const [cx, cy] = apply(back, x, y);
+  const c = contentColour(m.content, cx, cy, tol * scaleOf(back));
+  if (c === null) return null;
+  return m.type === "alpha" ? c[3] : (0.2125 * c[0] + 0.7154 * c[1] + 0.0721 * c[2]) * c[3];
+}
 
 /** A raster a PDF paints with: the unit square under `m` (row 0 at v = 1), its pixels. */
 export type PdfRaster = { m: Matrix; pixels: RasterPixels | null };
@@ -167,6 +231,8 @@ export type PdfVector = {
   /** Group 8g: a pattern as Chrome writes it, one raster image under `m` (unit square to page). */
   fillRaster?: PdfRaster;
   strokeRaster?: PdfRaster;
+  /** Group 8h: the soft mask it is painted under. */
+  mask?: PdfMask;
   /** Group 8d: every clip in force (page space), the fill rule, line cap / join (PDF codes), miter limit. */
   clips?: PdfClip[];
   evenOdd?: boolean;
@@ -621,9 +687,16 @@ export function patternColour(
       ? [1 / bw, 0, 0, 1 / bh, 0, 0]
       : IDENTITY;
   const [cx, cy] = apply(toContent, lx, ly);
-  const tc = tq * scaleOf(toContent);
+  return contentColour(p.content, cx, cy, tq * scaleOf(toContent));
+}
+
+/**
+ * What content shapes paint at a point of their coordinates, composited in order (straight RGBA,
+ * 0-1); `null` within `tc` of an edge -- an outline, a stroke's side, end or corner (group 8g, 8h).
+ */
+function contentColour(content: SvgShape[], cx: number, cy: number, tc: number): number[] | null {
   let rgba = [0, 0, 0, 0];
-  for (const s of p.content) {
+  for (const s of content) {
     const toOwn = invert(s.e);
     const [ox, oy] = apply(toOwn, cx, cy);
     const t = tc * scaleOf(toOwn);
@@ -1758,6 +1831,68 @@ export function readSvg(
     join: string;
     miter: string;
     paintOrder: string;
+    /** Group 8h: the mask over this subtree (not a CSS inheritance: it applies to what is inside). */
+    mask?: SvgMask;
+  };
+  /**
+   * The mask a `mask` value puts on an element whose user space maps to the drawing by `m`
+   * (group 8h): a `<mask>` -- its region in `maskUnits` (by default the box widened by a tenth
+   * all round), its content in `maskContentUnits`, `mask-type` -- read as an {@link SvgMask};
+   * `null` for none or a reference to nothing; a string names what this reader cannot read.
+   */
+  const maskOf = (value: string, n: Node, anc: Node[], m: Matrix): SvgMask | null | string => {
+    const url = /^url\(\s*['"]?#([^'")]+)['"]?\s*\)$/i.exec(value.trim());
+    if (!url) return value.trim() === "none" ? null : `the mask "${value.trim()}" of a <${n.tag}>`;
+    const target = ids.get(url[1]);
+    if (target?.tag !== "mask") return null;
+    const units = (target.attrs.get("maskunits") ?? "objectBoundingBox").trim();
+    const contentUnits = (target.attrs.get("maskcontentunits") ?? "userSpaceOnUse").trim();
+    const bbox = bboxOf(n, anc);
+    if (!bbox && (units === "objectBoundingBox" || contentUnits === "objectBoundingBox"))
+      return `a mask in the units of a <${n.tag}>'s box`;
+    const [bx, by, bw, bh] = bbox
+      ? [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]]
+      : [0, 0, 1, 1];
+    const length = (a: string, d: number, whole: number, origin: number) => {
+      const v = target.attrs.get(a);
+      const raw =
+        v === undefined
+          ? d
+          : v.trim().endsWith("%")
+            ? Number.parseFloat(v) / 100
+            : Number.parseFloat(v);
+      if (!Number.isFinite(raw)) return Number.NaN;
+      if (units !== "objectBoundingBox") return v === undefined ? Number.NaN : raw;
+      return origin + raw * whole;
+    };
+    const region = [
+      length("x", -0.1, bw, bx),
+      length("y", -0.1, bh, by),
+      length("width", 1.2, bw, 0),
+      length("height", 1.2, bh, 0),
+    ];
+    if (region.some(Number.isNaN)) return "a mask whose region is in percentages of its viewport";
+    const type =
+      (own(target, "mask-type", anc) ?? "luminance").trim() === "alpha" ? "alpha" : "luminance";
+    const [s, l, im] = [shapes.length, labels.length, images.length];
+    walk(
+      { tag: "g", attrs: new Map(), children: target.children, text: "" },
+      IDENTITY,
+      start,
+      1,
+      [],
+    );
+    const content = shapes.splice(s);
+    if (labels.splice(l).length + images.splice(im).length > 0)
+      return "a mask holding text or an image";
+    if (content.some((c) => c.fillPattern || c.strokePattern || c.mask))
+      return "a mask holding a pattern or a mask";
+    return {
+      type,
+      region: rectPolygon(region[0], region[1], region[2], region[3], m),
+      toDrawing: mul(contentUnits === "objectBoundingBox" ? [bw, 0, 0, bh, bx, by] : IDENTITY, m),
+      content,
+    };
   };
   /**
    * An element's box in its own user space (its geometry, not its stroke): its shape's, or its
@@ -1943,11 +2078,10 @@ export function readSvg(
       join: own(n, "stroke-linejoin", ancestors) ?? inh.join,
       miter: own(n, "stroke-miterlimit", ancestors) ?? inh.miter,
       paintOrder: own(n, "paint-order", ancestors) ?? inh.paintOrder,
+      mask: inh.mask,
     };
-    for (const p of ["filter", "mask"]) {
-      const v = own(n, p, ancestors);
-      if (v && v !== "none") unread.add(`the ${p} of a <${n.tag}>`);
-    }
+    const filter = own(n, "filter", ancestors);
+    if (filter && filter !== "none") unread.add(`the filter of a <${n.tag}>`);
     // Markers inherit; `marker` sets all three.
     const all = own(n, "marker", ancestors);
     here.markers = [
@@ -1958,6 +2092,20 @@ export function readSvg(
     // The transform as the cascade gives it: a stylesheet's CSS `transform` (with its units) wins.
     const cssTransform = own(n, "transform", ancestors)?.replace(/(-?[\d.]+)(?:px|deg)\b/g, "$1");
     let m = mul(transformOf(cssTransform), e);
+    // Its mask (group 8h), over it and all it holds; one inside another is not read yet.
+    const maskValue = own(n, "mask", ancestors);
+    if (maskValue && maskValue.trim() !== "none") {
+      const mk = maskOf(maskValue, n, ancestors, m);
+      if (typeof mk === "string") {
+        unread.add(mk);
+        return;
+      }
+      if (mk && inh.mask) {
+        unread.add("a mask inside a mask");
+        return;
+      }
+      if (mk) here.mask = mk;
+    }
     // The clips around this element and what it holds (group 8d): those around it, then its own
     // `clip-path` in its user space.
     let clips = outerClips;
@@ -2079,6 +2227,7 @@ export function readSvg(
         miter: Number.parseFloat(here.miter) || 4,
         // `paint-order` names what comes first; the rest follow in fill, stroke, markers order.
         strokeFirst: order[0] === "stroke" || (order[0] === "markers" && order[1] === "stroke"),
+        ...(here.mask ? { mask: here.mask } : {}),
       });
       // Its markers, drawn as Chrome draws them (measured): the marker's own shapes, in its own
       // coordinates, under a transform that sets it at a vertex -- scaled by the stroke width,
@@ -2751,6 +2900,74 @@ export function compareSvg(
     }
     return null;
   };
+  /**
+   * Whether the mask over a matched path is the source's (group 8h): at points over the shape and
+   * either side of every edge of the source mask's region and content, the PDF's soft mask (1
+   * where there is none) against the source mask's value, within 10 levels; a point near a source
+   * edge is skipped (the mask is a raster there).
+   */
+  const maskDifference = (c: Candidate, d: Duty): string | null => {
+    const src = d.shape.mask;
+    const pdf = c.v.mask;
+    if (!src && !pdf) return null;
+    const outline = outlineOf(d);
+    const area = polygonsOf(outline, d.shape.e);
+    const box = polygonBox(area);
+    const half = d.kind === "stroke" ? (d.shape.strokeWidth / 2) * scaleOf(d.shape.e) : 0;
+    const tol = Math.max(
+      1 / Math.max(scaleOf(base), 1e-9),
+      0.01 * Math.hypot(box[2] - box[0], box[3] - box[1]),
+    );
+    const centre: Polyline[] = outline.map((l) => ({
+      points: l.points.map(([x, y]) => apply(d.shape.e, x, y)),
+      closed: l.closed,
+    }));
+    const onShape = (x: number, y: number) =>
+      d.kind === "fill"
+        ? polygonsContain(area, d.shape.evenOdd ?? false, x, y)
+        : reach([[x, y]], centre) <= half;
+    const points: number[][] = [];
+    for (let i = 0; i < 9; i++)
+      for (let j = 0; j < 9; j++) {
+        const p = [
+          box[0] + ((i + 0.5) / 9) * (box[2] - box[0]),
+          box[1] + ((j + 0.5) / 9) * (box[3] - box[1]),
+        ];
+        if (onShape(p[0], p[1])) points.push(p);
+      }
+    if (d.kind === "stroke") points.push(...dense(centre, Math.max(tol, length(centre) / 24)));
+    const edges = src
+      ? [src.region, ...src.content.flatMap((s) => polygonsOf(s.lines, mul(s.e, src.toDrawing)))]
+      : [];
+    for (const p of edges) {
+      const ring = dense(
+        [{ points: p, closed: true }],
+        Math.max(tol, length([{ points: p, closed: true }]) / 48),
+      );
+      for (let k = 1; k < ring.length; k++) {
+        const [ax, ay] = ring[k - 1];
+        const [bx, by] = ring[k];
+        const len = Math.hypot(bx - ax, by - ay);
+        if (len === 0) continue;
+        for (const s of [-2.5, 2.5]) {
+          const q = [
+            (ax + bx) / 2 - ((by - ay) / len) * s * tol,
+            (ay + by) / 2 + ((bx - ax) / len) * s * tol,
+          ];
+          if (onShape(q[0], q[1])) points.push(q);
+        }
+      }
+    }
+    for (const [x, y] of points) {
+      const want = src ? svgMaskValue(src, x, y, tol) : 1;
+      if (want === null) continue;
+      const [px, py] = apply(base, x, y);
+      const got = pdf ? pdfMaskValue(pdf, px, py) : 1;
+      if (Math.abs(got - want) > 10 / 255)
+        return `masked ${got.toFixed(2)} at (${x.toFixed(1)}, ${y.toFixed(1)}), ${want.toFixed(2)} in its source`;
+    }
+    return null;
+  };
   const matched: PdfVector[] = [];
   const matchOf = new Map<Duty, Candidate>();
   const missing: string[] = [];
@@ -2772,7 +2989,9 @@ export function compareSvg(
       Math.abs(alphaOf(c) - alpha) <= 0.02 &&
       (d.kind === "fill" || c.as === "fill" || widthOk(c.v, d)) &&
       styleDifference(c, d) === null;
-    const right = options.find((c) => looksRight(c) && clipDifference(c, d) === null);
+    const right = options.find(
+      (c) => looksRight(c) && clipDifference(c, d) === null && maskDifference(c, d) === null,
+    );
     if (right) {
       used.add(key(right.v, right.as));
       matched.push(right.v);
@@ -2793,7 +3012,7 @@ export function compareSvg(
               ? `a <${d.shape.what}>'s stroke ${first.v.lineWidth.toFixed(2)} wide, ${d.shape.strokeWidth} in its source`
               : styled !== null
                 ? `a <${d.shape.what}>'s ${d.kind} ${styled}`
-                : `a <${d.shape.what}>'s ${d.kind} ${clipDifference(first, d) ?? "not drawn as in its source"}`,
+                : `a <${d.shape.what}>'s ${d.kind} ${clipDifference(first, d) ?? maskDifference(first, d) ?? "not drawn as in its source"}`,
       );
     } else missing.push(`a <${d.shape.what}>'s ${d.kind} not drawn as in its source`);
   });

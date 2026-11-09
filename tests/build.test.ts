@@ -3515,10 +3515,10 @@ test(
     );
     assert.ok(read.shapes[6].dashed.length > 20, "a dashed line cut into its dashes");
     //    What it does not read is named, never passed.
-    // (A marker or a gradient is read since 8b, a <pattern> since 8g; a filter and a mask are
-    // not, yet.)
+    // (A marker or a gradient is read since 8b, a <pattern> since 8g, a mask since 8h; a filter
+    // and a foreignObject are not, yet.)
     const odd = svgs.readSvg(
-      `<svg><path d="M0 0L9 9" filter="url(#f)"/><mask id="k"/><rect width="9" height="9" fill="#000" mask="url(#k)"/></svg>`,
+      `<svg><path d="M0 0L9 9" filter="url(#f)"/><foreignObject width="9" height="9"/></svg>`,
     );
     assert.equal(odd.unread.length, 2, JSON.stringify(odd.unread));
 
@@ -4460,6 +4460,146 @@ test(
     );
     const built = run([MAIN, dir, join(dir, "out", "c.pdf")]);
     assert.equal(built.code, 0, tail(built.out));
+  },
+);
+
+// Group 8h: masks -- luminance with grey and half-opaque white, alpha, in bounding-box content
+// units, and over a group of two shapes.
+const PROBE_8H = `<svg viewBox="0 0 200 100" width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+<defs><mask id="h8-l"><rect x="0" y="0" width="40" height="50" fill="#ffffff"/><rect x="40" y="0" width="60" height="25" fill="#808080"/><rect x="40" y="25" width="60" height="25" fill="#ffffff" fill-opacity="0.5"/></mask>
+<mask id="h8-a" style="mask-type: alpha"><rect x="100" y="0" width="50" height="50" fill="#ff0000" fill-opacity="0.25"/></mask>
+<mask id="h8-b" maskContentUnits="objectBoundingBox"><rect x="0" y="0" width="0.5" height="1" fill="#ffffff"/></mask></defs>
+<rect x="5" y="5" width="90" height="40" fill="#008800" mask="url(#h8-l)"/>
+<rect x="105" y="5" width="40" height="40" fill="#000088" mask="url(#h8-a)"/>
+<rect x="155" y="5" width="40" height="40" fill="#880000" mask="url(#h8-b)"/>
+<g mask="url(#h8-l)"><rect x="10" y="60" width="20" height="30" fill="#884400"/><circle cx="60" cy="75" r="12" fill="#004488"/></g>
+</svg>`;
+
+test(
+  "class B, task 18 group 8h: a mask, its value where the shape is",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const read = svgs.readSvg(PROBE_8H);
+    assert.deepEqual(read.unread, []);
+    assert.equal(read.shapes.length, 5);
+    assert.ok(
+      read.shapes.every((s: { mask?: unknown }) => s.mask),
+      "each shape under its mask, a group's too",
+    );
+    // 1. The source mask's value: luminance times alpha (sRGB, as Chrome: #808080 is 0.50),
+    //    alpha for an alpha mask, 0 outside its content and region; null on an edge.
+    const at = (k: number, x: number, y: number) => {
+      const v = svgs.svgMaskValue(read.shapes[k].mask, x, y, 0.3);
+      return v === null ? null : +v.toFixed(3);
+    };
+    assert.equal(at(0, 20, 20), 1, "white");
+    assert.equal(at(0, 60, 10), 0.502, "#808080");
+    assert.equal(at(0, 60, 35), 0.5, "white at half opacity");
+    assert.equal(at(1, 120, 20), 0.25, "an alpha mask: red's alpha, not its luminance");
+    assert.equal(at(2, 165, 20), 1, "the box's left half");
+    assert.equal(at(2, 185, 20), 0, "its right half");
+    assert.equal(at(0, 40, 10), null, "a content edge");
+    // 2. The PDF's soft mask: its group composited, its transfer applied (Chrome's first pass is
+    //    a black page under an inverting transfer: nothing).
+    const page = [
+      [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+    ];
+    const nothing = {
+      subtype: "Alpha",
+      transfer: Array.from({ length: 256 }, (_, k) => 255 - k),
+      items: [{ kind: "fill", polygons: page, evenOdd: false, colour: [0, 0, 0], alpha: 1 }],
+    };
+    assert.equal(svgs.pdfMaskValue(nothing, 50, 50), 0);
+    const quarter = {
+      subtype: "Alpha",
+      items: [{ kind: "fill", polygons: page, evenOdd: false, colour: [1, 0, 0], alpha: 0.25 }],
+    };
+    assert.equal(svgs.pdfMaskValue(quarter, 50, 50), 0.25);
+    // 3. The matcher: each shape's paint under a mask made from its source mask (as Chrome's
+    //    image of it), one pixel a unit; right passes, a lighter or a missing mask fails.
+    const base = [1, 0, 0, -1, 0, 100];
+    type Plain = Record<string, unknown>;
+    const maskImage = (mk: unknown, change = 0) => {
+      const [W, H] = [200, 100];
+      const data = new Uint8Array(W * H * 4);
+      for (let j = 0; j < H; j++)
+        for (let i = 0; i < W; i++) {
+          const v = svgs.svgMaskValue(mk, i + 0.5, j + 0.5, 0) ?? 0;
+          data[4 * (j * W + i) + 3] = Math.round(Math.min(1, v + change) * 255);
+        }
+      // the unit square onto the drawing's 200 by 100 (row 0 at the top), through the base
+      return {
+        subtype: "Alpha",
+        items: [
+          { kind: "image", m: [200, 0, 0, 100, 0, 0], pixels: { width: W, height: H, data } },
+        ],
+      };
+    };
+    const build = (edit?: (s: Plain, v: Plain) => void) =>
+      read.shapes.map((s: Plain & { e: number[] }, k: number) => {
+        const v: Plain = {
+          page: 1,
+          order: k,
+          fill: s.fill,
+          stroke: null,
+          fillAlpha: s.fillAlpha,
+          strokeAlpha: 1,
+          lineWidth: 1,
+          lines: s.lines,
+          m: svgs.mul(s.e, base),
+          mask: maskImage(s.mask),
+        };
+        edit?.(s, v);
+        return v;
+      });
+    const problems = (edit?: (s: Plain, v: Plain) => void) =>
+      svgs.compareSvg(read, build(edit), [], new Set()).problems as string[];
+    assert.deepEqual(problems(), [], "the masks as Chrome writes them");
+    const fails = (what: string, edit: (s: Plain, v: Plain) => void, pattern: RegExp) => {
+      const p = problems(edit);
+      assert.ok(
+        p.some((x) => pattern.test(x)),
+        `${what} passed: ${JSON.stringify(p)}`,
+      );
+    };
+    fails(
+      "a lighter mask",
+      (s, v) => {
+        if (s === read.shapes[0]) v.mask = maskImage(s.mask, 0.2);
+      },
+      /masked 0\.\d+ at .*, 0\.\d+ in its source/,
+    );
+    fails(
+      "no mask",
+      (s, v) => {
+        if (s === read.shapes[1]) delete v.mask;
+      },
+      /masked 1\.00 at .*, 0\.25 in its source/,
+    );
+    fails(
+      "a group's mask lost",
+      (s, v) => {
+        if (s === read.shapes[4]) delete v.mask;
+      },
+      /a <circle>'s fill masked 1\.00/,
+    );
+
+    // 4. End to end: Chrome draws them (each twice, once under nothing), and the build PASSES.
+    const dir = join(work, "task18-8h");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8H}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
   },
 );
 

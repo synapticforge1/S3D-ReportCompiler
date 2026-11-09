@@ -133,6 +133,8 @@ import {
   type PdfRun,
   type PdfShading,
   type PdfClip,
+  type PdfMask,
+  pdfMaskValue,
   type PdfVector,
   type Polyline,
   readSvg,
@@ -1271,6 +1273,8 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       // Group 8g: a pattern's raster, by image id and its matrix to the page.
       fillRaster?: { id: string; m: number[] };
       strokeRaster?: { id: string; m: number[] };
+      // Group 8h: the soft mask in force (`SMask` set), as its content was recorded.
+      smask?: PdfMask;
       // Group 8d: every clip in force, as polygons on the page; the line cap, join, miter limit.
       clips: PdfClip[];
       cap: number;
@@ -1299,6 +1303,25 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     let rasterPending: { id: string; m: number[] } | null = null;
     /** The paths painted with a pattern's raster, whose pixels are fetched after the walk. */
     const rastersToFetch: { at: number; as: "fill" | "stroke"; id: string; m: number[] }[] = [];
+    // Group 8h: soft masks. A group with one is a mask's DEFINITION: what it paints is the mask,
+    // not paint a reader sees; `SMask` set in the graphics state then puts the last one defined
+    // over what follows (measured on Chrome's PDFs for an SVG mask, 2026-11-09).
+    let groupDepth = 0;
+    const defining: { mask: PdfMask; depth: number }[] = [];
+    let lastMask: PdfMask | undefined;
+    /** Mask images whose pixels are fetched after the walk. */
+    const maskImagesToFetch: { item: { pixels: Pixels | null }; id: string }[] = [];
+    /** Whether a mask with no image is nothing at every corner and the centre of a box. */
+    const maskedAway = (mask: PdfMask | undefined, box: Box) => {
+      if (!mask || mask.items.some((it) => it.kind !== "fill")) return false;
+      return [
+        [box[0], box[1]],
+        [box[2], box[1]],
+        [box[2], box[3]],
+        [box[0], box[3]],
+        [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2],
+      ].every(([x, y]) => pdfMaskValue(mask, x, y) === 0);
+    };
     /** A fill colour as RGB 0-1: pdf.js gives "#rrggbb", or numbers 0-255 or 0-1, or one grey. */
     const rgb = (args: unknown[]): number[] => {
       if (typeof args[0] === "string") {
@@ -1699,6 +1722,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           if (key === "LC") gs = { ...gs, cap: Number(value) };
           if (key === "LJ") gs = { ...gs, join: Number(value) };
           if (key === "ML") gs = { ...gs, miter: Number(value) };
+          // A mask set, or cleared -- inside a mask's own definition it is that mask's business.
+          if (key === "SMask" && defining.length === 0)
+            gs = { ...gs, smask: value === false ? undefined : lastMask };
         }
       } else if (fn === pdfjs.OPS.setLineCap) {
         gs = { ...gs, cap: Number(args[0]) };
@@ -1708,8 +1734,26 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         gs = { ...gs, miter: Number(args[0]) };
       } else if (fn === pdfjs.OPS.beginGroup) {
         groupAlpha.push(groupAlpha[groupAlpha.length - 1] * gs.alpha);
+        groupDepth++;
+        const group = args[0] as {
+          smask?: { subtype?: string; backdrop?: unknown; transferMap?: ArrayLike<number> } | null;
+        } | null;
+        if (group?.smask) {
+          const t = group.smask.transferMap;
+          defining.push({
+            mask: {
+              subtype: group.smask.subtype === "Luminosity" ? "Luminosity" : "Alpha",
+              transfer: t ? Array.from({ length: 256 }, (_, k) => Number(t[k] ?? k)) : undefined,
+              items: [],
+            },
+            depth: groupDepth,
+          });
+        }
       } else if (fn === pdfjs.OPS.endGroup) {
         if (groupAlpha.length > 1) groupAlpha.pop();
+        if (defining.length > 0 && defining[defining.length - 1].depth === groupDepth)
+          lastMask = defining.pop()?.mask;
+        groupDepth = Math.max(0, groupDepth - 1);
       } else if (fn === pdfjs.OPS.clip || fn === pdfjs.OPS.eoClip) {
         clipPending = true; // pdf.js gives the clip before the path it clips to
         clipEvenOdd = fn === pdfjs.OPS.eoClip;
@@ -1731,7 +1775,10 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
               0,
             )
           : 0;
-        if (inks(glyphs)) {
+        // Text inside a mask's definition, or under a mask that is nothing, is not seen (Chrome
+        // draws masked content once under nothing, then again under the mask, measured).
+        const textBox = place([0, -0.2 * fontSize, width, 0.8 * fontSize], mul(tm, gs.m));
+        if (inks(glyphs) && defining.length === 0 && !maskedAway(gs.smask, textBox)) {
           // Faint is invisible: at a tenth of full alpha or less (text is drawn at 0.87).
           const alpha = gs.alpha * groupAlpha[groupAlpha.length - 1];
           const hidden = gs.mode % 4 === 3 || alpha <= 0.1;
@@ -1743,6 +1790,16 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           }
         }
         tm = mul([1, 0, 0, 1, width, 0], tm);
+      } else if (fn === pdfjs.OPS.paintImageXObject && defining.length > 0) {
+        // The mask's own content (group 8h): Chrome writes a luminance mask as an image of it.
+        const item = { kind: "image" as const, m: gs.m, pixels: null as Pixels | null };
+        defining[defining.length - 1].mask.items.push(item);
+        maskImagesToFetch.push({ item, id: String(args[0]) });
+      } else if (
+        fn === pdfjs.OPS.paintImageXObject &&
+        maskedAway(gs.smask, place([0, 0, 1, 1], gs.m))
+      ) {
+        // painted under a mask that is nothing: not seen
       } else if (fn === pdfjs.OPS.paintImageXObject) {
         obs.imagePaints++;
         imagesHere++;
@@ -1775,6 +1832,28 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       } else if (fn === pdfjs.OPS.constructPath) {
         drew = true;
         const minMax = args[2] as ArrayLike<number> | null | undefined;
+        const pathBox =
+          minMax && minMax.length === 4
+            ? place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m)
+            : null;
+        // Not paint a reader sees: a mask's own content (kept as the mask's), or a path under a
+        // mask that is nothing (group 8h).
+        const unseen =
+          !clipPending &&
+          (defining.length > 0 || (pathBox !== null && maskedAway(gs.smask, pathBox)));
+        if (!clipPending && defining.length > 0 && FILLS.has(Number(args[0]))) {
+          const op = Number(args[0]);
+          defining[defining.length - 1].mask.items.push({
+            kind: "fill",
+            polygons: outline(args[1], gs.m),
+            evenOdd:
+              op === pdfjs.OPS.eoFill ||
+              op === pdfjs.OPS.eoFillStroke ||
+              op === pdfjs.OPS.closeEOFillStroke,
+            colour: gs.fill,
+            alpha: gs.alpha,
+          });
+        }
         if (clipPending && minMax && minMax.length === 4) {
           const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
           gs = {
@@ -1782,6 +1861,8 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
             clip: gs.clip === null ? box : meet(gs.clip, box),
             clips: [...gs.clips, { polygons: outline(args[1], gs.m), evenOdd: clipEvenOdd }],
           };
+        } else if (unseen) {
+          // nothing recorded: see above
         } else if (FILLS.has(Number(args[0])) && minMax && minMax.length === 4) {
           // A filled shape: a background, a band, a box, a curve -- inside its clip.
           const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
@@ -1804,7 +1885,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         const op = Number(args[0]);
         const fills = FILLS.has(op);
         const strokes = STROKES.has(op);
-        if (!clipPending && (fills || strokes)) {
+        if (!clipPending && !unseen && (fills || strokes)) {
           // A pattern paint stands in place of the colour (the colour last set is stale under it).
           const fillPattern =
             gs.fillShading !== undefined ||
@@ -1836,6 +1917,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
             cap: gs.cap,
             join: gs.join,
             miter: gs.miter,
+            ...(gs.smask ? { mask: gs.smask } : {}),
             ...(fills && gs.fillShading ? { fillShading: gs.fillShading } : {}),
             ...(fills && gs.fillAlphaShading ? { fillAlphaShading: gs.fillAlphaShading } : {}),
             ...(strokes && gs.strokeAlphaShading
@@ -1850,6 +1932,8 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       }
     });
     obs.imagesPerPage.push(imagesHere);
+    // Each mask's image, its pixels now (group 8h).
+    for (const { item, id } of maskImagesToFetch) item.pixels = await pdfImage(page, id);
     // Each pattern's raster, its pixels now (group 8g): the walk above could not wait for them.
     for (const r of rastersToFetch) {
       const pixels = await pdfImage(page, r.id);
