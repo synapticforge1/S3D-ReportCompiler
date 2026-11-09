@@ -1194,7 +1194,7 @@ class-B re-check at the end:
    fails.
 3. ✅ **DONE 2026-11-08 (known-issues #91)** — **7, report identity and order.** Segment k's printed heading must equal source k's, member
    number included; the build order must equal the verifier's own natural sort of the file names.
-4. **2, a number with its neighbours:** checked with the token after it (a unit, single letters
+4. ✅ **DONE 2026-11-08 (known-issues #92)** — **2, a number with its neighbours:** checked with the token after it (a unit, single letters
    included; an operator; `%`) and the operator before it. `30.483 <` → `>`, `12.5+3` → `12.5-3`
    and `85%` → `85` passed. Option: pair a value with its row label too.
 5. **3, a number wrapped across lines:** joined only inside one structure element (Chrome tags its
@@ -1215,7 +1215,10 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 4 (item 2, a number with its neighbours: units, operators, `%`).
+**Next step:** group 5 (item 3, a number wrapped across lines, via the structure tree). ⚠️ Found
+in group 4: a unit standing in a CELL of its own, apart from its number, is still not paired with
+it (pairs are taken within one run of text) — part of group 5, which reads the structure tree
+and so knows a row.
 
 🔒 **Owner, 2026-11-08: "skips need fixes also, unless it will be fixed in a different class."**
 Nothing is set aside without a fix. Recorded for the class it belongs to:

@@ -200,8 +200,8 @@ reason. It automates the negative controls above and `tests/controls/README.md`:
 | the 13 samples | exit 0; 2203 expressions, 0 failed; ≥ 1 page per report (never an exact count — below); 0 missing; per-report 13/13; 13 images, 13 diagrams; 0 LaTeX, 0 blank; PASS |
 | unknown delimiter | exit 1; "87 expressions, 0 failed" AND the guard's error, 270 TeX commands (97 / 250 before 2026-11-06); never verifies; no PDF |
 | colliding `{{..}}` | exit 1; the guard's error, 205 TeX commands; no PDF |
-| hidden content, one report | exit 1; 218 words / 116 numbers missing (171 / 114 before class B, 2026-11-08); 1 blank page; "content missing from the PDF"; **no new `compiled_reports_*` temp profile left** (2026-11-05) |
-| a row hidden in the 2nd of two copies | exit 1; set-wide **0 missing** (pinned — the union limit), per-report `b_report.html: 24 word(s), 7 number(s) -- design (3 of 4), moment (2 of 6), …` since occurrences are counted (2026-11-08; 6 words, then 5, before); NOT "missing from the PDF" |
+| hidden content, one report | exit 1; 223 words / 116 numbers missing (171 / 114 before class B, 2026-11-08; 218 before the ASCII operators counted); 1 blank page; "content missing from the PDF"; **no new `compiled_reports_*` temp profile left** (2026-11-05) |
+| a row hidden in the 2nd of two copies | exit 1; set-wide **0 missing** (pinned — the union limit), per-report `b_report.html: 26 word(s), 21 number(s) -- design (3 of 4), moment (2 of 6), …` since operators and neighbours are counted (2026-11-08; 24 / 7 with occurrences only; 6 words, then 5, before); NOT "missing from the PDF" |
 | custom delimiters declared | exit 0; 169 expressions; ≥ 1 page; PASS |
 | `$$..$$` in a second report | exit 0; 338 expressions; the two-delimiter-set warning; per-report 2/2; no `$$` in the bake |
 | `&lt;` / `&gt;` inside expressions (2026-11-05) | exit 0; 169 expressions, 0 failed (the same report as custom delimiters); PASS |

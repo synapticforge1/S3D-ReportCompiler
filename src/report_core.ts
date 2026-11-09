@@ -2963,7 +2963,10 @@ function wordTokens(text: string): string[] {
   // A symbol: anything but an ASCII character, a decimal digit, a space or an invisible format
   // character -- so `²` (category No, not a digit) is one, and so is every non-ASCII LETTER on its
   // own: a single `λ` is no two-letter word, but λ → φ changes the quantity.
-  const symbols = t.match(/[^\p{Nd}\s\p{Cf}\p{ASCII}]/gu) ?? [];
+  // And the ASCII operators a value's meaning turns on, each counted (task 18 item 2): a `<` → `>`,
+  // a `+` → `-`, an empty cell's `-` → `+` changes a check, and none was a token. Every `-` counts,
+  // hyphens too, on both sides alike (maths minus signs read as `-`, normalizeText).
+  const symbols = t.match(/[^\p{Nd}\s\p{Cf}\p{ASCII}]|[<>=+%-]/gu) ?? [];
   return [...words, ...symbols];
 }
 
@@ -3065,6 +3068,40 @@ function countWord(
     n += Math.max(0, capitals - claimed);
   }
   return n;
+}
+
+/**
+ * Each number with its neighbours, counted: the unit, word, operator or `%` right after it
+ * (`12 m`, `30.483 <`, `85 %`) and the operator right before it (`+ 3`, `< 0.2`), at most one space
+ * between. A number checked alone let `12 m` → `12 N`, `30.483 <` → `>`, `12.5+3` → `12.5-3` and
+ * `85%` → `85` through: the number was still there (task 18 item 2). A sign counts as the operator
+ * before its digits, so `-0.537` and MathJax's spaced "- 0.537" are one pair. ONE scan for the
+ * source and the PDF (the lesson of #89). `runs`: a line break ends a run, and no pair crosses it
+ * -- the SOURCE, cut into runs of text (see {@link sourceTally}); without it all whitespace is a
+ * space -- the PDF, where a run may wrap onto the next line ("360-16" / "LRFD").
+ */
+function neighbourTally(text: string, runs = false): Map<string, number> {
+  const t = normalizeText(text).replace(runs ? /[^\S\n]+/g : /\s+/g, " ");
+  const out = new Map<string, number>();
+  const add = (key: string) => out.set(key, (out.get(key) ?? 0) + 1);
+  const OP = "<>=+\\-≤≥≠×⋅/";
+  for (const m of t.matchAll(NUMBER_TOKEN)) {
+    const at = m.index ?? 0;
+    const signed = m[0].startsWith("-");
+    const digits = signed ? m[0].slice(1) : m[0];
+    // After it: a run of letters -- a Greek symbol stands alone, as maths prints it touching its
+    // neighbour (`2\phi P_c` is "2ϕPc"; its neighbour is ϕ) -- or an operator, or `%`.
+    const after = new RegExp(
+      `^ ?(\\p{Script=Greek}|(?:(?!\\p{Script=Greek})\\p{L})+|[${OP}%])`,
+      "u",
+    ).exec(t.slice(at + m[0].length));
+    if (after) add(`${digits} ${after[1]}`);
+    const before = signed
+      ? ["-"]
+      : new RegExp(`([${OP}]) ?$`, "u").exec(t.slice(Math.max(0, at - 2), at));
+    if (before) add(`${before[before.length - 1]} ${digits}`);
+  }
+  return out;
 }
 
 /** Whether `word` stands in `text` at least once ({@link countWord}). */
@@ -3191,6 +3228,32 @@ export type SourceTokens = {
  * reading (design-decisions §9).
  */
 const SOURCE_TAG = /<\/?[a-zA-Z](?:"[^"]*"|'[^']*'|[^"'>])*>/g;
+
+/**
+ * The source's text as a reader sees the maths: delimiters gone, a command's NAME gone where it is
+ * a command, a glyph command's glyph and an operator's name left (`\lambda` → λ, `\max` → max).
+ */
+function printedProse(text: string, runs = false): string {
+  // With `runs`, display maths and TeX's `\\` end a run of text ({@link neighbourTally}).
+  const end = runs ? "\n" : " ";
+  return text
+    .replace(/\[math\]/gi, end)
+    .replace(/\[mathin\]/gi, " ")
+    .replace(/\\\\|\\([a-zA-Z]+)/g, (_m, name?: string) =>
+      name === undefined
+        ? end
+        : Object.hasOwn(TEX_GLYPHS, name)
+          ? ` ${TEX_GLYPHS[name]} `
+          : TEX_OPERATOR_NAMES.has(name)
+            ? ` ${name} `
+            : " ",
+    );
+}
+
+/** Each sub- or superscript as its own token, as it prints: `F_yS` is F, y and S; `M_{nz}` M and nz. */
+function isolateScripts(prose: string): string {
+  return prose.replace(/[_^]\{([^{}]*)\}/g, " $1 ").replace(/[_^]([^\s{\\])/g, " $1 ");
+}
 
 /** A phrasing element's tag, drawn in line with its neighbours ({@link extractSourceTokens}). */
 const INLINE_TAG =
@@ -3573,6 +3636,66 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
 }
 
 /**
+ * The maths delimiter pairs a source declares, read by the VERIFICATION's own code -- not the
+ * bake's `parseDelimiters` (design-decisions §9: a reader they shared could lose the same
+ * delimiter on both sides, and every check would agree). Over-inclusive on purpose: every
+ * `<script>` of any type, live or not, so a pair is looked for whenever any config names it; a
+ * variable holding the array is followed. Single-character brackets are left out, as MathJax
+ * reads SkyCiv's `['\[','\]']` as "[" and "]" (roadmap task 18 item 1).
+ */
+function declaredDelimiters(raw: string): [string, string][] {
+  const scripts = [
+    ...raw.replace(/<!--[\s\S]*?-->/g, "").matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi),
+  ]
+    .map((m) => m[1])
+    .join("\n;\n");
+  /** The `[...]` at `at`, quotes respected. */
+  const bracket = (at: number) => {
+    let depth = 0;
+    let quote = "";
+    for (let i = at; i < scripts.length; i++) {
+      const c = scripts[i];
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = "";
+      } else if (c === "'" || c === '"') quote = c;
+      else if (c === "[") depth++;
+      else if (c === "]" && --depth === 0) return scripts.slice(at, i + 1);
+    }
+    return "";
+  };
+  const jsString = (s: string) =>
+    s.replace(
+      /\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([\s\S]))/g,
+      (_m, u?: string, x?: string, c?: string) =>
+        u || x ? String.fromCharCode(parseInt((u ?? x) as string, 16)) : (c ?? ""),
+    );
+  const pairs: [string, string][] = [];
+  for (const key of scripts.matchAll(/(?<![\w$])["']?(?:inline|display)Math["']?\s*:\s*/g)) {
+    const at = (key.index ?? 0) + key[0].length;
+    let array = scripts[at] === "[" ? bracket(at) : "";
+    const name = /^[A-Za-z_$][\w$]*/.exec(scripts.slice(at))?.[0];
+    if (!array && name) {
+      const assigned = [
+        ...scripts.matchAll(
+          new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}\\s*=(?!=)\\s*\\[`, "g"),
+        ),
+      ];
+      for (const a of assigned) array += bracket((a.index ?? 0) + a[0].length - 1);
+    }
+    for (const p of array.matchAll(
+      /\[\s*(['"])((?:\\.|(?!\1).)*)\1\s*,\s*(['"])((?:\\.|(?!\3).)*)\3\s*\]/g,
+    )) {
+      const open = jsString(p[2]);
+      const close = jsString(p[4]);
+      if (open && close && !(open.length === 1 && "[](){}<>".includes(open)))
+        pairs.push([open, close]);
+    }
+  }
+  return pairs;
+}
+
+/**
  * One report's expected content ({@link extractSourceTokens}), each word and number with the
  * number of times a reader sees it: present once was all that was checked, so a value printed
  * twice could lose an occurrence, a line or a `PASS` → `FAIL` unseen (class B, re-check 2).
@@ -3580,10 +3703,13 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
 function sourceTally(raw: string): {
   words: Map<string, number>;
   numbers: Map<string, number>;
+  /** Each number with its neighbours ({@link neighbourTally}). */
+  pairs: Map<string, number>;
   expectedImages: number;
 } {
   const words = new Map<string, number>();
   const numbers = new Map<string, number>();
+  let pairs = new Map<string, number>();
   let expectedImages = 0;
   {
     let html = withoutSpinner(readerVisible(raw));
@@ -3638,17 +3764,13 @@ function sourceTally(raw: string): {
     // "color" -- and a command that prints a glyph leaves that glyph to expect (`\lambda` → λ).
     // Deleted from the whole report's words, one `$$\max(a)$$` stopped a "Max Moment" heading
     // being checked, and `\lambda` → φ passed (2026-11-08, class B).
-    const prose = text
-      .replace(/\[(?:mathin|math)\]/gi, " ")
-      .replace(/\\\\|\\([a-zA-Z]+)/g, (_m, name?: string) =>
-        name === undefined
-          ? " "
-          : Object.hasOwn(TEX_GLYPHS, name)
-            ? ` ${TEX_GLYPHS[name]} `
-            : TEX_OPERATOR_NAMES.has(name)
-              ? ` ${name} `
-              : " ",
-      );
+    // The report's own maths delimiters print nothing either: `%%x%%` shows no "%" (read by this
+    // side's own reader, {@link declaredDelimiters}).
+    const delimiters = [...new Set(declaredDelimiters(raw).flat())].sort(
+      (a, b) => b.length - a.length,
+    );
+    const unDelimited = (s: string) => delimiters.reduce((t, d) => t.split(d).join(" "), s);
+    const prose = printedProse(unDelimited(text));
     // Numbers from the text as written: a sign needs nothing before it but a space or an operator,
     // so `M_{p}-0.7` keeps its BINARY minus (the `}` before it).
     // Each token counted with the SAME matcher the PDF is counted with: by tokens, `t_{w}` was no
@@ -3660,15 +3782,29 @@ function sourceTally(raw: string): {
     }
     // Words with each sub- or superscript as its own token, as it is printed: `F_yS` is F, y and S
     // (not the "word" yS), `M_{nz}` is M and nz.
-    const scripts = prose.replace(/[_^]\{([^{}]*)\}/g, " $1 ").replace(/[_^]([^\s{\\])/g, " $1 ");
+    const scripts = isolateScripts(prose);
     const exact = normalizeText(scripts);
     const lower = exact.toLowerCase();
     for (const w of new Set(wordTokens(scripts))) {
       words.set(w, Math.max(1, countWord(lower, w, exact, null)));
     }
+    // Neighbours within one RUN of text -- an element's own text, one maths expression -- as they
+    // stay together on the page, wrapped or not. Across elements the page's reading order is the
+    // layout's, not the source's: a verdict box laid out apart made "1.0 STATUS" a pair the page
+    // never prints in that order. So every tag but a phrasing one, display maths and `\\` end a
+    // run; the HTML's own line breaks are spaces; TeX's grouping braces draw nothing.
+    const runs = dropNonPrintingTex(
+      decodeEntities(
+        html.replace(/\s+/g, " ").replace(SOURCE_TAG, (tag) => (INLINE_TAG.test(tag) ? "" : "\n")),
+      ),
+    );
+    pairs = neighbourTally(
+      isolateScripts(printedProse(unDelimited(runs), true)).replace(/[{}]/g, " "),
+      true,
+    );
   }
 
-  return { words, numbers, expectedImages };
+  return { words, numbers, pairs, expectedImages };
 }
 
 /**
@@ -3862,12 +3998,27 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
         const found = count(t);
         return found >= n ? [] : [found === 0 ? t : `${t} (${found} of ${n})`];
       });
+    // Maths left as prose prints its delimiters: a declared pair around text in this report's own
+    // pages means the bake never read it. The LaTeX check looks for the standard delimiters only;
+    // a report's own -- `@@`, a bare `$` -- were looked for only as the BAKE read them, so a config
+    // it could not read hid both sides at once (task 18 item 1). Named "... printed as prose".
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const printed = declaredDelimiters(source).flatMap(([open, close]) =>
+      new RegExp(`${esc(open)}[^\\n]{0,200}?\\S[^\\n]{0,200}?${esc(close)}`).test(segment)
+        ? [`${open}..${close} printed as prose`]
+        : [],
+    );
     return {
       report: i,
-      missingWords: short(own.words, (w) =>
-        countWord(lower, w, text, own.words.get(w.toUpperCase()) ?? 0),
-      ),
-      missingNumbers: short(own.numbers, (n) => countNumber(text, n)),
+      missingWords: [
+        ...new Set(printed),
+        ...short(own.words, (w) => countWord(lower, w, text, own.words.get(w.toUpperCase()) ?? 0)),
+      ],
+      missingNumbers: [
+        ...short(own.numbers, (n) => countNumber(text, n)),
+        // A number with the wrong neighbour is a changed value: "12 m" where the PDF has "12 N".
+        ...((pdf) => short(own.pairs, (p) => pdf.get(p) ?? 0))(neighbourTally(segment)),
+      ],
     };
   });
   return { checked: true, reason: "", reports };

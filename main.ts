@@ -743,66 +743,6 @@ function readingOrder(a: string, b: string): number {
 }
 
 /**
- * The maths delimiter pairs a source declares, read by the VERIFICATION's own code -- not the
- * bake's `parseDelimiters` (design-decisions §9: a reader they shared could lose the same
- * delimiter on both sides, and every check would agree). Over-inclusive on purpose: every
- * `<script>` of any type, live or not, so a pair is looked for whenever any config names it; a
- * variable holding the array is followed. Single-character brackets are left out, as MathJax
- * reads SkyCiv's `['\[','\]']` as "[" and "]" (roadmap task 18 item 1).
- */
-function declaredDelimiters(raw: string): [string, string][] {
-  const scripts = [
-    ...raw.replace(/<!--[\s\S]*?-->/g, "").matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi),
-  ]
-    .map((m) => m[1])
-    .join("\n;\n");
-  /** The `[...]` at `at`, quotes respected. */
-  const bracket = (at: number) => {
-    let depth = 0;
-    let quote = "";
-    for (let i = at; i < scripts.length; i++) {
-      const c = scripts[i];
-      if (quote) {
-        if (c === "\\") i++;
-        else if (c === quote) quote = "";
-      } else if (c === "'" || c === '"') quote = c;
-      else if (c === "[") depth++;
-      else if (c === "]" && --depth === 0) return scripts.slice(at, i + 1);
-    }
-    return "";
-  };
-  const jsString = (s: string) =>
-    s.replace(
-      /\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([\s\S]))/g,
-      (_m, u?: string, x?: string, c?: string) =>
-        u || x ? String.fromCharCode(parseInt((u ?? x) as string, 16)) : (c ?? ""),
-    );
-  const pairs: [string, string][] = [];
-  for (const key of scripts.matchAll(/(?<![\w$])["']?(?:inline|display)Math["']?\s*:\s*/g)) {
-    const at = (key.index ?? 0) + key[0].length;
-    let array = scripts[at] === "[" ? bracket(at) : "";
-    const name = /^[A-Za-z_$][\w$]*/.exec(scripts.slice(at))?.[0];
-    if (!array && name) {
-      const assigned = [
-        ...scripts.matchAll(
-          new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}\\s*=(?!=)\\s*\\[`, "g"),
-        ),
-      ];
-      for (const a of assigned) array += bracket((a.index ?? 0) + a[0].length - 1);
-    }
-    for (const p of array.matchAll(
-      /\[\s*(['"])((?:\\.|(?!\1).)*)\1\s*,\s*(['"])((?:\\.|(?!\3).)*)\3\s*\]/g,
-    )) {
-      const open = jsString(p[2]);
-      const close = jsString(p[4]);
-      if (open && close && !(open.length === 1 && "[](){}<>".includes(open)))
-        pairs.push([open, close]);
-    }
-  }
-  return pairs;
-}
-
-/**
  * The lowest contrast against the white page that text may have: WCAG's floor for large text, a
  * floor for "can be read", not its 4.5 for comfort. Well below the lowest the real sets print,
  * 8.6:1 in all three (measured 2026-11-08; logged on every build's `legible:` line); `#eeeeee` is
@@ -1873,35 +1813,17 @@ try {
     if (misordered.length > 0) {
       check.failures.push(`reports out of reading order: ${misordered.slice(0, 5).join("; ")}`);
     }
-    // Maths left as prose prints its delimiters: a declared pair around text in a report's own
-    // pages means the bake never read it. The LaTeX check looks for the standard delimiters only;
-    // a report's own -- `@@`, a bare `$` -- were looked for only as the BAKE read them, so a config
-    // it could not read hid both sides at once (task 18 item 1).
-    {
-      const starts = observed.headingPages;
-      const segmented = starts.length === entries.length;
-      const printed: string[] = [];
-      sources.forEach((source, i) => {
-        const text = segmented
-          ? observed.pageTexts
-              .slice(
-                i === 0 ? 0 : starts[i] - 1,
-                i + 1 < starts.length ? starts[i + 1] - 1 : undefined,
-              )
-              .join("\n")
-          : observed.text;
-        for (const [open, close] of declaredDelimiters(source)) {
-          const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          if (new RegExp(`${esc(open)}[^\\n]{0,200}?\\S[^\\n]{0,200}?${esc(close)}`).test(text)) {
-            printed.push(`${entries[i]}: ${open}..${close}`);
-          }
-        }
-      });
-      if (printed.length > 0) {
-        check.failures.push(
-          `maths printed as prose, its delimiters shown -- ${[...new Set(printed)].join(", ")}`,
-        );
-      }
+    // Maths left as prose, its delimiters shown: compareEachReport names each report's declared
+    // pair printed around text (task 18 item 1); said here in its own words, as well as missing.
+    const printedMaths = perReport.reports.flatMap((r) =>
+      r.missingWords
+        .filter((w) => w.endsWith(" printed as prose"))
+        .map((w) => `${entries[r.report]}: ${w.replace(/ printed as prose$/, "")}`),
+    );
+    if (printedMaths.length > 0) {
+      check.failures.push(
+        `maths printed as prose, its delimiters shown -- ${printedMaths.join(", ")}`,
+      );
     }
     if (observed.cutDiagramPages.length > 0) {
       check.failures.push(`diagram cut on page(s) ${observed.cutDiagramPages.join(", ")}`);

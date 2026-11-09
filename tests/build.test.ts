@@ -158,10 +158,10 @@ test("hidden content in one report: set-wide conservation fails", { timeout: TIM
   );
   has(
     r.out,
-    // Every token of the report is missing (it is hidden whole): 218 / 116 since 2026-11-08,
-    // when words of two letters, symbols and whole number tokens are counted and a short word
-    // keeps its case (class B; 171 / 114, then 214 / 116).
-    /missing:\s+218 word\(s\), 116 number\(s\)/,
+    // Every token of the report is missing (it is hidden whole): 223 / 116 since 2026-11-08,
+    // when words of two letters, symbols (the ASCII operators too) and whole number tokens are
+    // counted and a short word keeps its case (class B; 171 / 114, then 214 / 116, 218 / 116).
+    /missing:\s+223 word\(s\), 116 number\(s\)/,
     /1 blank page\(s\)/,
     /VERIFICATION FAILED/,
     /- content missing from the PDF/,
@@ -183,8 +183,9 @@ test(
       /missing:\s+0 word\(s\), 0 number\(s\)/,
       /per-report: 1 of 2 report\(s\) missing their own content/,
       // Every token of the hidden row, each one occurrence short, since class B re-check 2 counts
-      // occurrences (presence saw only the 6 words that appear in no other row).
-      /b_report\.html: 24 word\(s\), 7 number\(s\) -- design \(3 of 4\), moment \(2 of 6\), of \(26 of 27\)/,
+      // occurrences (presence saw only the 6 words that appear in no other row); its operators
+      // and its numbers' neighbours too since task 18 item 2 (24 words, 7 numbers before).
+      /b_report\.html: 26 word\(s\), 21 number\(s\) -- design \(3 of 4\), moment \(2 of 6\), of \(26 of 27\)/,
       /VERIFICATION FAILED/,
       /- content missing from its own report: b_report\.html/,
     );
@@ -3339,6 +3340,35 @@ test("class B, re-check 2: every occurrence, no line-split words, capitals only 
   // 5. A deleted heading is no pass: the report cannot be found, and that is a failure.
   const lost = core.compareEachReport([src("<p>a = 30.483</p>")], ["a = 30.483"]);
   assert.equal(lost.checked, false, "a report with no heading was checked as whole");
+});
+
+test("class B, task 18 item 2: a number with its neighbours", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const heading = "MEMBER # 1 DESIGN REPORT";
+  const src = (body: string) => `<html><body><h2>${heading}</h2>${body}</body></html>`;
+  const missing = (body: string, pdf: string) => {
+    const r = core.compareEachReport([src(body)], [`${heading}\n${pdf}`]).reports[0];
+    return [...r.missingWords, ...r.missingNumbers];
+  };
+  // 1. The number was still there, so each of these passed: a unit, a relation, an operator, `%`.
+  for (const [body, pdf, lost] of [
+    ["<p>L = 12 m</p>", "L = 12 N", "12 m"],
+    ["[mathin]30.483<\\lambda_{rf}[mathin]", "30.483 > λ rf", "30.483 <"],
+    ["<p>12.5+3 = 15.5</p>", "12.5-3 = 15.5", "+ 3"],
+    ["<p>Ratio 85%</p>", "Ratio 85", "85 %"],
+  ]) {
+    assert.ok(missing(body, pdf).includes(lost), `${body} → ${pdf}: passed`);
+  }
+  //    An empty cell's `-` is content too.
+  assert.ok(
+    missing("<table><tr><td>-</td><td>4471</td></tr></table>", "+ 4471").includes("-"),
+    "an empty cell's - passed as +",
+  );
+  // 2. ...and a correct page still passes: a pair wrapped onto the next line, neighbours across
+  //    elements in another order on the page, a signed number MathJax spaces as a binary minus.
+  assert.deepEqual(missing("<p>AISC 360-16 LRFD</p>", "AISC 360-16\nLRFD"), []);
+  assert.deepEqual(missing("<table><tr><td>16</td><td>Shape</td></tr></table>", "Shape\n16"), []);
+  assert.deepEqual(missing("[mathin]M_{u} -0.537 \\text{ kip}[mathin]", "M u - 0.537 kip"), []);
 });
 
 test(

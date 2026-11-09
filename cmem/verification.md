@@ -169,6 +169,12 @@ occurrence deleted. Now (1% and 0%, the 1% being an unsigned number after a minu
   read as the PDF is: counted by tokens, the source had fewer than the PDF's matcher found (its
   `t_{w}` prints "t w", which reads as "tw"), and that surplus hid a lost occurrence. The set-wide
   check stays a presence check; the per-report one is the strict one.
+- **A number with its neighbours (since 2026-11-08, #92).** Each number is also counted with the
+  unit, word, operator or `%` right after it and the operator right before it (`12 m`, `30.483 <`,
+  `+ 3`, `85 %`), and `<`, `>`, `=`, `+`, `%` and `-` are counted symbols. Source pairs are taken
+  only within one run of text — an element's own text, one maths expression — because across
+  elements the page's reading order is the layout's; on the PDF side a line break is a space, so a
+  wrapped pair still counts. The report's own maths delimiters are blanked from the source text.
 - **Number tokens keep** their sign (a "-" with nothing alphanumeric before it, so `M_{p}-0.7` is a
   binary minus), thousands separators, decimal part and exponent; `−` and the dashes read as "-".
   A comma is a thousands separator only inside a whole integer of groups (`1,250`, `12,300.5`);
@@ -200,12 +206,14 @@ pages (read from the source by the verification's own reader, over-inclusively, 
 is the side that does not depend on the bake); TeX sub/superscript marks in their braced form left in the printed text
 (`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
 ⚠️ Still NOT seen: text covered by an opaque box, or grey on grey; a diagram's drawing (only its
-labels are text) and an image's pixels; a one-letter unit (`12 m` → `12 N` — a single letter is in
-every report, so alone it proves nothing). A number broken across two lines fails (lines are never
+labels are text) and an image's pixels; a one-letter unit alone (`12 m` → `12 N` is caught as a number
+with its neighbour since #92; a unit standing in a cell of its own, apart from its number, is
+not). A number broken across two lines fails (lines are never
 joined, else table rows would be) — the loud direction. 🔒 **Each of these is to be FIXED, not kept
-(owner, 2026-11-08: "We need fixes not limits")**, along with re-check 2's ASCII operators and `%` (its
-occurrence, size and white-page contrast gaps are fixed, #89; maths with bare marks, by reading
-each report's own delimiters, #90): the plan and order are roadmap task 18.
+(owner, 2026-11-08: "We need fixes not limits")**, (fixed so far: occurrences, size and white-page
+contrast, #89; maths with bare marks, by reading each report's own delimiters, #90; report
+identity and order, #91; a number's unit and operators, #92): the plan and order are roadmap task
+18.
 
 Two extraction rules that were bugs first:
 
