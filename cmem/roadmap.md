@@ -1201,7 +1201,7 @@ class-B re-check at the end:
    needed)** — **3, a number wrapped across lines:** joined only inside one structure element (Chrome tags its
    PDFs: Table/TR/TD/TH/H3, measured), at a break directly between digits, with no space glyph at
    the line's end. Measure first whether Chrome emits that glyph at an ordinary word wrap.
-6. **4, the rest:** each filled shape (box, colour, alpha, paint order) and each text show's box in
+6. ✅ **DONE 2026-11-08 (known-issues #94)** — **4, the rest:** each filled shape (box, colour, alpha, paint order) and each text show's box in
    the operator walk; the background is the last fill beneath the text (an image is sampled from
    its pixels); a fill or image painted over at least half of a text box at alpha 0.9 or more is
    covered text; WCAG contrast below the threshold fails. White on a dark band then passes.
@@ -1216,7 +1216,8 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 6 (item 4, the rest: backgrounds, covering boxes, contrast against them).
+**Next step:** group 7 (item 5, image pixels). Group 6 left one thing unseen, for group 8's
+geometry to take up: a non-rectangular shape over text.
 Group 4's last gap (a unit in a cell of its own) was fixed before group 5 (owner, 2026-11-08): a
 table row's cells are one run.
 

@@ -3081,7 +3081,11 @@ function countWord(
  * space -- the PDF, where a run may wrap onto the next line ("360-16" / "LRFD").
  */
 function neighbourTally(text: string, runs = false): Map<string, number> {
-  const t = normalizeText(text).replace(runs ? /[^\S\n]+/g : /\s+/g, " ");
+  // A tab is a CELL boundary (the source's, {@link sourceTally}): a pair across it is keyed with a
+  // tab, and the PDF is asked only whether both stand on one line ({@link cellPairCount}).
+  const t = normalizeText(text)
+    .replace(runs ? /[^\S\n\t]+/g : /\s+/g, " ")
+    .replace(/ *\t[\t ]*/g, "\t");
   const out = new Map<string, number>();
   const add = (key: string) => out.set(key, (out.get(key) ?? 0) + 1);
   const OP = "<>=+\\-≤≥≠×⋅/";
@@ -3092,16 +3096,41 @@ function neighbourTally(text: string, runs = false): Map<string, number> {
     // After it: a run of letters -- a Greek symbol stands alone, as maths prints it touching its
     // neighbour (`2\phi P_c` is "2ϕPc"; its neighbour is ϕ) -- or an operator, or `%`.
     const after = new RegExp(
-      `^ ?(\\p{Script=Greek}|(?:(?!\\p{Script=Greek})\\p{L})+|[${OP}%])`,
+      `^([ \\t]?)(\\p{Script=Greek}|(?:(?!\\p{Script=Greek})\\p{L})+|[${OP}%])`,
       "u",
     ).exec(t.slice(at + m[0].length));
-    if (after) add(`${digits} ${after[1]}`);
-    const before = signed
-      ? ["-"]
-      : new RegExp(`([${OP}]) ?$`, "u").exec(t.slice(Math.max(0, at - 2), at));
-    if (before) add(`${before[before.length - 1]} ${digits}`);
+    if (after) add(`${digits}${after[1] === "\t" ? "\t" : " "}${after[2]}`);
+    // Before it: an operator, or its own sign (`-0.537` is "-" then 0.537).
+    const op = signed
+      ? null
+      : new RegExp(`([${OP}])([ \\t]?)$`, "u").exec(t.slice(Math.max(0, at - 2), at));
+    if (signed) add(`- ${digits}`);
+    else if (op) add(`${op[1]}${op[2] === "\t" ? "\t" : " "}${digits}`);
   }
   return out;
+}
+
+/**
+ * How many times a CELL pair (`"12\tm"`: a number and its neighbour in the next cell of a row) stands
+ * on one line of the page, in any order: summed over lines, the fewer of the two's whole
+ * occurrences there. A row's cells print side by side, but not always in source order -- a
+ * positioned cell paints after the rest of its row, so "1" then "LC3" came out of order and a
+ * correct page failed (task 18 group 6).
+ */
+function cellPairCount(page: string, key: string): number {
+  const [a, b] = key.split("\t");
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const whole = (s: string) =>
+    /^\d|^\.\d/.test(s)
+      ? new RegExp(`(?<![\\d.])${esc(s)}(?!\\d|\\.\\d)`, "gu")
+      : /\p{L}/u.test(s)
+        ? new RegExp(`(?<!\\p{L})${esc(s)}(?!\\p{L})`, "gu")
+        : new RegExp(esc(s), "gu");
+  let n = 0;
+  for (const line of normalizeText(page).split("\n")) {
+    n += Math.min((line.match(whole(a)) ?? []).length, (line.match(whole(b)) ?? []).length);
+  }
+  return n;
 }
 
 /** Whether `word` stands in `text` at least once ({@link countWord}). */
@@ -3796,15 +3825,16 @@ function sourceTally(raw: string): {
     // layout's, not the source's: a verdict box laid out apart made "1.0 STATUS" a pair the page
     // never prints in that order. So every tag but a phrasing one, display maths and `\\` end a
     // run; the HTML's own line breaks are spaces; TeX's grouping braces draw nothing.
-    // The cells of one table row are one run, as a row prints left to right: a unit in a cell of
-    // its own pairs with the number in the cell before it (`<td>12</td><td>m</td>` is "12 m"); a
-    // row's end still ends the run (task 18 item 2, its last gap).
+    // The cells of one table row are one run, as a row prints side by side: a unit in a cell of
+    // its own pairs with the number in the cell before it (`<td>12</td><td>m</td>` is "12\tm",
+    // a CELL pair, which the page need only hold on one line, {@link cellPairCount}); a row's end
+    // still ends the run (task 18 item 2, its last gap).
     const runs = dropNonPrintingTex(
       decodeEntities(
         html
           .replace(/\s+/g, " ")
           .replace(SOURCE_TAG, (tag) =>
-            INLINE_TAG.test(tag) ? "" : CELL_TAG.test(tag) ? " " : "\n",
+            INLINE_TAG.test(tag) ? "" : CELL_TAG.test(tag) ? "\t" : "\n",
           ),
       ),
     );
@@ -3996,9 +4026,16 @@ export type PerReportResult = {
  * ```
  */
 export function compareEachReport(sources: string[], pageTexts: string[]): PerReportResult {
+  // Each page's text, and its visual lines where the CLI appended them after U+2029 (a row's
+  // cells on one line, {@link cellPairCount}); a page text without them is its own lines.
+  const VISUAL = String.fromCharCode(0x2029);
+  const pages = pageTexts.map((t) => t.split(VISUAL)[0]);
+  const visualPages = pageTexts.map((t) =>
+    t.includes(VISUAL) ? t.slice(t.indexOf(VISUAL) + 1) : t,
+  );
   const heading = /MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/gi;
-  const headingCount = pageTexts.reduce((n, t) => n + (t.match(heading) ?? []).length, 0);
-  const starts = pageTexts.flatMap((t, p) =>
+  const headingCount = pages.reduce((n, t) => n + (t.match(heading) ?? []).length, 0);
+  const starts = pages.flatMap((t, p) =>
     /MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/i.test(t) ? [p] : [],
   );
   // Two headings on one page would make two reports share it: not segmentable by page.
@@ -4020,7 +4057,7 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
       .toUpperCase();
   for (let i = 0; i < sources.length; i++) {
     const own = headingOf(decodeEntities(readerVisible(sources[i]).replace(SOURCE_TAG, " ")));
-    const printed = headingOf(pageTexts[starts[i]]);
+    const printed = headingOf(pages[starts[i]]);
     if (own !== printed) {
       return {
         checked: false,
@@ -4037,9 +4074,10 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
     // before the heading (a note at the top of its body, pushed onto a page of its own) belonged
     // to no segment, and -- searched as a substring -- passed only because "ref" was inside
     // "REFERENCES" (2026-11-08, class B).
-    const segment = pageTexts
-      .slice(i === 0 ? 0 : starts[i], i + 1 < starts.length ? starts[i + 1] : pageTexts.length)
-      .join("\n");
+    const from = i === 0 ? 0 : starts[i];
+    const to = i + 1 < starts.length ? starts[i + 1] : pages.length;
+    const segment = pages.slice(from, to).join("\n");
+    const visual = visualPages.slice(from, to).join("\n");
     const own = sourceTally(source);
     // A wrap within one element ({@link SOFT_BREAK}) joined where this report's own token stands
     // whole across it, a line break everywhere else.
@@ -4051,7 +4089,9 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
     const short = (want: Map<string, number>, count: (t: string) => number) =>
       [...want].flatMap(([t, n]) => {
         const found = count(t);
-        return found >= n ? [] : [found === 0 ? t : `${t} (${found} of ${n})`];
+        // A cell pair named as it reads, its cell boundary a space.
+        const name = t.replace("\t", " ");
+        return found >= n ? [] : [found === 0 ? name : `${name} (${found} of ${n})`];
       });
     const neighbours = neighbourTally(page);
     // Maths left as prose prints its delimiters: a declared pair around text in this report's own
@@ -4073,7 +4113,14 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
       missingNumbers: [
         ...short(own.numbers, (n) => countNumber(text, n)),
         // A number with the wrong neighbour is a changed value: "12 m" where the PDF has "12 N".
-        ...short(own.pairs, (p) => neighbours.get(p) ?? 0),
+        // A cell pair stands next to its neighbour in the page's order, or on one line in any order:
+        // cells of a row sit at different heights (a neighbour wraps, or is centred), and a
+        // positioned cell paints after its row; each held where the other failed a correct page.
+        ...short(own.pairs, (p) =>
+          p.includes("\t")
+            ? Math.max(neighbours.get(p.replace("\t", " ")) ?? 0, cellPairCount(visual, p))
+            : (neighbours.get(p) ?? 0),
+        ),
       ],
     };
   });

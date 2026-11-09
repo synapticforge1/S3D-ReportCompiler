@@ -41,6 +41,9 @@ const MAIN = join(ROOT, "main.ts");
 const CONTROLS = join(ROOT, "tests", "controls");
 const SAMPLES = join(ROOT, "tests", "HTMLFilesToBeCompiled");
 const TIMEOUT = 300_000;
+/** A 1x1 PNG of solid black (task 18 item 4: text over an image, read from its pixels). */
+const BLACK_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
 
 const work = mkdtempSync(join(tmpdir(), "s3d-test-"));
 after(() => rmSync(work, { recursive: true, force: true }));
@@ -3384,6 +3387,29 @@ test("class B, task 18 item 2: a number with its neighbours", async () => {
   assert.deepEqual(missing(rows("m", "N"), "12 m\n5 N"), []);
 });
 
+test("class B, task 18 item 4: text read against what is behind it", { timeout: TIMEOUT }, () => {
+  // White text on a dark band, and on a dark image, is readable: against the white page alone it
+  // FAILED a correct page. Each must PASS.
+  const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+  for (const [what, plant] of [
+    ["white on a dark band", `<p style="background:#003366;color:#ffffff">Zorblaxian 4471</p>`],
+    [
+      "white on a black image",
+      `<div style="position:relative;width:300px;height:40px"><img src="data:image/png;base64,${BLACK_PNG}" style="display:block;width:300px;height:40px"><span style="position:absolute;left:4px;top:8px;color:#ffffff">Zorblaxian 4471</span></div>`,
+    ],
+  ]) {
+    const dir = join(work, `task18-4-${what.replace(/\W+/g, "-")}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${plant}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, `${what}:\n${tail(r.out)}`);
+    has(r.out, /PASS/);
+  }
+});
+
 test("class B, task 18 item 3: a token wrapped across lines", { timeout: TIMEOUT }, async () => {
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
   const heading = "MEMBER # 1 DESIGN REPORT";
@@ -3574,7 +3600,23 @@ test(
       ["faint text", `<p style="opacity:0.02">Zorblaxian 4471</p>`, /text drawn invisibly/],
       ["near-white text", `<p style="color:#fefefe">Zorblaxian 4471</p>`, /text drawn in white/],
       // Re-check 2: light grey is as unreadable on the white page, and so is text too small.
-      ["light grey text", `<p style="color:#eeeeee">Zorblaxian 4471</p>`, /too light to read/],
+      ["light grey text", `<p style="color:#eeeeee">Zorblaxian 4471</p>`, /too faint to read/],
+      // Task 18 item 4: against what is behind it, and under what is drawn over it.
+      [
+        "grey on grey",
+        `<p style="background:#888888;color:#777777">Zorblaxian 4471</p>`,
+        /too faint to read against its background/,
+      ],
+      [
+        "a covered value",
+        `<div style="position:relative">Zorblaxian 4471<div style="position:absolute;left:0;top:0;width:100%;height:100%;background:#ffffff"></div></div>`,
+        /text covered by a box or image drawn over it/,
+      ],
+      [
+        "black on a black image",
+        `<div style="position:relative;width:300px;height:40px"><img src="data:image/png;base64,${BLACK_PNG}" style="display:block;width:300px;height:40px"><span style="position:absolute;left:4px;top:8px;color:#000000">Zorblaxian 4471</span></div>`,
+        /too faint to read against its background/,
+      ],
       ["tiny text", `<p style="font-size:0.3px">Zorblaxian 4471</p>`, /text too small to read/],
       [
         "scaled-away text",

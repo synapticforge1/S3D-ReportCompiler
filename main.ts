@@ -665,6 +665,40 @@ async function inlineFonts(css: string, cacheDir: string): Promise<string> {
  */
 const SOFT_BREAK = String.fromCharCode(0x2028);
 
+/**
+ * Between a page's text in content order and the same text in VISUAL lines (U+2029), in the page
+ * texts given to the core: a row's cells pair on one visual line (`compareEachReport`), and a
+ * positioned cell may be painted after the next row (measured).
+ */
+const VISUAL_LINES = String.fromCharCode(0x2029);
+
+/**
+ * A page's text in visual lines: items on one baseline (within 0.3 of their height), top to
+ * bottom, each line left to right. Only to say what stands on one line -- reading order is
+ * {@link pageText}'s.
+ */
+function visualLines(items: unknown[]): string {
+  const lines: { y: number; h: number; parts: { x: number; s: string }[] }[] = [];
+  for (const raw of items) {
+    const it = raw as { str?: string; transform?: number[]; height?: number };
+    if (typeof it.str !== "string" || !/\S/.test(it.str) || !Array.isArray(it.transform)) continue;
+    const y = it.transform[5];
+    const h = Math.abs(it.transform[3]) || it.height || 1;
+    const line = lines.find((l) => Math.abs(l.y - y) < 0.3 * Math.max(h, l.h));
+    if (line) line.parts.push({ x: it.transform[4], s: it.str });
+    else lines.push({ y, h, parts: [{ x: it.transform[4], s: it.str }] });
+  }
+  return lines
+    .sort((a, b) => b.y - a.y)
+    .map((l) =>
+      l.parts
+        .sort((a, b) => a.x - b.x)
+        .map((p) => p.s)
+        .join(" "),
+    )
+    .join("\n");
+}
+
 function pageText(items: unknown[]): string {
   type Item = {
     str: string;
@@ -684,8 +718,18 @@ function pageText(items: unknown[]): string {
   // A line ended (an end-of-line item): what follows decides whether it is a break or a wrap.
   let ended: { mc: string } | null = null;
   let lastMc = "";
-  const breakBefore = (str: string, mc: string) => {
+  // The last item that drew text, kept across an end of line.
+  let last: { y: number; h: number } | null = null;
+  const breakBefore = (str: string, mc: string, y: number, h: number) => {
     if (ended === null) return;
+    // pdf.js ends a line wherever the next text jumps back left, even on the same baseline: a
+    // positioned cell paints after the rest of its row and comes back to its own place. Still
+    // one line, as a reader sees it (task 18 group 6).
+    if (last !== null && Math.abs(y - last.y) < 0.3 * Math.max(h, last.h)) {
+      out += " ";
+      ended = null;
+      return;
+    }
     // Within one element, between two letters or digits: the wrap may split a token (`word-break:
     // break-all` printed 77.531234 as "77.5" / "312" / "34", and the build failed a correct PDF).
     // Chrome writes no space at a line's end even at a word wrap, so which it was is the source's
@@ -713,7 +757,7 @@ function pageText(items: unknown[]): string {
     const x = it.transform[4];
     const y = it.transform[5];
     const h = Math.abs(it.transform[3]) || it.height || 1;
-    if (it.str !== "") breakBefore(it.str, mc);
+    if (it.str !== "") breakBefore(it.str, mc, y, h);
     if (prev !== null && it.str !== "") {
       const size = Math.max(h, prev.h);
       const dy = Math.abs(y - prev.y);
@@ -725,7 +769,7 @@ function pageText(items: unknown[]): string {
       if (dy > size) {
         // A new line without an end-of-line item: a wrap too, if within one element.
         ended = { mc: prev.mc };
-        breakBefore(it.str, mc);
+        breakBefore(it.str, mc, y, h);
       } else if (
         dy > 0.3 * size ||
         x - (prev.x + prev.w) > (digits ? 0.35 : 0.15) * size ||
@@ -739,6 +783,7 @@ function pageText(items: unknown[]): string {
     if (it.str !== "") {
       prev = { x, y, w: it.width ?? 0, h, mc };
       lastMc = mc;
+      last = { y, h };
     }
     if (it.hasEOL) {
       // Held until the next item says whether it was a wrap; a second end in a row is a break.
@@ -764,8 +809,10 @@ type PdfDetail = {
   hiddenImagePages: Set<number>;
   /** Pages with text drawn invisibly (rendering mode 3, or a tenth of full alpha or less). */
   invisibleTextPages: Set<number>;
-  /** Pages with text too light to read on the white page (contrast under {@link MIN_CONTRAST}). */
+  /** Pages with text too faint to read against what is behind it (under {@link MIN_CONTRAST}). */
   lowContrastPages: Set<number>;
+  /** Pages with text an opaque fill or image painted after it covers, half of it or more. */
+  coveredTextPages: Set<number>;
   /** The lowest contrast of any visible text, for the log (21 = black, 1 = white). */
   lowestContrast: number;
   /** Pages with text too small to read (under {@link MIN_TEXT_PT}). */
@@ -822,6 +869,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     hiddenImagePages: new Set(),
     invisibleTextPages: new Set(),
     lowContrastPages: new Set(),
+    coveredTextPages: new Set(),
     lowestContrast: 21,
     tinyTextPages: new Set(),
     smallestText: Number.POSITIVE_INFINITY,
@@ -871,10 +919,16 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
      * composited over white first. Since re-check 2 this replaces a test for white: every channel
      * at `0xF0` or more passed `#eeeeee`, as unreadable on a white page (1.16:1).
      */
-    const contrast = (fill: number[], alpha: number) => {
+    // Since group 6 against what is behind the text (`ground`), the white page where nothing is.
+    const contrastOn = (fill: number[], alpha: number, ground: number[]) => {
       const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-      const [r, g, b] = fill.map((c) => lin(alpha * c + (1 - alpha)));
-      return 1.05 / (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.05);
+      const lum = (rgb: number[]) => {
+        const [r, g, b] = rgb.map(lin);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const text = lum(fill.map((c, k) => alpha * c + (1 - alpha) * ground[k]));
+      const back = lum(ground);
+      return (Math.max(text, back) + 0.05) / (Math.min(text, back) + 0.05);
     };
     /** Whether a text-show's glyphs draw anything but spaces. */
     const inks = (glyphs: unknown) =>
@@ -915,8 +969,58 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       pdfjs.OPS.nextLineShowText,
       pdfjs.OPS.nextLineSetSpacingShowText,
     ]);
+    // What stands behind text and what is drawn over it (task 18 item 4): every filled rectangle
+    // and image, and every visible text show, each with its box on the page and its paint order.
+    type Paint = { order: number; box: Box; fill: number[]; alpha: number; image?: string };
+    const paints: Paint[] = [];
+    /** Each image's whole box (not clipped): where its pixels are on the page. */
+    const imageBoxes = new Map<string, Box>();
+    const shows: { order: number; box: Box; fill: number[]; alpha: number }[] = [];
+    // The text state: the text matrix and line matrix, the font size, the leading.
+    let tm = [1, 0, 0, 1, 0, 0];
+    let tlm = [1, 0, 0, 1, 0, 0];
+    let fontSize = 1;
+    let leading = 0;
+    const matrixOf = (args: unknown[]) => {
+      const src = (args.length === 1 ? args[0] : args) as ArrayLike<number>;
+      return Array.from({ length: 6 }, (_, k) => Number(src[k]));
+    };
+    const moveText = (tx: number, ty: number) => {
+      tlm = mul([1, 0, 0, 1, tx, ty], tlm);
+      tm = tlm;
+    };
+    /** A rectangle's box, when a path is one: moveTo, three lineTo, closePath, axis-aligned. */
+    const rectangle = (data: unknown): boolean => {
+      const d = Array.from(((Array.isArray(data) ? data[0] : data) ?? []) as ArrayLike<number>);
+      if (d.length !== 13 || d[0] !== 0 || d[3] !== 1 || d[6] !== 1 || d[9] !== 1 || d[12] !== 4)
+        return false;
+      const xs = [d[1], d[4], d[7], d[10]];
+      const ys = [d[2], d[5], d[8], d[11]];
+      return new Set(xs).size <= 2 && new Set(ys).size <= 2;
+    };
+    const FILLS = new Set([
+      pdfjs.OPS.fill,
+      pdfjs.OPS.eoFill,
+      pdfjs.OPS.fillStroke,
+      pdfjs.OPS.eoFillStroke,
+      pdfjs.OPS.closeFillStroke,
+      pdfjs.OPS.closeEOFillStroke,
+    ]);
     ops.fnArray.forEach((fn: number, i: number) => {
       const args = ops.argsArray[i] as unknown[];
+      if (fn === pdfjs.OPS.beginText) {
+        tm = [1, 0, 0, 1, 0, 0];
+        tlm = tm;
+      } else if (fn === pdfjs.OPS.setTextMatrix) {
+        tm = matrixOf(args);
+        tlm = tm;
+      } else if (fn === pdfjs.OPS.moveText) moveText(Number(args[0]), Number(args[1]));
+      else if (fn === pdfjs.OPS.setLeadingMoveText) {
+        leading = -Number(args[1]);
+        moveText(Number(args[0]), Number(args[1]));
+      } else if (fn === pdfjs.OPS.setLeading) leading = Number(args[0]);
+      else if (fn === pdfjs.OPS.nextLine) moveText(0, -leading);
+      else if (fn === pdfjs.OPS.setFont) fontSize = Math.abs(Number(args[1])) || 1;
       if (fn === pdfjs.OPS.save) stack.push({ ...gs });
       else if (fn === pdfjs.OPS.restore) gs = stack.pop() ?? gs;
       else if (fn === pdfjs.OPS.transform) gs = { ...gs, m: mul(args as number[], gs.m) };
@@ -933,16 +1037,36 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         if (groupAlpha.length > 1) groupAlpha.pop();
       } else if (fn === pdfjs.OPS.clip || fn === pdfjs.OPS.eoClip) {
         clipPending = true; // pdf.js gives the clip before the path it clips to
-      } else if (SHOW_TEXT.has(fn) && inks(args[0])) {
-        // Faint is invisible: at a tenth of full alpha or less (text is drawn at 0.87).
-        const alpha = gs.alpha * groupAlpha[groupAlpha.length - 1];
-        const hidden = gs.mode % 4 === 3 || alpha <= 0.1;
-        if (hidden) obs.invisibleTextPages.add(p);
-        else {
-          const c = contrast(gs.fill, alpha);
-          obs.lowestContrast = Math.min(obs.lowestContrast, c);
-          if (c < MIN_CONTRAST) obs.lowContrastPages.add(p);
+      } else if (SHOW_TEXT.has(fn)) {
+        if (fn === pdfjs.OPS.nextLineShowText || fn === pdfjs.OPS.nextLineSetSpacingShowText) {
+          moveText(0, -leading);
         }
+        const glyphs = (fn === pdfjs.OPS.nextLineSetSpacingShowText ? args[2] : args[0]) as unknown;
+        // The show's width in text space: glyph widths are thousandths of the font size; a number
+        // in a spaced show moves the next glyph back by as many thousandths.
+        const width = Array.isArray(glyphs)
+          ? glyphs.reduce(
+              (w: number, g) =>
+                w +
+                (typeof g === "number"
+                  ? -g / 1000
+                  : Number((g as { width?: number } | null)?.width ?? 0) / 1000) *
+                  fontSize,
+              0,
+            )
+          : 0;
+        if (inks(glyphs)) {
+          // Faint is invisible: at a tenth of full alpha or less (text is drawn at 0.87).
+          const alpha = gs.alpha * groupAlpha[groupAlpha.length - 1];
+          const hidden = gs.mode % 4 === 3 || alpha <= 0.1;
+          if (hidden) obs.invisibleTextPages.add(p);
+          else {
+            // Its box: the advance across, from a fifth below the baseline to four fifths above.
+            const box = place([0, -0.2 * fontSize, width, 0.8 * fontSize], mul(tm, gs.m));
+            shows.push({ order: i, box, fill: gs.fill, alpha });
+          }
+        }
+        tm = mul([1, 0, 0, 1, width, 0], tm);
       } else if (fn === pdfjs.OPS.paintImageXObject) {
         obs.imagePaints++;
         imagesHere++;
@@ -959,17 +1083,107 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         if (box[2] - box[0] < 2 || box[3] - box[1] < 2 || area(seen) < 0.5 * area(box)) {
           obs.hiddenImagePages.add(p);
         }
+        paints.push({
+          order: i,
+          box: seen,
+          fill: [1, 1, 1],
+          alpha: gs.alpha * groupAlpha[groupAlpha.length - 1],
+          image: String(args[0]),
+        });
+        imageBoxes.set(String(args[0]), box);
       } else if (fn === pdfjs.OPS.constructPath) {
         drew = true;
         const minMax = args[2] as ArrayLike<number> | null | undefined;
         if (clipPending && minMax && minMax.length === 4) {
           const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
           gs = { ...gs, clip: gs.clip === null ? box : meet(gs.clip, box) };
+        } else if (
+          FILLS.has(Number(args[0])) &&
+          minMax &&
+          minMax.length === 4 &&
+          rectangle(args[1])
+        ) {
+          // A filled rectangle: a background, a band, a box -- inside its clip.
+          const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
+          paints.push({
+            order: i,
+            box: gs.clip === null ? box : meet(box, gs.clip),
+            fill: gs.fill,
+            alpha: gs.alpha * groupAlpha[groupAlpha.length - 1],
+          });
         }
         clipPending = false;
       }
     });
     obs.imagesPerPage.push(imagesHere);
+
+    // Each visible text show against what is actually behind it, and anything drawn over it
+    // (task 18 item 4). Against the white page only, white text on a dark band FAILED a correct
+    // page and grey on grey (#777 on #888, 4.5:1 against white) PASSED unreadable; and text
+    // under an opaque box was still in the text layer, so every check found it.
+    const pixels = new Map<
+      string,
+      { width: number; height: number; kind: number; data: Uint8ClampedArray } | null
+    >();
+    const imageColour = async (name: string, at: Box): Promise<number[] | null> => {
+      if (!pixels.has(name)) {
+        const store = name.startsWith("g_") ? page.commonObjs : page.objs;
+        const img = await new Promise<unknown>((resolve) => store.get(name, resolve)).catch(
+          () => null,
+        );
+        const i = img as {
+          width?: number;
+          height?: number;
+          kind?: number;
+          data?: Uint8ClampedArray;
+        } | null;
+        pixels.set(name, i?.data && i.width && i.height ? (i as never) : null);
+      }
+      const img = pixels.get(name);
+      const box = imageBoxes.get(name);
+      if (!img || !box) return null;
+      // The text box's part of the image, in pixels (an image is drawn upright, row 0 at its top).
+      const px = (x: number) => Math.floor(((x - box[0]) / (box[2] - box[0])) * img.width);
+      const py = (y: number) => Math.floor(((box[3] - y) / (box[3] - box[1])) * img.height);
+      const [x0, x1] = [Math.max(0, px(at[0])), Math.min(img.width - 1, px(at[2]))];
+      const [y0, y1] = [Math.max(0, py(at[3])), Math.min(img.height - 1, py(at[1]))];
+      const channels = img.kind === 3 ? 4 : img.kind === 2 ? 3 : 0;
+      if (channels === 0 || x1 < x0 || y1 < y0) return null;
+      const sum = [0, 0, 0];
+      let n = 0;
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const k = (y * img.width + x) * channels;
+          const a = channels === 4 ? img.data[k + 3] / 255 : 1;
+          for (let c = 0; c < 3; c++) sum[c] += (a * img.data[k + c]) / 255 + (1 - a);
+          n++;
+        }
+      }
+      return sum.map((s) => s / n);
+    };
+    const contains = (outer: Box, x: number, y: number) =>
+      x >= outer[0] && x <= outer[2] && y >= outer[1] && y <= outer[3];
+    for (const s of shows) {
+      const cx = (s.box[0] + s.box[2]) / 2;
+      const cy = (s.box[1] + s.box[3]) / 2;
+      // Behind it: the paints before it that hold its centre, the latest on top -- each laid over
+      // the one under it by its alpha, from the white page up.
+      let ground = [1, 1, 1];
+      for (const q of paints) {
+        if (q.order > s.order || !contains(q.box, cx, cy)) continue;
+        const colour = q.image === undefined ? q.fill : await imageColour(q.image, s.box);
+        if (colour === null) continue;
+        ground = ground.map((g, c) => q.alpha * colour[c] + (1 - q.alpha) * g);
+      }
+      const c = contrastOn(s.fill, s.alpha, ground);
+      obs.lowestContrast = Math.min(obs.lowestContrast, c);
+      if (c < MIN_CONTRAST) obs.lowContrastPages.add(p);
+      // Over it: an opaque fill or image painted after it, over half of its box or more.
+      const covered = paints.some(
+        (q) => q.order > s.order && q.alpha >= 0.9 && area(meet(q.box, s.box)) >= 0.5 * area(s.box),
+      );
+      if (covered && area(s.box) > 0) obs.coveredTextPages.add(p);
+    }
 
     // Items are text runs or marked-content markers; only the former have text.
     // With the marked content, so pageText knows which element each piece is drawn in.
@@ -988,7 +1202,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     }
 
     obs.text += `${text}\n`;
-    obs.pageTexts.push(text);
+    // For the core, the visual lines ride after the text ({@link VISUAL_LINES}); everything else
+    // here reads the text alone.
+    obs.pageTexts.push(`${text}${VISUAL_LINES}${visualLines(items)}`);
     if (text.trim().length === 0 && !drew) obs.blankPages.push(p);
 
     // These two patterns are specific to the SkyCiv diagram, which prints its
@@ -1886,13 +2102,19 @@ try {
     if (observed.cutDiagramPages.length > 0) {
       check.failures.push(`diagram cut on page(s) ${observed.cutDiagramPages.join(", ")}`);
     }
-    // White or near-white text on a white page reads as nothing, yet passes every text check: it
-    // FAILS, the loud direction -- a template with white text on a coloured band would fail here
-    // until the background is read (roadmap task 18, item 4), never pass unseen.
+    // Text too faint to read against what is behind it -- white on the white page, grey on grey --
+    // reads as nothing, yet passes every text check (task 18 item 4: measured against the real
+    // background, so white on a dark band is read, as a reader reads it).
     if (observed.lowContrastPages.size > 0) {
       check.failures.push(
-        `text drawn in white or too light to read on page(s) ${[...observed.lowContrastPages].join(", ")} ` +
-          `-- contrast ${observed.lowestContrast.toFixed(2)}:1 on a white page, under ${MIN_CONTRAST}:1`,
+        `text drawn in white or too faint to read against its background on page(s) ` +
+          `${[...observed.lowContrastPages].join(", ")} -- contrast ${observed.lowestContrast.toFixed(2)}:1, under ${MIN_CONTRAST}:1`,
+      );
+    }
+    // Text under an opaque box or image is still in the text layer, so every word check finds it.
+    if (observed.coveredTextPages.size > 0) {
+      check.failures.push(
+        `text covered by a box or image drawn over it on page(s) ${[...observed.coveredTextPages].join(", ")}`,
       );
     }
     if (observed.tinyTextPages.size > 0) {

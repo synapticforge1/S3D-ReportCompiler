@@ -200,9 +200,11 @@ All three real sets pass under it (2026-11-08). What it adds on the PDF side (`m
 cut by a page break, seen by where it is DRAWN (past the page's edge — a count let a lost image
 cancel a split one); each report's own image count; a diagram's title without its caption in
 reading order; text drawn invisibly (render mode 3, or a tenth of full alpha or less, every
-enclosing group's alpha multiplied in — `opacity: 0.02` is a group); text too LIGHT to read on the
-white page (contrast under 3:1, its alpha composited first; the real sets' lowest is 8.6:1 — a
-template with white text on a band would fail here until backgrounds are read, task 18 item 4);
+enclosing group's alpha multiplied in — `opacity: 0.02` is a group); text too FAINT to read against
+what is behind it (contrast under 3:1; since #94 against the filled rectangles and images painted
+before it under its centre, an image sampled from its pixels — white on a dark band passes, grey on
+grey fails; the real sets' lowest is 8.6:1); text COVERED by an opaque rectangle or image painted
+after it over half its box (#94);
 text too SMALL to read (under 2 pt; the real sets' smallest is 3.61). Both measured figures are on
 every build's `legible:` line; an image drawn but not seen (under 2 pt on a side, or less than half
 inside its clipping box); a report's OWN declared maths delimiters printed around text in its own
@@ -210,7 +212,8 @@ pages (read from the source by the verification's own reader, over-inclusively, 
 #90 — the bake refuses a config it cannot read, and the guard checks what the bake read, so this
 is the side that does not depend on the bake); TeX sub/superscript marks in their braced form left in the printed text
 (`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
-⚠️ Still NOT seen: text covered by an opaque box, or grey on grey; a diagram's drawing (only its
+⚠️ Still NOT seen: text under a non-rectangular shape (curves are neither covers nor
+backgrounds); a diagram's drawing (only its
 labels are text) and an image's pixels; a one-letter unit is caught only beside its number (#92: in
 its run of text, or in the next cell of its row). (A number broken across two lines failed until #93; it is
 joined now where the source has it whole.) 🔒 **Each of these is to be FIXED, not kept
