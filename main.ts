@@ -107,6 +107,7 @@ import {
   decodeReport,
   delimSignatures,
   drawnImages,
+  drawnSvgs,
   extractSourceTokens,
   findBrokenReferences,
   findLeftoverMath,
@@ -127,6 +128,14 @@ import {
 } from "./src/report_core.ts";
 
 import * as rt from "./src/report_runtime.ts";
+import {
+  compareSvg,
+  type PdfRun,
+  type PdfShading,
+  type PdfVector,
+  type Polyline,
+  readSvg,
+} from "./src/report_svg.ts";
 
 // Generous ceiling, not a fixed wait -- the browser exits as soon as the page
 // settles. The baked HTML fetches nothing, so this only has to cover layout.
@@ -1129,6 +1138,10 @@ type PdfDetail = {
   coveredTextPages: Set<number>;
   /** Every image painted, in order: its page and its pixels as pdf.js decodes them. */
   paintedImages: { page: number; pixels: Pixels | null }[];
+  /** Every path painted, in its own coordinates under its transform (task 18 group 8b). */
+  vectors: PdfVector[];
+  /** Every run of text, its baseline origin, width and size (task 18 group 8b). */
+  runs: (PdfRun & { spaces?: number })[];
   /** The lowest contrast of any visible text, for the log (21 = black, 1 = white). */
   lowestContrast: number;
   /** Pages with text too small to read (under {@link MIN_TEXT_PT}). */
@@ -1187,6 +1200,8 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     lowContrastPages: new Set(),
     coveredTextPages: new Set(),
     paintedImages: [],
+    vectors: [],
+    runs: [],
     lowestContrast: 21,
     tinyTextPages: new Set(),
     smallestText: Number.POSITIVE_INFINITY,
@@ -1216,10 +1231,33 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     // element's `opacity` is a group, its text's own alpha set inside it); and the clipping box,
     // to know an image `overflow: hidden` left mostly unseen.
     type Box = [number, number, number, number];
-    type Gs = { m: number[]; mode: number; alpha: number; fill: number[]; clip: Box | null };
+    // Since group 8b the stroke colour and line width too, for the geometry check.
+    type Gs = {
+      m: number[];
+      mode: number;
+      alpha: number;
+      fill: number[];
+      clip: Box | null;
+      stroke: number[];
+      lw: number;
+      strokeAlpha: number;
+      fillShading?: PdfShading;
+      strokeShading?: PdfShading;
+      fillOther?: string;
+      strokeOther?: string;
+    };
     const stack: Gs[] = [];
     const groupAlpha: number[] = [1];
-    let gs: Gs = { m: [1, 0, 0, 1, 0, 0], mode: 0, alpha: 1, fill: [0, 0, 0], clip: null };
+    let gs: Gs = {
+      m: [1, 0, 0, 1, 0, 0],
+      mode: 0,
+      alpha: 1,
+      fill: [0, 0, 0],
+      clip: null,
+      stroke: [0, 0, 0],
+      lw: 1,
+      strokeAlpha: 1,
+    };
     let clipPending = false;
     /** A fill colour as RGB 0-1: pdf.js gives "#rrggbb", or numbers 0-255 or 0-1, or one grey. */
     const rgb = (args: unknown[]): number[] => {
@@ -1378,6 +1416,63 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       pdfjs.OPS.closeFillStroke,
       pdfjs.OPS.closeEOFillStroke,
     ]);
+    const STROKES = new Set([
+      pdfjs.OPS.stroke,
+      pdfjs.OPS.closeStroke,
+      pdfjs.OPS.fillStroke,
+      pdfjs.OPS.eoFillStroke,
+      pdfjs.OPS.closeFillStroke,
+      pdfjs.OPS.closeEOFillStroke,
+    ]);
+    /** A path's polylines in its OWN coordinates (pdf.js 6 commands), closures kept, curves in 16. */
+    const ownLines = (data: unknown): Polyline[] => {
+      const d = Array.from(((Array.isArray(data) ? data[0] : data) ?? []) as ArrayLike<number>);
+      const lines: Polyline[] = [];
+      let line: number[][] = [];
+      let [cx, cy] = [0, 0];
+      const flush = (closed: boolean) => {
+        if (line.length > 1 || (closed && line.length > 0)) lines.push({ points: line, closed });
+        line = [];
+      };
+      for (let k = 0; k < d.length;) {
+        const op = d[k++];
+        if (op === 0) {
+          flush(false);
+          [cx, cy] = [d[k++], d[k++]];
+          line = [[cx, cy]];
+        } else if (op === 1) {
+          [cx, cy] = [d[k++], d[k++]];
+          line.push([cx, cy]);
+        } else if (op === 2 || op === 3) {
+          const q = d.slice(k, k + (op === 2 ? 6 : 4));
+          k += op === 2 ? 6 : 4;
+          const [x0, y0] = [cx, cy];
+          for (let s = 1; s <= 16; s++) {
+            const t = s / 16;
+            const u = 1 - t;
+            line.push(
+              op === 2
+                ? [
+                    u * u * u * x0 + 3 * u * u * t * q[0] + 3 * u * t * t * q[2] + t * t * t * q[4],
+                    u * u * u * y0 + 3 * u * u * t * q[1] + 3 * u * t * t * q[3] + t * t * t * q[5],
+                  ]
+                : [
+                    u * u * x0 + 2 * u * t * q[0] + t * t * q[2],
+                    u * u * y0 + 2 * u * t * q[1] + t * t * q[3],
+                  ],
+            );
+          }
+          [cx, cy] = op === 2 ? [q[4], q[5]] : [q[2], q[3]];
+        } else if (op === 4) {
+          const first = line[0];
+          flush(true);
+          if (first) [cx, cy] = first;
+          line = [[cx, cy]];
+        } else break;
+      }
+      flush(false);
+      return lines;
+    };
     ops.fnArray.forEach((fn: number, i: number) => {
       const args = ops.argsArray[i] as unknown[];
       if (fn === pdfjs.OPS.beginText) {
@@ -1398,10 +1493,38 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       else if (fn === pdfjs.OPS.transform) gs = { ...gs, m: mul(args as number[], gs.m) };
       else if (fn === pdfjs.OPS.setTextRenderingMode) gs = { ...gs, mode: Number(args[0]) };
       else if (fn === pdfjs.OPS.setFillRGBColor || fn === pdfjs.OPS.setFillGray) {
-        gs = { ...gs, fill: rgb(args) };
+        gs = { ...gs, fill: rgb(args), fillShading: undefined, fillOther: undefined };
+      } else if (fn === pdfjs.OPS.setStrokeRGBColor || fn === pdfjs.OPS.setStrokeGray) {
+        gs = { ...gs, stroke: rgb(args), strokeShading: undefined, strokeOther: undefined };
+      } else if (fn === pdfjs.OPS.setFillColorN || fn === pdfjs.OPS.setStrokeColorN) {
+        // A pattern paint (task 18 group 8b): Chrome paints an SVG gradient as a shading pattern,
+        // its definition in pdf.js's objects, its matrix to the page; a gradient with transparent
+        // stops as a tiling pattern (measured), named so the comparison can say so.
+        const stroke = fn === pdfjs.OPS.setStrokeColorN;
+        let shading: PdfShading | undefined;
+        let other: string | undefined;
+        if (args[0] === "Shading") {
+          const id = String(args[1]);
+          const store = id.startsWith("g_") ? page.commonObjs : page.objs;
+          try {
+            const ir = store.get(id) as unknown;
+            const mx = Array.from((args[2] ?? [1, 0, 0, 1, 0, 0]) as ArrayLike<number>);
+            if (Array.isArray(ir)) shading = { ir, matrix: mx };
+            else other = "a shading pdf.js did not give";
+          } catch {
+            other = "a shading pdf.js did not give";
+          }
+        } else other = `a ${String(args[0])} paint`;
+        gs = stroke
+          ? { ...gs, strokeShading: shading, strokeOther: other }
+          : { ...gs, fillShading: shading, fillOther: other };
+      } else if (fn === pdfjs.OPS.setLineWidth) {
+        gs = { ...gs, lw: Number(args[0]) };
       } else if (fn === pdfjs.OPS.setGState) {
         for (const [key, value] of (args[0] as [string, unknown][]) ?? []) {
           if (key === "ca") gs = { ...gs, alpha: Number(value) };
+          if (key === "LW") gs = { ...gs, lw: Number(value) };
+          if (key === "CA") gs = { ...gs, strokeAlpha: Number(value) };
         }
       } else if (fn === pdfjs.OPS.beginGroup) {
         groupAlpha.push(groupAlpha[groupAlpha.length - 1] * gs.alpha);
@@ -1487,6 +1610,31 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
               op === pdfjs.OPS.eoFillStroke ||
               op === pdfjs.OPS.closeEOFillStroke,
             clip: gs.clip,
+          });
+        }
+        // Every painted path, in its own coordinates under its transform, for the geometry check
+        // (task 18 group 8b): Chrome writes an SVG shape in the shape's own coordinates.
+        const op = Number(args[0]);
+        const fills = FILLS.has(op);
+        const strokes = STROKES.has(op);
+        if (!clipPending && (fills || strokes)) {
+          // A pattern paint stands in place of the colour (the colour last set is stale under it).
+          const fillPattern = gs.fillShading !== undefined || gs.fillOther !== undefined;
+          const strokePattern = gs.strokeShading !== undefined || gs.strokeOther !== undefined;
+          obs.vectors.push({
+            page: p,
+            order: i,
+            fill: fills && !fillPattern ? gs.fill : null,
+            stroke: strokes && !strokePattern ? gs.stroke : null,
+            lineWidth: gs.lw,
+            fillAlpha: gs.alpha * groupAlpha[groupAlpha.length - 1],
+            strokeAlpha: gs.strokeAlpha * groupAlpha[groupAlpha.length - 1],
+            lines: ownLines(args[1]),
+            m: gs.m,
+            ...(fills && gs.fillShading ? { fillShading: gs.fillShading } : {}),
+            ...(fills && gs.fillOther ? { fillOther: gs.fillOther } : {}),
+            ...(strokes && gs.strokeShading ? { strokeShading: gs.strokeShading } : {}),
+            ...(strokes && gs.strokeOther ? { strokeOther: gs.strokeOther } : {}),
           });
         }
         clipPending = false;
@@ -1608,6 +1756,52 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     // With the marked content, so pageText knows which element each piece is drawn in.
     const items = (await page.getTextContent({ includeMarkedContent: true })).items;
     const text = pageText(items);
+    // Runs of text for the labels (task 18 group 8b): items on one baseline, along the run's own
+    // direction (a label may be rotated), that touch (a gap under a third of their size). A run's
+    // width ends at its last glyph: trailing spaces made "0" 60 units wide.
+    for (const raw of items) {
+      const it = raw as { str?: string; transform?: number[]; width?: number };
+      if (typeof it.str !== "string" || !Array.isArray(it.transform) || it.str === "") continue;
+      const [a, b] = it.transform;
+      const [x, y] = [it.transform[4], it.transform[5]];
+      const size = Math.hypot(it.transform[2], it.transform[3]) || 1;
+      const len = Math.hypot(a, b) || 1;
+      const [dx, dy] = [a / len, b / len];
+      const inked = /\S/.test(it.str);
+      const last = obs.runs[obs.runs.length - 1];
+      const along = last ? (x - last.x) * last.dx + (y - last.y) * last.dy : 0;
+      const across = last ? (y - last.y) * last.dx - (x - last.x) * last.dy : 0;
+      // A space joins a run only as a word space does (half its size or less): Chrome writes the
+      // gaps between separate labels as whitespace items too, 57 units wide (measured).
+      const wordSpace = inked || (it.width ?? 0) <= 0.5 * size;
+      if (
+        last &&
+        last.page === p &&
+        wordSpace &&
+        Math.abs(across) < 0.1 * size &&
+        Math.abs(dx - last.dx) + Math.abs(dy - last.dy) < 0.01 &&
+        along >= -0.1 * size &&
+        along - last.width < 0.33 * size + (last.spaces ?? 0)
+      ) {
+        last.text += it.str;
+        if (inked) {
+          last.width = along + (it.width ?? 0);
+          last.spaces = 0;
+        } else last.spaces = (last.spaces ?? 0) + (it.width ?? 0);
+      } else if (inked) {
+        obs.runs.push({
+          page: p,
+          text: it.str,
+          x,
+          y,
+          width: it.width ?? 0,
+          size,
+          dx,
+          dy,
+          spaces: 0,
+        });
+      }
+    }
     // Text too small to read is still in the text layer: 0.17 pt and a `scale(0.01)` passed
     // every word check (class B, re-check 2). The size is the item's smaller axis on the page.
     for (const raw of items) {
@@ -2485,6 +2679,7 @@ try {
       );
     }
     let imagesCompared = 0;
+    let drawingsCompared = 0;
     if (observed.headingPages.length === entries.length) {
       const starts = observed.headingPages;
       for (let i = 0; i < sources.length; i++) {
@@ -2513,6 +2708,29 @@ try {
           if (why !== null)
             check.failures.push(`${entries[i]}: image ${k + 1} is not its source's -- ${why}`);
           else imagesCompared++;
+        }
+        // And each drawing as its source draws it (task 18 group 8b): its shapes, paths in the
+        // PDF; its labels, where they stand. A diagram's drawing was not checked at all -- only
+        // that its title and caption were on one page.
+        const vectors = observed.vectors.filter((v) => v.page > from && v.page <= end);
+        const runs = observed.runs.filter((r) => r.page > from && r.page <= end);
+        const used = new Set<string>();
+        // Every stylesheet of the report, in document order: a browser styles an SVG with all of
+        // them -- a <style> inside an inline SVG applies to the whole document, as any other does
+        // (and the drawings' own text carries no <style>: style is no content).
+        const outerCss = [
+          ...source
+            .replace(/<!--[\s\S]*?-->/g, "")
+            .matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi),
+        ]
+          .map((m) => m[1])
+          .join("\n");
+        for (const [k, svg] of drawnSvgs(source).entries()) {
+          const result = compareSvg(readSvg(svg, outerCss), vectors, runs, used);
+          drawingsCompared += result.compared;
+          for (const problem of result.problems) {
+            check.failures.push(`${entries[i]}: drawing ${k + 1} -- ${problem}`);
+          }
         }
       }
     }
@@ -2568,6 +2786,9 @@ try {
     }
     console.log(
       `  images:   ${imagesCompared} of ${expected.expectedImages} identical to their sources, pixel for pixel`,
+    );
+    console.log(
+      `  drawings: ${drawingsCompared} shape paint(s) and label(s) as their sources draw them`,
     );
     console.log(
       `  graphics: ${observed.imagePaints} image paint(s), ${expected.expectedImages} expected; ` +

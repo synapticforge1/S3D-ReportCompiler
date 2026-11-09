@@ -215,7 +215,12 @@ pages (read from the source by the verification's own reader, over-inclusively, 
 is the side that does not depend on the bake); TeX sub/superscript marks in their braced form left in the printed text
 (`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
 (Since #96 any filled shape, curves included, is a cover and a background, by its outline.)
-⚠️ Still NOT seen: a diagram's drawing (only its
+Since #97 each inline SVG drawing is checked as drawn: every shape's fill and stroke matched to a
+PDF path in the shape's own coordinates (outline, colour or gradient, alpha, width, dashes), nothing
+else painted among them, every label at its anchor; the report's stylesheets read as a browser
+reads them. ⚠️ Not yet verified, and named as such: a filter, a mask, a `<pattern>` paint, a
+gradient with stop-opacity, an SVG `<img>`, WebP.
+⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in
 its run of text, or in the next cell of its row). (A number broken across two lines failed until #93; it is
 joined now where the source has it whole.) 🔒 **Each of these is to be FIXED, not kept

@@ -3440,6 +3440,313 @@ test("class B, task 18 item 2: a number with its neighbours", async () => {
   assert.deepEqual(missing(rows("m", "N"), "12 m\n5 N"), []);
 });
 
+/** A drawing with each kind of shape the SVG reader takes, for the group 8b tests. */
+const PROBE_SVG = `<svg class="probe" viewBox="0 0 200 100" width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+<style>.probe .ticks path { stroke: #224466; }</style>
+<g transform="translate(10,5) rotate(15)"><path d="M 11 13 l 50 0" stroke="#ff0000" stroke-width="3" fill="none"/></g>
+<rect x="100" y="10" width="40" height="20" fill="#00ff00" stroke="#0000ff" stroke-width="2"/>
+<rect x="150" y="10" width="30" height="20" rx="5" fill="#336699"/>
+<circle cx="50" cy="70" r="15" fill="#123456"/>
+<polyline points="150,60 170,80 190,60" fill="none" stroke="#654321"/>
+<path d="M 100 90 A 20 10 0 0 1 140 90" fill="none" stroke="#abcdef"/>
+<line x1="10" y1="95" x2="190" y2="95" stroke="#000" stroke-dasharray="2,4" stroke-width="0.5" stroke-opacity="0.5"/>
+<line x1="20" y1="NaN" x2="20" y2="NaN" stroke="#000"/>
+<g class="ticks"><path d="M 30 40 l 0 6" fill="none" stroke="black" stroke-width="1.5"/></g>
+<defs><linearGradient id="probe-lin" x1="0" y1="0" x2="1" y2="0"><stop offset="0.2" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient>
+<radialGradient id="probe-rad"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#000000"/></radialGradient>
+<marker id="probe-arrow" markerWidth="4" markerHeight="4" refX="0" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#aa0000"/></marker></defs>
+<rect x="10" y="28" width="30" height="8" fill="url(#probe-lin)"/>
+<circle cx="120" cy="72" r="8" fill="url(#probe-rad)"/>
+<line x1="20" y1="80" x2="60" y2="86" stroke="#333333" stroke-width="2" marker-end="url(#probe-arrow)"/>
+<text x="100" y="50" font-size="10" text-anchor="middle">Zorblaxmiddle</text>
+<text x="20" y="20" font-size="8" text-anchor="start">Zorblaxstart</text>
+<text x="190" y="40" font-size="8" text-anchor="end">Zorblaxend</text>
+<text x="0" y="0" font-size="8" text-anchor="middle" transform="translate(90,60) rotate(-90)">Zorblaxturned</text>
+</svg>`;
+
+test(
+  "class B, task 18 group 8b: each drawing as its source draws it",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    // 1. The reader: shapes in their own coordinates, transforms composed, dashes cut, a line with
+    //    no length dropped, the cascade (an outer descendant rule, `!important`, inline style).
+    const read = svgs.readSvg(
+      PROBE_SVG,
+      '.probe rect { stroke-width: 4 } .probe circle[r="15"] { fill: #010203 !important }',
+    );
+    const kinds = read.shapes.map((s: { what: string }) => s.what);
+    assert.deepEqual(kinds, [
+      "path",
+      "rect",
+      "rect",
+      "circle",
+      "polyline",
+      "path",
+      "line",
+      "line",
+      "path",
+      // the gradient fills, the marked line, and its marker's own shape after it
+      "rect",
+      "circle",
+      "line",
+      "path",
+    ]);
+    assert.equal(read.shapes[9].fillGradient?.stops.length, 2, "a two-stop gradient");
+    assert.equal(read.shapes[10].fillGradient?.kind, "radial");
+    assert.deepEqual(
+      read.shapes[12].fill.map((c: number) => Math.round(c * 255)),
+      [0xaa, 0, 0],
+      "the marker's shape",
+    );
+    assert.equal(read.labels.length, 4);
+    assert.deepEqual(read.unread, []);
+    const tick = read.shapes[8];
+    assert.deepEqual(
+      tick.stroke.map((c: number) => Math.round(c * 255)),
+      [0x22, 0x44, 0x66],
+      "the drawing's own rule",
+    );
+    assert.equal(read.shapes[1].strokeWidth, 4, "an outer descendant rule");
+    assert.deepEqual(
+      read.shapes[3].fill.map((c: number) => Math.round(c * 255)),
+      [1, 2, 3],
+      "!important",
+    );
+    assert.ok(read.shapes[6].dashed.length > 20, "a dashed line cut into its dashes");
+    //    What it does not read is named, never passed.
+    // (A marker or a gradient is read since 8b; a filter and a <pattern> fill are not, yet.)
+    const odd = svgs.readSvg(
+      `<svg><path d="M0 0L9 9" filter="url(#f)"/><pattern id="p"/><rect width="9" height="9" fill="url(#p)"/></svg>`,
+    );
+    assert.equal(odd.unread.length, 2, JSON.stringify(odd.unread));
+
+    // 2. The matcher, against paths drawn as Chrome draws them: each shape in its own coordinates
+    //    under its transform times one base; a fill, then its stroke; labels at their anchors.
+    const base = [2.25, 0, 0, -2.25, 150, 700];
+    const build = (r: typeof read) => {
+      const vectors: unknown[] = [];
+      let order = 0;
+      for (const s of r.shapes) {
+        const m = svgs.mul(s.e, base);
+        // A stroke with no length draws nothing (the NaN line), as in Chrome.
+        const draws = s.dashed.some((l: { points: number[][] }) =>
+          l.points.some(
+            (p, k) => k > 0 && Math.hypot(p[0] - l.points[k - 1][0], p[1] - l.points[k - 1][1]) > 0,
+          ),
+        );
+        if (s.fill)
+          vectors.push({
+            page: 1,
+            order: order++,
+            fill: s.fill,
+            stroke: null,
+            fillAlpha: s.fillAlpha,
+            strokeAlpha: 1,
+            lineWidth: 1,
+            lines: s.lines,
+            m,
+          });
+        // A gradient fill as Chrome writes it: a shading in the gradient's own space, its matrix
+        // that space to the page (the shape's bounding box, its transform, then the shape's).
+        if (s.fillGradient) {
+          const g = s.fillGradient;
+          const xs = s.lines.flatMap((l: { points: number[][] }) => l.points.map((p) => p[0]));
+          const ys = s.lines.flatMap((l: { points: number[][] }) => l.points.map((p) => p[1]));
+          const [bx, by] = [Math.min(...xs), Math.min(...ys)];
+          const box = [Math.max(...xs) - bx, 0, 0, Math.max(...ys) - by, bx, by];
+          const matrix = svgs.mul(svgs.mul(g.transform, box), m);
+          const stops = g.stops.map((st: { offset: number; colour: number[] }) => [
+            st.offset,
+            `#${st.colour
+              .map((c) =>
+                Math.round(c * 255)
+                  .toString(16)
+                  .padStart(2, "0"),
+              )
+              .join("")}`,
+          ]);
+          const [a, b, c, d, e] = g.geometry;
+          const ir =
+            g.kind === "linear"
+              ? ["RadialAxial", "axial", null, stops, [a, b], [c, d], null, null]
+              : ["RadialAxial", "radial", null, stops, [d, e], [a, b], 0, c];
+          vectors.push({
+            page: 1,
+            order: order++,
+            fill: null,
+            stroke: null,
+            fillAlpha: s.fillAlpha,
+            strokeAlpha: 1,
+            lineWidth: 1,
+            lines: s.lines,
+            m,
+            fillShading: { ir, matrix },
+          });
+        }
+        if (s.stroke && draws) {
+          vectors.push({
+            page: 1,
+            order: order++,
+            fill: null,
+            stroke: s.stroke,
+            fillAlpha: 1,
+            strokeAlpha: s.strokeAlpha,
+            lineWidth: s.strokeWidth,
+            lines: s.dashed,
+            m,
+          });
+        }
+      }
+      const runs = r.labels.map(
+        (l: { text: string; x: number; y: number; anchor: string; size: number; e: number[] }) => {
+          const m = svgs.mul(l.e, base);
+          const width = l.text.length * l.size * 0.5 * Math.hypot(m[0], m[1]);
+          const len = Math.hypot(m[0], m[1]);
+          const [dx, dy] = [m[0] / len, m[1] / len];
+          const [ax, ay] = [m[0] * l.x + m[2] * l.y + m[4], m[1] * l.x + m[3] * l.y + m[5]];
+          const f = l.anchor === "middle" ? 0.5 : l.anchor === "end" ? 1 : 0;
+          return {
+            page: 1,
+            text: l.text,
+            x: ax - dx * width * f,
+            y: ay - dy * width * f,
+            width,
+            size: l.size * len,
+            dx,
+            dy,
+          };
+        },
+      );
+      return { vectors, runs };
+    };
+    // The planted edits reach into loosely shaped data.
+    type Plain = Record<string, unknown>;
+    type Drawn = { vectors: Plain[]; runs: Plain[] };
+    const check = (r: typeof read, edit: (v: Drawn) => void = () => {}) => {
+      const drawn = build(r);
+      edit(drawn as unknown as Drawn);
+      return svgs.compareSvg(r, drawn.vectors, drawn.runs, new Set()).problems as string[];
+    };
+    assert.deepEqual(check(read), [], "the drawing as Chrome draws it");
+    // 3. ...and each way a drawing can be drawn otherwise FAILS, by name.
+    const fails = (what: string, edit: (v: Drawn) => void, pattern: RegExp) => {
+      const problems = check(read, edit);
+      assert.ok(
+        problems.some((p) => pattern.test(p)),
+        `${what} passed: ${JSON.stringify(problems)}`,
+      );
+    };
+    fails(
+      "a colour changed",
+      (d) => (d.vectors[1].fill = [1, 0, 1]),
+      /fill #ff00ff, #00ff00 in its source/,
+    );
+    fails("a shape lost", (d) => d.vectors.splice(4, 1), /not drawn as in its source/);
+    fails(
+      "a shape added",
+      (d) =>
+        d.vectors.splice(3, 0, {
+          ...d.vectors[3],
+          order: 2.5,
+          lines: [
+            {
+              points: [
+                [0, 0],
+                [5, 5],
+              ],
+              closed: false,
+            },
+          ],
+        }),
+      /path\(s\) drawn among its shapes/,
+    );
+    fails(
+      "a shape moved",
+      (d) => {
+        d.vectors[5].m = svgs.mul([1, 0, 0, 1, 12, 0], d.vectors[5].m);
+      },
+      /not drawn as in its source/,
+    );
+    fails(
+      "a stroke thinned",
+      (d) => (d.vectors[0].lineWidth = 1),
+      /stroke 1\.00 wide, 3 in its source/,
+    );
+    fails(
+      "a fainter stroke",
+      (d) => {
+        (d.vectors.find((v) => v.strokeAlpha === 0.5) as Plain).strokeAlpha = 0.9;
+      },
+      /opacity 0\.90, 0\.50 in its source/,
+    );
+    fails(
+      "a label moved",
+      (d) => {
+        d.runs[0].x = (d.runs[0].x as number) + 30;
+      },
+      /the label "Zorblaxmiddle" not where its source puts it/,
+    );
+    // A gradient's colours changed (its stops swapped), and a gradient drawn as a flat colour.
+    fails(
+      "a gradient's stops changed",
+      (d) => {
+        type Shading = { ir: unknown[]; matrix: number[] };
+        const v = d.vectors.find(
+          (x) => (x.fillShading as Shading | undefined)?.ir[1] === "axial",
+        ) as Plain;
+        const s = v.fillShading as Shading;
+        v.fillShading = { ...s, ir: [...s.ir] };
+        (v.fillShading as Shading).ir[3] = [
+          [0.2, "#0000ff"],
+          [1, "#ff0000"],
+        ];
+      },
+      /fill gradient #[0-9a-f]{6} at/,
+    );
+    fails(
+      "a gradient drawn flat",
+      (d) => {
+        const v = d.vectors.find(
+          (x) => (x.fillShading as { ir: unknown[] } | undefined)?.ir[1] === "radial",
+        ) as Plain;
+        delete v.fillShading;
+        v.fill = [0.5, 0.5, 0.5];
+      },
+      /not drawn as in its source|drawn without its gradient/,
+    );
+
+    // 4. End to end: Chrome draws the probe as its source draws it -- with the report's own
+    //    stylesheet restyling it, read as a browser reads it -- and a rule the reader cannot match
+    //    that could restyle the drawing is refused by name.
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const plant = (what: string, head: string) => {
+      const dir = join(work, `task18-8b-${what.replace(/\W+/g, "-")}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "member_0_report.html"),
+        sample
+          .replace(/<\/head>/i, () => `${head}</head>`)
+          .replace(/<\/body>/i, () => `${PROBE_SVG}</body>`),
+      );
+      return run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    };
+    const plain = plant("as drawn", "");
+    assert.equal(plain.code, 0, tail(plain.out));
+    const styled = plant(
+      "restyled",
+      "<style>.probe polyline { stroke: #00aa00; stroke-width: 2 }</style>",
+    );
+    assert.equal(styled.code, 0, tail(styled.out));
+    const unknown = plant(
+      "an unread rule",
+      "<style>.probe path:first-child { stroke: #00aa00 }</style>",
+    );
+    assert.equal(unknown.code, 1, tail(unknown.out));
+    has(unknown.out, /drawing 2 -- the style rule ".probe path:first-child" is not verified/);
+  },
+);
+
 test(
   "class B, task 18 item 5: each image drawn as its source, pixel for pixel",
   { timeout: TIMEOUT },

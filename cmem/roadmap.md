@@ -1214,13 +1214,17 @@ class-B re-check at the end:
    compared exactly (alpha is a separate mask); an SVG `<img>` gets its own check or a loud "not
    verified". Lives in main.ts. Measure first whether Chrome re-encodes, downsamples or
    colour-converts.
-8. **6, diagram geometry:** each drawn SVG element (paths with arcs, lines, rects, polylines),
+8. ✅ **8a, 8b DONE 2026-11-09 (#96, #97)** — **6, diagram geometry:** each drawn SVG element (paths with arcs, lines, rects, polylines),
    transformed and flattened, against the PDF paths inside the diagram's placed box (Chrome's SVG
    viewport clip, to confirm), both normalised to the box: every stroke matched within a measured
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 8's geometry FIRST (owner, 2026-11-08: "can we work on group 8 then come
+✅ **Group 8a and 8b DONE 2026-11-09 (known-issues #96, #97).** **Next step:** the items group 8b
+named "not verified", each to be FIXED (owner: fixes not limits): an SVG `<img>` (8c, below), a
+gradient with stop-opacity (Chrome: a tiling pattern under a luminosity mask), a `<pattern>` paint,
+a `filter`, a `mask`; then group 7b (WebP decoders); then the fresh class-B re-check. Earlier:
+group 8's geometry FIRST (owner, 2026-11-08: "can we work on group 8 then come
 back to the SVG and WebP issues?"): the diagrams, and any filled shape as cover and background.
 Then the SVG `<img>` (below) and group 7b (WebP decoders). Group 8 also takes the SVG `<img>`:
 Chrome draws it as paths (measured), so it is checked as geometry like a diagram, and left out of

@@ -392,3 +392,12 @@ each one a check that does not count words: byte-for-byte against a baseline bak
 control), a fresh state per report (`resetTexDefinitions`), a refusal at the input
 (`decodeReport`). And invert a new test SECTION BY SECTION against the previous commit — one
 section failing can hide another that would pass.
+
+## 18. A lint warning is a review, never a suppression
+
+🔒 Owner, 2026-11-09: "if something needs a biome-ignore, it actually needs a review and fix." No
+`biome-ignore` (or any linter suppression) is written here. A warning means the code says something
+the linter cannot prove safe, so the code changes until it can: a non-null assertion becomes a
+checked value, an `any` becomes the type the data has (in tests too: `Record<string, unknown>` with
+casts where a test plants changes), a `let` assigned only once becomes `const`. First applied
+in task 18 group 8b (`src/report_svg.ts`, the 8b test).
