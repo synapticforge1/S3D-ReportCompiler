@@ -2679,6 +2679,8 @@ try {
       );
     }
     let imagesCompared = 0;
+    /** Every drawn image of every report, raster or SVG (the pixel and drawing checks' total). */
+    let imagesDrawn = 0;
     let drawingsCompared = 0;
     if (observed.headingPages.length === entries.length) {
       const starts = observed.headingPages;
@@ -2695,9 +2697,14 @@ try {
         // And what each one shows (task 18 item 5): the report's drawn images, in order, against
         // the images painted on its own pages, pixel for pixel.
         const painted = observed.paintedImages.filter((q) => q.page > from && q.page <= end);
-        const expected = drawnImages(source);
-        for (let k = 0; k < Math.min(painted.length, expected.length); k++) {
-          const ours = await decodeSource(expected[k]);
+        // Each drawn image, numbered as the source orders them; an SVG one is drawn as paths, not
+        // pixels (measured), and is checked as a drawing below (task 18 8c).
+        const expected = drawnImages(source).map((uri, k) => ({ uri, n: k + 1 }));
+        imagesDrawn += expected.length;
+        const isSvg = (uri: string) => /^data:image\/svg\+xml/i.test(uri);
+        const raster = expected.filter((e) => !isSvg(e.uri));
+        for (let k = 0; k < Math.min(painted.length, raster.length); k++) {
+          const ours = await decodeSource(raster[k].uri);
           const theirs = painted[k].pixels;
           const why =
             typeof ours === "string"
@@ -2706,7 +2713,9 @@ try {
                 ? "the PDF's image does not decode"
                 : imageDifference(ours, theirs);
           if (why !== null)
-            check.failures.push(`${entries[i]}: image ${k + 1} is not its source's -- ${why}`);
+            check.failures.push(
+              `${entries[i]}: image ${raster[k].n} is not its source's -- ${why}`,
+            );
           else imagesCompared++;
         }
         // And each drawing as its source draws it (task 18 group 8b): its shapes, paths in the
@@ -2715,6 +2724,37 @@ try {
         const vectors = observed.vectors.filter((v) => v.page > from && v.page <= end);
         const runs = observed.runs.filter((r) => r.page > from && r.page <= end);
         const used = new Set<string>();
+        // An SVG image: its own document, so only its own stylesheet styles it (the page's do not
+        // reach into an image).
+        for (const { uri, n } of expected.filter((e) => isSvg(e.uri))) {
+          const m = /^data:[^,]*?(;base64)?,(.*)$/is.exec(uri);
+          let text = "";
+          try {
+            text = m?.[1]
+              ? new TextDecoder().decode(
+                  Uint8Array.from(atob(m[2].replace(/\s+/g, "")), (c) => c.charCodeAt(0)),
+                )
+              : decodeURIComponent(m?.[2] ?? "");
+          } catch {
+            check.failures.push(`${entries[i]}: image ${n} (an SVG) does not decode`);
+            continue;
+          }
+          const read = readSvg(text);
+          // A drawn image with nothing in it to compare is no match -- it is how a URI read short
+          // looked (an empty drawing passes every shape test vacuously).
+          if (read.shapes.length === 0 && read.labels.length === 0 && read.unread.length === 0) {
+            check.failures.push(
+              `${entries[i]}: image ${n} (an SVG) has nothing this check can compare`,
+            );
+            continue;
+          }
+          const result = compareSvg(read, vectors, runs, used);
+          imagesCompared += result.problems.length === 0 ? 1 : 0;
+          drawingsCompared += result.compared;
+          for (const problem of result.problems) {
+            check.failures.push(`${entries[i]}: image ${n} (an SVG) -- ${problem}`);
+          }
+        }
         // Every stylesheet of the report, in document order: a browser styles an SVG with all of
         // them -- a <style> inside an inline SVG applies to the whole document, as any other does
         // (and the drawings' own text carries no <style>: style is no content).
@@ -2785,7 +2825,7 @@ try {
       );
     }
     console.log(
-      `  images:   ${imagesCompared} of ${expected.expectedImages} identical to their sources, pixel for pixel`,
+      `  images:   ${imagesCompared} of ${imagesDrawn} identical to their sources, pixel for pixel (an SVG one, shape for shape)`,
     );
     console.log(
       `  drawings: ${drawingsCompared} shape paint(s) and label(s) as their sources draw them`,

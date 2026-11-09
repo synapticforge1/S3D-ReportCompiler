@@ -3783,7 +3783,9 @@ function sourceTally(raw: string): {
     const drawn = (html.match(SOURCE_TAG) ?? []).filter((t) =>
       /^<img\b[\s\S]*?\ssrc\s*=\s*["']data:/i.test(t),
     );
-    expectedImages += drawn.length;
+    // An SVG image paints no image: Chrome draws it as paths (measured, task 18 8c), so it is not
+    // in the count of image paints; it is checked as a drawing, with the rest of {@link drawnImages}.
+    expectedImages += drawn.filter((t) => !/\ssrc\s*=\s*["']data:image\/svg\+xml/i.test(t)).length;
     // Each top-level inline SVG as a reader sees it, in order, for the geometry check
     // ({@link drawnSvgs}): nesting balanced, so an inner <svg> stays inside its outer one.
     for (let from = 0; ;) {
@@ -3807,7 +3809,9 @@ function sourceTally(raw: string): {
     }
     // Each one's data URI, in order, for the pixel check ({@link drawnImages}).
     for (const t of drawn) {
-      const src = /\ssrc\s*=\s*(["'])(data:[^"']*)\1/i.exec(t)?.[2];
+      // To the quote that opened it: an SVG image's URI holds the other quote (`xmlns='…'`), and
+      // cut at it the image read as an empty drawing that passed (task 18 8c, by mutation).
+      const src = /\ssrc\s*=\s*(["'])(data:(?:(?!\1)[\s\S])*)\1/i.exec(t)?.[2];
       if (src !== undefined) imageSources.push(decodeEntities(src));
     }
 

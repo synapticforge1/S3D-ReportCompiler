@@ -1220,8 +1220,8 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-✅ **Group 8a and 8b DONE 2026-11-09 (known-issues #96, #97).** **Next step:** the items group 8b
-named "not verified", each to be FIXED (owner: fixes not limits): an SVG `<img>` (8c, below), a
+✅ **Group 8a, 8b and 8c DONE 2026-11-09 (known-issues #96, #97, #98).** **Next step:** the items
+group 8b named "not verified", each to be FIXED (owner: fixes not limits): a
 gradient with stop-opacity (Chrome: a tiling pattern under a luminosity mask), a `<pattern>` paint,
 a `filter`, a `mask`; then group 7b (WebP decoders); then the fresh class-B re-check. Earlier:
 group 8's geometry FIRST (owner, 2026-11-08: "can we work on group 8 then come
@@ -1240,5 +1240,15 @@ table row's cells are one run.
 Nothing is set aside without a fix. Recorded for the class it belongs to:
 - **Class F:** the 2 POSIX-only tests skip on Windows (`bun test` here: 70 pass, 2 skip). They run
   in WSL and on Linux CI; class F makes them run, or their check runs, on Windows too.
+  🔒 **Scoped 2026-11-09 (owner: "I agree with the 'fake Chrome' suggestion. I agree with the
+  recommended when")** — after class B, in class F: on Windows the stand-in Chrome is built at test
+  time with `bun build --compile` into a temporary `.exe` (no test-only switch in the shipped
+  code); signals are raised inside the build by a preload (`process.emit`), so the real handlers
+  run (Linux and CI keep real signals); the helper-reaping section inverts on Windows until the fix
+  below. Two REAL Windows gaps the scoping found, for class E: (1) an exited Chrome's helpers are
+  never reaped on Windows (`runWithTimeout`'s `reapGroup` returns at once there) — find them by
+  their recorded parent (`Get-CimInstance Win32_Process`, a PID-reuse guard on creation time) and
+  stop each; (2) `main.ts` registers no SIGHUP/SIGBREAK on Windows, though Node raises SIGHUP when
+  the console closes — register both (measure Bun first). Then 80 tests run on Windows, none skipped.
 - Group 1's own skip, a probe case where a deletion removed the report heading, needed no fix: that
   build already fails ("report count does not match"); now pinned as a test section.

@@ -3770,6 +3770,20 @@ test(
       assert.equal(r.code, 0, `${what}:\n${tail(r.out)}`);
       has(r.out, /images: {3}1 of 1 identical to their sources, pixel for pixel/);
     }
+    //    An SVG image is drawn as paths, and checked as a drawing (task 18 8c) -- its URI read to
+    //    its own closing quote, though it holds the other kind (`xmlns='…'`).
+    const svgDir = join(work, "task18-8c-svg-image");
+    mkdirSync(svgDir, { recursive: true });
+    const svgImage =
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E" +
+      "%3Crect width='40' height='30' fill='%23c03020'/%3E%3C/svg%3E";
+    writeFileSync(
+      join(svgDir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `<img src="${svgImage}"></body>`),
+    );
+    const asSvg = run([MAIN, svgDir, join(svgDir, "out", "c.pdf")]);
+    assert.equal(asSvg.code, 0, tail(asSvg.out));
+    has(asSvg.out, /images: {3}2 of 2 identical to their sources/);
     // 2. An image drawn otherwise than its source FAILS: a filter turns the figure grey.
     const grey = build(
       "drawn grey",
