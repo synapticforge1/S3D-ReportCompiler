@@ -218,9 +218,13 @@ is the side that does not depend on the bake); TeX sub/superscript marks in thei
 Since #97 each inline SVG drawing is checked as drawn: every shape's fill and stroke matched to a
 PDF path in the shape's own coordinates (outline, colour or gradient, alpha, width, dashes), nothing
 else painted among them, every label at its anchor; the report's stylesheets read as a browser
-reads them. An SVG `<img>` is checked the same way, with only its own stylesheet (#98). ⚠️ Not
-yet verified, and named as such: a filter, a mask, a `<pattern>` paint, a gradient with
-stop-opacity, WebP.
+reads them. An SVG `<img>` is checked the same way, with only its own stylesheet (#98). Since #99
+also each shape's CLIPS (viewports, markers, nested drawings, `clip-path`), compared as regions
+at sample points; its fill rule, cap, join, miter limit and paint order; and nothing painted on the
+drawing before its first or after its last shape. ⚠️ Not yet verified, and named as such: a
+filter, a mask, a `<pattern>` paint, a gradient with stop-opacity, `<image>`, `foreignObject`,
+WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
+style — of HTML text and of SVG labels.
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in
 its run of text, or in the next cell of its row). (A number broken across two lines failed until #93; it is

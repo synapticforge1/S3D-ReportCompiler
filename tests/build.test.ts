@@ -3747,6 +3747,305 @@ test(
   },
 );
 
+// Group 8d: what the drawing check read without -- clips (a clip path, its units and rule, a CSS
+// shape on the stroke box, a marker's and a nested drawing's viewport, a shape clipped away),
+// the fill rule, paint order, cap, join, miter limit; and colours by name, hsl() and alpha.
+const PROBE_8D = `<svg viewBox="0 0 200 100" width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+<defs><clipPath id="d8-c"><circle cx="40" cy="30" r="20"/></clipPath>
+<clipPath id="d8-box" clipPathUnits="objectBoundingBox"><rect x="0" y="0" width="0.5" height="1"/></clipPath>
+<marker id="d8-m" markerWidth="4" markerHeight="4" refX="2" refY="2"><circle cx="2" cy="2" r="3" fill="#aa0000"/></marker></defs>
+<rect x="10" y="10" width="60" height="40" fill="#008800" clip-path="url(#d8-c)"/>
+<rect x="80" y="10" width="30" height="20" fill="darkslategray" stroke="#000088" stroke-width="4" style="clip-path: circle(8px at 15px 10px)"/>
+<path d="M140,10 L170,90 L100,40 L180,40 L110,90 Z" fill="rgba(0,0,136,0.5)" fill-rule="evenodd"/>
+<rect x="20" y="60" width="40" height="20" fill="hsl(120, 100%, 25%)" stroke="#000088" stroke-width="6" paint-order="stroke"/>
+<polyline points="70,90 90,60 110,90" fill="none" stroke="#000088" stroke-width="4" stroke-linejoin="round" stroke-linecap="square"/>
+<polyline points="120,95 140,70 160,95" fill="none" stroke="#000088" stroke-width="4" stroke-miterlimit="1.5"/>
+<line x1="170" y1="60" x2="190" y2="60" stroke="#000" stroke-width="2" marker-end="url(#d8-m)"/>
+<svg x="170" y="70" width="20" height="20" viewBox="0 0 20 20"><circle cx="20" cy="10" r="10" fill="#008800"/></svg>
+<g clip-path="url(#d8-box)"><rect x="10" y="85" width="40" height="10" fill="#880000"/><rect x="190" y="85" width="5" height="10" fill="#000088"/></g>
+<line x1="5" y1="NaN" x2="5" y2="NaN" stroke="#000"/>
+</svg>`;
+
+test(
+  "class B, task 18 group 8d: clips, fill rule, paint order, joins -- what the check read without",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    type Clip = { parts: { polygons: number[][][]; evenOdd: boolean }[] };
+    type Shape = {
+      what: string;
+      lines: { points: number[][]; closed: boolean }[];
+      dashed: { points: number[][]; closed: boolean }[];
+      e: number[];
+      fill: number[] | null;
+      stroke: number[] | null;
+      strokeWidth: number;
+      fillAlpha: number;
+      strokeAlpha: number;
+      cap: string;
+      clips: Clip[];
+      evenOdd: boolean;
+      join: string;
+      miter: number;
+      strokeFirst: boolean;
+    };
+    // 1. The reader: each shape's clips in the drawing's coordinates (the viewport, then its own),
+    //    a shape whose box misses its clip left out (Chrome leaves it out), the new properties.
+    const read = svgs.readSvg(PROBE_8D) as {
+      shapes: Shape[];
+      unread: string[];
+      viewport: number[];
+    };
+    assert.deepEqual(read.unread, []);
+    assert.deepEqual(read.viewport, [0, 0, 200, 100], "the viewport, back through the viewBox");
+    assert.deepEqual(
+      read.shapes.map((s) => s.what),
+      [
+        "rect",
+        "rect",
+        "path",
+        "rect",
+        "polyline",
+        "polyline",
+        "line",
+        "circle",
+        "circle",
+        "rect",
+        "line",
+      ],
+      "the rect outside its bounding-box clip is not drawn",
+    );
+    const rgb = (c: number[] | null) => (c ?? []).map((v) => Math.round(v * 255));
+    const [clipped, css, star, ordered, joined, mitred, , marker, nested] = read.shapes;
+    assert.equal(clipped.clips.length, 2, "the viewport, and its clip path");
+    assert.deepEqual(rgb(css.fill), [0x2f, 0x4f, 0x4f], "a colour by name the reader did not know");
+    // the CSS circle on the STROKE box: centre (78 + 15, 8 + 10), radius 8
+    const ring = css.clips[1].parts[0].polygons[0];
+    const xs = ring.map((p) => p[0]);
+    assert.ok(Math.abs((Math.min(...xs) + Math.max(...xs)) / 2 - 93) < 0.01, JSON.stringify(xs));
+    assert.ok(star.evenOdd && Math.abs(star.fillAlpha - 0.5) < 1e-9, "even-odd, and rgba's alpha");
+    assert.deepEqual(rgb(ordered.fill), [0, 0x80, 0], "hsl()");
+    assert.ok(ordered.strokeFirst, "paint-order: stroke");
+    assert.deepEqual([joined.join, joined.cap, mitred.miter], ["round", "square", 1.5]);
+    assert.equal(marker.clips.length, 2, "a marker clipped to its box");
+    assert.equal(nested.clips.length, 2, "a nested drawing clipped to its viewport");
+
+    // 2. The matcher, against paths drawn as Chrome draws them (measured 2026-11-09): every clip
+    //    in page space, after the page's own and with a clip path's box before it; even-odd as
+    //    `f*`; cap, join, miter in the graphics state; the stroke first when the source says so.
+    const base = [2.25, 0, 0, -2.25, 150, 700];
+    const page = (p: number[]) => [
+      base[0] * p[0] + base[2] * p[1] + base[4],
+      base[1] * p[0] + base[3] * p[1] + base[5],
+    ];
+    const rect = (b: number[]) => [
+      [b[0], b[1]],
+      [b[2], b[1]],
+      [b[2], b[3]],
+      [b[0], b[3]],
+    ];
+    const CAP: Record<string, number> = { butt: 0, round: 1, square: 2 };
+    const JOIN: Record<string, number> = { miter: 0, round: 1, bevel: 2 };
+    type Plain = Record<string, unknown>;
+    const build = () => {
+      const vectors: Plain[] = [];
+      let order = 0;
+      for (const s of read.shapes) {
+        const clips = [{ polygons: [rect([0, 0, 2000, 2000])], evenOdd: false }];
+        for (const c of s.clips) {
+          const polygons = c.parts[0].polygons.map((p) => p.map(page));
+          const xs = polygons.flat().map((p) => p[0]);
+          const ys = polygons.flat().map((p) => p[1]);
+          clips.push(
+            {
+              polygons: [
+                rect([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]),
+              ],
+              evenOdd: false,
+            },
+            { polygons, evenOdd: c.parts[0].evenOdd },
+          );
+        }
+        const m = svgs.mul(s.e, base);
+        const length = s.dashed.reduce(
+          (n, l) =>
+            n +
+            l.points.reduce(
+              (t, p, k, a) => (k ? t + Math.hypot(p[0] - a[k - 1][0], p[1] - a[k - 1][1]) : 0),
+              0,
+            ),
+          0,
+        );
+        const common = { page: 1, m, clips, cap: CAP[s.cap], join: JOIN[s.join], miter: s.miter };
+        const fill = s.fill && {
+          ...common,
+          fill: s.fill,
+          stroke: null,
+          fillAlpha: s.fillAlpha,
+          strokeAlpha: 1,
+          lineWidth: 1,
+          lines: s.lines,
+          evenOdd: s.evenOdd,
+        };
+        const stroke = s.stroke &&
+          length > 0 && {
+            ...common,
+            fill: null,
+            stroke: s.stroke,
+            fillAlpha: 1,
+            strokeAlpha: s.strokeAlpha,
+            lineWidth: s.strokeWidth,
+            lines: s.dashed,
+            evenOdd: false,
+          };
+        for (const v of s.strokeFirst ? [stroke, fill] : [fill, stroke]) {
+          if (v) vectors.push({ ...v, order: order++ });
+        }
+      }
+      return vectors;
+    };
+    const check = (edit: (v: Plain[]) => void = () => {}) => {
+      const vectors = build();
+      edit(vectors);
+      return svgs.compareSvg(read, vectors, [], new Set()).problems as string[];
+    };
+    assert.deepEqual(check(), [], "the drawing as Chrome draws it");
+    // A NaN line's sliver (a hairline 0.12 long where the source's line draws nothing, as at x 497
+    // in the zip set, measured) is that line, not an added path -- too long for the size rule.
+    assert.deepEqual(
+      check((v) =>
+        v.push({
+          ...v[v.length - 1],
+          order: v.length + 1,
+          fill: null,
+          stroke: [0, 0, 0],
+          lineWidth: 0,
+          lines: [
+            {
+              points: [
+                [5, 0],
+                [5.12, 0],
+              ],
+              closed: false,
+            },
+          ],
+          m: base,
+        }),
+      ),
+      [],
+      "a NaN line's sliver",
+    );
+    // 3. ...and each of them drawn otherwise FAILS, by name.
+    const of = (v: Plain[], what: (x: Plain) => boolean) => v.find(what) as Plain;
+    const isFill = (rgbHex: number[]) => (x: Plain) =>
+      Array.isArray(x.fill) && rgb(x.fill as number[]).join() === rgbHex.join();
+    const dropLastClip = (x: Plain) => {
+      x.clips = (x.clips as unknown[]).slice(0, -2);
+    };
+    const fails = (what: string, edit: (v: Plain[]) => void, pattern: RegExp) => {
+      const problems = check(edit);
+      assert.ok(
+        problems.some((p) => pattern.test(p)),
+        `${what} passed: ${JSON.stringify(problems)}`,
+      );
+    };
+    fails(
+      "a clip path lost",
+      (v) => dropLastClip(of(v, isFill([0, 0x88, 0]))),
+      /fill clipped differently/,
+    );
+    fails(
+      "a clip path smaller",
+      (v) => {
+        const x = of(v, isFill([0, 0x88, 0]));
+        const clips = x.clips as { polygons: number[][][] }[];
+        const c = clips[clips.length - 1];
+        // shrink the circle towards its centre
+        const ps = c.polygons[0];
+        const cx = ps.reduce((s, p) => s + p[0], 0) / ps.length;
+        const cy = ps.reduce((s, p) => s + p[1], 0) / ps.length;
+        clips[clips.length - 1] = {
+          ...c,
+          polygons: [ps.map(([px, py]) => [cx + (px - cx) * 0.6, cy + (py - cy) * 0.6])],
+        };
+      },
+      /fill clipped differently: \([\d.]+, [\d.]+\) shown in its source, cut in the PDF/,
+    );
+    fails(
+      "a marker unclipped",
+      (v) => dropLastClip(of(v, isFill([0xaa, 0, 0]))),
+      /clipped differently/,
+    );
+    fails(
+      "a nested drawing unclipped",
+      (v) => dropLastClip(v.filter(isFill([0, 0x88, 0]))[1] as Plain),
+      /clipped differently/,
+    );
+    fails(
+      "the fill rule",
+      (v) => (of(v, (x) => x.evenOdd === true).evenOdd = false),
+      /filled non-zero, even-odd in its source/,
+    );
+    fails(
+      "the paint order",
+      (v) => {
+        const f = of(v, isFill([0, 0x80, 0]));
+        const s = v.find((x) => x.order === (f.order as number) - 1) as Plain;
+        [f.order, s.order] = [s.order, f.order];
+      },
+      /fill painted first, its stroke first in its source/,
+    );
+    fails(
+      "the join",
+      (v) => (of(v, (x) => x.join === 1).join = 0),
+      /joined miter, round in its source/,
+    );
+    fails(
+      "the cap",
+      (v) => (of(v, (x) => x.cap === 2).cap = 0),
+      /capped butt, square in its source/,
+    );
+    fails(
+      "the miter limit",
+      (v) => (of(v, (x) => x.miter === 1.5).miter = 4),
+      /miter limit 4, 1\.5 in its source/,
+    );
+    fails(
+      "a path added after the last (a hidden shape drawn)",
+      (v) =>
+        v.push({
+          ...(v[0] as Plain),
+          order: v.length + 5,
+          fill: [0, 0, 0.5],
+          lines: [
+            {
+              points: [
+                [150, 5],
+                [190, 5],
+                [190, 9],
+                [150, 9],
+              ],
+              closed: true,
+            },
+          ],
+          m: base,
+        }),
+      /path\(s\) drawn among its shapes that its source does not have/,
+    );
+
+    // 4. End to end: Chrome draws every one of them as the source does, and the build PASSES.
+    const dir = join(work, "task18-8d");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8D}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+  },
+);
+
 test(
   "class B, task 18 item 5: each image drawn as its source, pixel for pixel",
   { timeout: TIMEOUT },

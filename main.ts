@@ -132,6 +132,7 @@ import {
   compareSvg,
   type PdfRun,
   type PdfShading,
+  type PdfClip,
   type PdfVector,
   type Polyline,
   readSvg,
@@ -1245,6 +1246,11 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       strokeShading?: PdfShading;
       fillOther?: string;
       strokeOther?: string;
+      // Group 8d: every clip in force, as polygons on the page; the line cap, join, miter limit.
+      clips: PdfClip[];
+      cap: number;
+      join: number;
+      miter: number;
     };
     const stack: Gs[] = [];
     const groupAlpha: number[] = [1];
@@ -1257,8 +1263,13 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       stroke: [0, 0, 0],
       lw: 1,
       strokeAlpha: 1,
+      clips: [],
+      cap: 0,
+      join: 0,
+      miter: 10,
     };
     let clipPending = false;
+    let clipEvenOdd = false;
     /** A fill colour as RGB 0-1: pdf.js gives "#rrggbb", or numbers 0-255 or 0-1, or one grey. */
     const rgb = (args: unknown[]): number[] => {
       if (typeof args[0] === "string") {
@@ -1525,13 +1536,23 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           if (key === "ca") gs = { ...gs, alpha: Number(value) };
           if (key === "LW") gs = { ...gs, lw: Number(value) };
           if (key === "CA") gs = { ...gs, strokeAlpha: Number(value) };
+          if (key === "LC") gs = { ...gs, cap: Number(value) };
+          if (key === "LJ") gs = { ...gs, join: Number(value) };
+          if (key === "ML") gs = { ...gs, miter: Number(value) };
         }
+      } else if (fn === pdfjs.OPS.setLineCap) {
+        gs = { ...gs, cap: Number(args[0]) };
+      } else if (fn === pdfjs.OPS.setLineJoin) {
+        gs = { ...gs, join: Number(args[0]) };
+      } else if (fn === pdfjs.OPS.setMiterLimit) {
+        gs = { ...gs, miter: Number(args[0]) };
       } else if (fn === pdfjs.OPS.beginGroup) {
         groupAlpha.push(groupAlpha[groupAlpha.length - 1] * gs.alpha);
       } else if (fn === pdfjs.OPS.endGroup) {
         if (groupAlpha.length > 1) groupAlpha.pop();
       } else if (fn === pdfjs.OPS.clip || fn === pdfjs.OPS.eoClip) {
         clipPending = true; // pdf.js gives the clip before the path it clips to
+        clipEvenOdd = fn === pdfjs.OPS.eoClip;
       } else if (SHOW_TEXT.has(fn)) {
         if (fn === pdfjs.OPS.nextLineShowText || fn === pdfjs.OPS.nextLineSetSpacingShowText) {
           moveText(0, -leading);
@@ -1594,7 +1615,11 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         const minMax = args[2] as ArrayLike<number> | null | undefined;
         if (clipPending && minMax && minMax.length === 4) {
           const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
-          gs = { ...gs, clip: gs.clip === null ? box : meet(gs.clip, box) };
+          gs = {
+            ...gs,
+            clip: gs.clip === null ? box : meet(gs.clip, box),
+            clips: [...gs.clips, { polygons: outline(args[1], gs.m), evenOdd: clipEvenOdd }],
+          };
         } else if (FILLS.has(Number(args[0])) && minMax && minMax.length === 4) {
           // A filled shape: a background, a band, a box, a curve -- inside its clip.
           const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
@@ -1631,6 +1656,14 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
             strokeAlpha: gs.strokeAlpha * groupAlpha[groupAlpha.length - 1],
             lines: ownLines(args[1]),
             m: gs.m,
+            clips: gs.clips,
+            evenOdd:
+              op === pdfjs.OPS.eoFill ||
+              op === pdfjs.OPS.eoFillStroke ||
+              op === pdfjs.OPS.closeEOFillStroke,
+            cap: gs.cap,
+            join: gs.join,
+            miter: gs.miter,
             ...(fills && gs.fillShading ? { fillShading: gs.fillShading } : {}),
             ...(fills && gs.fillOther ? { fillOther: gs.fillOther } : {}),
             ...(strokes && gs.strokeShading ? { strokeShading: gs.strokeShading } : {}),
