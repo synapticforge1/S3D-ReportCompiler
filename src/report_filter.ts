@@ -512,7 +512,14 @@ export function turbulence(
   return out;
 }
 
-/** feDisplacementMap: `src` sampled at each pixel displaced by `scale` x (channel - 0.5) of `map`. */
+/**
+ * feDisplacementMap: `src` sampled at each pixel displaced by `scale` x (channel - 0.5) of `map`.
+ * `doubt` (given) is marked where the map cannot say which pixel is read: its colour channels are
+ * read unpremultiplied, so one 8-bit level of the map moves the point by scale / (255 x alpha) --
+ * the whole range where alpha is near nothing -- and Chrome's 8-bit map may differ from this
+ * one's by a level (measured, task 18 8k: 40 pixels, each where the map's alpha was 0 to 3 of
+ * 255). Such a pixel is doubtful only if the source differs within that reach.
+ */
 export function displacement(
   src: Raster,
   map: Raster,
@@ -520,6 +527,7 @@ export function displacement(
   sy: number,
   xc: number,
   yc: number,
+  doubt?: Uint8Array,
 ): Raster {
   const out = blank(src.width, src.height);
   const at = (x: number, y: number, c: number) =>
@@ -533,6 +541,23 @@ export function displacement(
       const py = y + sy * (ch(yc) - 0.5);
       const [x0, y0] = [Math.floor(px), Math.floor(py)];
       for (let c = 0; c < 4; c++) out.data[k + c] = at(x0, y0, c);
+      if (!doubt) continue;
+      // one level of the map, in pixels moved (at most the whole range, scale / 2 each way)
+      const reach = (s: number, c: number) =>
+        Math.min(
+          Math.abs(s) / 2,
+          c === 3 ? Math.abs(s) / 255 : Math.abs(s) / (255 * Math.max(a, 1 / 255)),
+        );
+      const [ex, ey] = [reach(sx, xc), reach(sy, yc)];
+      const lo = [Math.floor(px - ex), Math.floor(py - ey)];
+      const hi = [Math.floor(px + ex), Math.floor(py + ey)];
+      search: for (let v = lo[1]; v <= hi[1]; v++)
+        for (let u = lo[0]; u <= hi[0]; u++)
+          for (let c = 0; c < 4; c++)
+            if (Math.abs(at(u, v, c) - at(x0, y0, c)) > 12 / 255) {
+              doubt[y * src.width + x] = 1;
+              break search;
+            }
     }
   }
   return out;
@@ -747,7 +772,7 @@ export const PRIMITIVES = new Set([
  * (`SourceGraphic`, `SourceAlpha`, a named result, or the one before), its own operation, cut to
  * its subregion; the last one's result, back in sRGB and cut to the filter region.
  */
-export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
+export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster & { doubt: Uint8Array } {
   const { width: W, height: H } = sourceSrgb;
   const source = run.linear ? convert(sourceSrgb, true) : sourceSrgb;
   const alphaOnly = (r: Raster) => {
@@ -757,6 +782,8 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
   };
   const results = new Map<string, Raster>();
   const regions = new Map<string, number[]>();
+  /** The pixels whose value this run cannot settle (a displacement's, above). */
+  const doubt = new Uint8Array(W * H);
   let last = source;
   let lastRegion = run.region;
   const input = (name: string | undefined) => {
@@ -905,8 +932,14 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
         out = turbulence(
           W,
           H,
+          // Chrome's noise lies about 1.6 device pixels on, in x and y, from the pixel's centre
+          // `turbulence` takes -- measured, not derived: at three placings of the region (two at
+          // fractions of a pixel) every offset from 1.25 to 2.0 matches all six cases, 1.1 and
+          // 2.25 do not (turbulence of type "turbulence" 178 -> 0 pixels off, a displacement by
+          // noise 54 -> 0); the middle of that window
           (i, j) => {
-            const [x, y] = toUser(i, j);
+            const d = 1.625 / (run.device ?? 1);
+            const [x, y] = toUser(i + d, j + d);
             return [x - cx, y - cy];
           },
           [fx, fy],
@@ -928,6 +961,7 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
           scale / run.unit[1],
           channel(a.xchannelselector),
           channel(a.ychannelselector),
+          doubt,
         );
         break;
       }
@@ -1004,5 +1038,5 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
       regions.set(a.result, region);
     }
   }
-  return cut(run.linear ? convert(last, false) : last, run.region);
+  return { ...cut(run.linear ? convert(last, false) : last, run.region), doubt };
 }

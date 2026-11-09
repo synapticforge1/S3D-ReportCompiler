@@ -3536,9 +3536,10 @@ test(
     assert.ok(read.shapes[6].dashed.length > 20, "a dashed line cut into its dashes");
     //    What it does not read is named, never passed.
     // (A marker or a gradient is read since 8b, a <pattern> since 8g, a mask since 8h, a filter
-    // since 8i, a switch and a foreignObject since 8j; turbulence and an outside image are not.)
+    // since 8i, a switch and a foreignObject since 8j, turbulence since 8k; stitched noise and an
+    // outside image -- the build embeds one first, since #108 -- are not.)
     const odd = svgs.readSvg(
-      `<svg><defs><filter id="t"><feTurbulence baseFrequency="0.1"/></filter></defs><path d="M0 0L9 9" stroke="#000" filter="url(#t)"/><image width="9" height="9" href="x.png"/></svg>`,
+      `<svg><defs><filter id="t"><feTurbulence baseFrequency="0.1" stitchTiles="stitch"/></filter></defs><path d="M0 0L9 9" stroke="#000" filter="url(#t)"/><image width="9" height="9" href="x.png"/></svg>`,
     );
     assert.equal(odd.unread.length, 2, JSON.stringify(odd.unread));
 
@@ -5011,17 +5012,14 @@ test(
       svgs.readSvg(
         `<svg width="10" height="10"><defs><filter id="f">${f}</filter></defs><rect width="9" height="9" filter="url(#f)"/></svg>`,
       ).unread;
-    assert.deepEqual(refused('<feTurbulence baseFrequency="0.1"/>'), [
-      "an <feTurbulence> of type turbulence",
-    ]);
+    // (turbulence of type "turbulence" and feDisplacementMap now match: part 3, run below)
+    assert.deepEqual(refused('<feTurbulence baseFrequency="0.1"/>'), []);
+    assert.deepEqual(refused('<feDisplacementMap in2="SourceGraphic"/>'), []);
     assert.deepEqual(
       refused('<feTurbulence type="fractalNoise" baseFrequency="0.1" stitchTiles="stitch"/>'),
       ["a stitched <feTurbulence>"],
     );
     assert.deepEqual(refused("<feTile/>"), ["an <fetile>"]);
-    assert.deepEqual(refused('<feDisplacementMap in2="SourceGraphic"/>'), [
-      "an <fedisplacementmap>",
-    ]);
     assert.deepEqual(refused("<feSpecularLighting><feSpotLight/></feSpecularLighting>"), [
       "an <fespecularlighting> of a spot light",
     ]);
@@ -5068,6 +5066,57 @@ test(
 // bilinearly into device pixels) -- and one the viewport cuts away, which Chrome paints as nothing;
 // drawings made of filtered elements alone -- no shape to place them; the drawing's own viewport
 // clip does.
+// Group 8k part 3: turbulence of type "turbulence", and feDisplacementMap -- by fractal and by
+// turbulence noise, a negative scale and other channels, a flat map, sRGB, at a fractional place.
+// Measured: Chrome's noise lies about 1.6 device pixels on from the pixel's centre; an edge's
+// coverage is its area (a displacement reads one source pixel); where the map is near clear, one
+// level of it moves the point anywhere, and that is doubt, not a difference.
+const K83 = (id: string, filter: string, at = 'x="40" y="30"') =>
+  `<svg viewBox="0 0 200 100" width="400" height="200"><defs><filter id="${id}">${filter}</filter></defs><rect x="10" y="10" width="20" height="20" fill="#333333"/><rect ${at} width="60" height="40" fill="#cc6600" filter="url(#${id})"/></svg>`;
+const PROBE_8K3 = [
+  K83("k83-t", '<feTurbulence baseFrequency="0.05" numOctaves="2" seed="3"/>'),
+  K83(
+    "k83-tb",
+    '<feTurbulence baseFrequency="0.05" numOctaves="2" seed="3"/>',
+    'x="41.3" y="29.7"',
+  ),
+  K83(
+    "k83-d",
+    '<feTurbulence baseFrequency="0.05" result="t"/><feDisplacementMap in="SourceGraphic" in2="t" scale="6" xChannelSelector="R" yChannelSelector="G"/>',
+  ),
+  K83(
+    "k83-dn",
+    '<feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="5" result="t"/><feDisplacementMap in="SourceGraphic" in2="t" scale="-8" xChannelSelector="B" yChannelSelector="A"/>',
+  ),
+  K83(
+    "k83-df",
+    '<feFlood flood-color="#c08040" result="m"/><feDisplacementMap in="SourceGraphic" in2="m" scale="12" xChannelSelector="R" yChannelSelector="B"/>',
+  ),
+  K83(
+    "k83-ds",
+    '<feTurbulence type="fractalNoise" baseFrequency="0.06" seed="2" result="t"/><feDisplacementMap in="SourceGraphic" in2="t" scale="10" xChannelSelector="G" yChannelSelector="R"/>',
+    'x="41.3" y="29.7"',
+  ).replace('<filter id="k83-ds">', '<filter id="k83-ds" color-interpolation-filters="sRGB">'),
+].join("\n");
+
+test(
+  "class B, task 18 group 8k part 3: turbulence and displacement, as Chrome draws them",
+  { timeout: TIMEOUT },
+  () => {
+    const dir = join(work, "task18-8k3");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8K3}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    // the sample's own image and the six filtered elements
+    has(r.out, /graphics: 7 image paint\(s\), 7 expected/, /PASS/);
+  },
+);
+
 const PROBE_8K2 = [
   `<svg viewBox="0 0 200 100" width="400" height="200"><defs><filter id="k82-p"><feImage href="data:image/png;base64,${PNG_4X2}" x="140" y="50" width="30" height="20" preserveAspectRatio="none"/></filter></defs><rect x="10" y="10" width="20" height="20" fill="#333333"/><rect x="120" y="30" width="50" height="30" fill="#cc6600" filter="url(#k82-p)"/></svg>`,
   `<svg viewBox="0 0 200 100" width="400" height="200"><defs><filter id="k82-f"><feImage href="data:image/png;base64,${PNG_4X2}" x="215" y="85" width="30" height="20" preserveAspectRatio="none"/></filter></defs><rect x="190" y="60" width="50" height="30" fill="#cc6600" filter="url(#k82-f)"/><rect x="185" y="5" width="10" height="10" fill="#333333"/></svg>`,

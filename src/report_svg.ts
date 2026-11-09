@@ -1304,26 +1304,57 @@ export function filterExpected(
   // The source graphic, premultiplied sRGB, and where it is uncertain.
   const source = blank(GW, GH);
   const unsure = new Uint8Array(GW * GH);
-  for (let gj = 0; gj < GH; gj++) {
-    for (let gi = 0; gi < GW; gi++) {
-      const acc = [0, 0, 0, 0];
-      for (let a = 0; a < 3; a++) {
-        for (let b = 0; b < 3; b++) {
-          const ux2 = ox + (gi0 + gi + (a + 0.5) / 3) * ux;
-          const uy2 = oy + (gj0 + gj + (b + 0.5) / 3) * uy;
-          const [dx, dy] = apply(use.e, ux2, uy2);
-          const c = contentColour(use.content, dx, dy, 0);
-          if (c === null) {
-            unsure[gj * GW + gi] = 1;
-            continue;
-          }
-          for (let k = 0; k < 3; k++) acc[k] += (c[k] * c[3]) / 9;
-          acc[3] += c[3] / 9;
+  // 3 by 3 points a pixel; then each pixel at an edge -- its points disagreeing, or its colour
+  // not its neighbour's (an edge can pass between the points: a strip a tenth of a pixel wide) --
+  // again by 16 by 16. Chrome's coverage is the area, not ninths of it, and a displacement reads
+  // ONE source pixel, where the range over neighbours that hides the ninths elsewhere does not
+  // apply (task 18 8k: 2 pixels at a whole place, 12 at a fractional one).
+  const sample = (gi: number, gj: number, n: number) => {
+    const acc = [0, 0, 0, 0];
+    let mixed = false;
+    let firstC: number[] | null = null;
+    for (let a = 0; a < n; a++) {
+      for (let b = 0; b < n; b++) {
+        const ux2 = ox + (gi0 + gi + (a + 0.5) / n) * ux;
+        const uy2 = oy + (gj0 + gj + (b + 0.5) / n) * uy;
+        const [dx, dy] = apply(use.e, ux2, uy2);
+        const c = contentColour(use.content, dx, dy, 0);
+        if (c === null) {
+          unsure[gj * GW + gi] = 1;
+          continue;
         }
+        if (firstC === null) firstC = c;
+        else if (c.some((v, q) => v !== firstC?.[q])) mixed = true;
+        for (let k = 0; k < 3; k++) acc[k] += (c[k] * c[3]) / (n * n);
+        acc[3] += c[3] / (n * n);
       }
-      source.data.set(acc, 4 * (gj * GW + gi));
     }
-  }
+    return { acc, mixed };
+  };
+  const edge = new Uint8Array(GW * GH);
+  for (let gj = 0; gj < GH; gj++)
+    for (let gi = 0; gi < GW; gi++) {
+      const coarse = sample(gi, gj, 3);
+      source.data.set(coarse.acc, 4 * (gj * GW + gi));
+      if (coarse.mixed) edge[gj * GW + gi] = 1;
+    }
+  const differs = (k: number, q: number) =>
+    [0, 1, 2, 3].some((c) => source.data[4 * k + c] !== source.data[4 * q + c]);
+  for (let gj = 0; gj < GH; gj++)
+    for (let gi = 0; gi < GW; gi++) {
+      const k = gj * GW + gi;
+      if (
+        (gi > 0 && differs(k, k - 1)) ||
+        (gi < GW - 1 && differs(k, k + 1)) ||
+        (gj > 0 && differs(k, k - GW)) ||
+        (gj < GH - 1 && differs(k, k + GW))
+      )
+        edge[k] = 1;
+    }
+  const refined = new Map<number, number[]>();
+  for (let k = 0; k < GW * GH; k++)
+    if (edge[k]) refined.set(k, sample(k % GW, Math.floor(k / GW), 16).acc);
+  for (const [k, acc] of refined) source.data.set(acc, 4 * k);
   const region = [...toGrid(rx0, ry0), ...toGrid(rx1, ry1)];
   let expected: ReturnType<typeof runFilter>;
   try {
@@ -1374,6 +1405,9 @@ export function filterExpected(
         Math.max(Math.abs(Number(q.attrs.dx ?? 0)) / ux, Math.abs(Number(q.attrs.dy ?? 0)) / uy) ||
         0;
     if (q.tag === "femorphology") reachPx += Math.max(0, ...v(q.attrs.radius)) / Math.min(ux, uy);
+    // a displacement moves a pixel up to half its scale
+    if (q.tag === "fedisplacementmap")
+      reachPx += Math.abs(Number(q.attrs.scale ?? 0)) / 2 / Math.min(ux, uy) || 0;
   }
   const reachI = Math.ceil(reachPx);
   const doubtful = new Uint8Array(GW * GH);
@@ -1385,6 +1419,8 @@ export function filterExpected(
             const [a, b] = [gi + di, gj + dj];
             if (a >= 0 && b >= 0 && a < GW && b < GH) doubtful[b * GW + a] = 1;
           }
+  // and the pixels the run itself cannot settle (a displacement where its map is near clear)
+  for (let q = 0; q < GW * GH; q++) if (expected.doubt[q]) doubtful[q] = 1;
   return { expected, gi0, gj0, GW, GH, doubtful, ox, oy, ux, uy };
 }
 
@@ -3062,14 +3098,12 @@ export function readSvg(
     for (const p of target.children.filter((c) => c.tag !== "#text")) {
       if (!PRIMITIVES.has(p.tag)) return `the filter primitive <${p.tag}>`;
       // Run by report_filter.ts but not yet matching Chrome's output, so still named rather than
-      // judged (task 18 8k, measured): turbulence of type "turbulence" (a small bias, 178 of
-      // 76,162 pixels), stitched noise (Skia counts its tiles in a way still unknown), feTile (its
-      // period rounds differently), feDisplacementMap (2 pixels, 8-bit maps).
-      if (p.tag === "feturbulence" && (p.attrs.get("type") ?? "turbulence") !== "fractalNoise")
-        return "an <feTurbulence> of type turbulence";
+      // judged (task 18 8k, measured): stitched noise (Skia counts its tiles in a way still
+      // unknown), feTile (its period rounds differently). Turbulence of type "turbulence" and
+      // feDisplacementMap match since part 3 (the noise's offset, edge coverage, map doubt).
       if (p.tag === "feturbulence" && p.attrs.get("stitchtiles") === "stitch")
         return "a stitched <feTurbulence>";
-      if (p.tag === "fetile" || p.tag === "fedisplacementmap") return `an <${p.tag}>`;
+      if (p.tag === "fetile") return `an <${p.tag}>`;
       // specular from a spot light: 77 pixels at a shape's edge still differ (diffuse spot and
       // specular distant match)
       if (p.tag === "fespecularlighting" && p.children.some((c) => c.tag === "fespotlight"))

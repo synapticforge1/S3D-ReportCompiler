@@ -235,8 +235,10 @@ viewport clip), a filter its viewport cuts away (no image expected); since #108 
 fetched by the build, embedded in body and source, and checked like any other (one that cannot be
 had stops the build). A CSS `url()` background image is still blocked by the document's policy
 and not fetched (none in any real report).
-⚠️ Not yet verified, and named as such: turbulence of type `turbulence`, stitched noise, `feTile`,
-`feDisplacementMap`, specular light from a spot (each run, but not yet matching Chrome); WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
+Since #109 turbulence of type `turbulence` and `feDisplacementMap` (where a near-clear map leaves
+the pixel undetermined at 8 bits, it is set aside as doubtful).
+⚠️ Not yet verified, and named as such: stitched noise, `feTile`, specular light from a spot (each
+run, but not yet matching Chrome); WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
 style — of HTML text and of SVG labels.
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in

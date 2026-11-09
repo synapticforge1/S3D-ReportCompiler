@@ -1266,8 +1266,25 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
   DONE 2026-11-09 (known-issues #108; owner: "a linked image must fetch the image for inclusion
   into the pdf for fidelity of the documents"):** fetched (beside the report or from the web),
   embedded in body and source, checked pixel for pixel; one that cannot be had stops the build.
+  ✅ **Part 3 DONE 2026-11-09 (known-issues #109):** turbulence of type `turbulence` and
+  `feDisplacementMap` judged (the noise 1.6 device pixels on, measured; edges sampled 16 by 16;
+  a near-clear map's pixels doubtful). **Still refused:** stitched noise, `feTile`, specular
+  from a spot.
   Not covered: a CSS `url()` background image (none in any real report; the CSP blocks it, the
   external-ref warning names an http one) -- class B's re-check takes it.
+- 🔴 **Other browsers, after the Chromium work (owner, 2026-11-09: "firefox and firefox-esr is
+  installed on this machine. once the chromium settings are completed, review the same settings
+  for those browsers also"; "you may also be able to check safari through playright on this
+  machine"; "once we have the basic settings via playright. we can check it on full mac
+  later").** Two kinds of setting to review per browser: how it is DRIVEN (Chrome takes
+  `--headless --print-to-pdf --lang=en-US`, its sandbox, the document's CSP; Firefox prints
+  through WebDriver BiDi / Marionette, not a flag; WebKit has no headless print of its own --
+  Playwright's WebKit build does) and what the verifier EXPECTS it to draw (everything measured
+  in task 18 is Skia's: filters at 300 dpi, pattern cells at 72 dpi, feImage bilinear, the
+  spot cone's fade, noise 1.6 device pixels on). Other Chromium browsers share Skia and the
+  flags (unmeasured). Firefox (WebRender / Skia in parts) and Playwright's Windows WebKit are a
+  baseline only: Safari on a Mac draws through CoreGraphics -- the owner checks a real Mac later.
+  Order: Firefox, Firefox ESR, then WebKit by Playwright.
 Then group 7b (WebP decoders); then the fresh class-B re-check. Earlier:
 group 8's geometry FIRST (owner, 2026-11-08: "can we work on group 8 then come
 back to the SVG and WebP issues?"): the diagrams, and any filled shape as cover and background.
