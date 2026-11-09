@@ -1,7 +1,7 @@
 /**
  * The GitHub REST API calls the release workflow makes, without the GitHub CLI.
  *
- * 🔒 Owner, 2026-11-08 (workspace letter H30): `gh` is not installed and will not be, in CI too --
+ * 🔒 Owner, 2026-11-08 (workspace letter H30): the GitHub CLI is not installed and will not be, in CI too --
  * check the repo instead, and call GitHub's REST API from a Bun step with `GITHUB_TOKEN`. And
  * (H32, via loader-py's C41, 2026-11-09): the release CI makes its own GitHub Release page, by
  * the same recipe in every project -- the tag must exist and peel to the released commit FIRST

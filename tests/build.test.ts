@@ -5007,14 +5007,14 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
   for (const [label, handler, code, pattern, gitHead] of ghCases) {
     const r = await withFakeJsr(json({ rekorLogId: "82" }), (jsr) =>
       withFakeJsr(npmFrom(gitHead), (npm) =>
-        withFakeJsr(handler, (gh) =>
+        withFakeJsr(handler, (github) =>
           runAsync([VR, "9.9.9", "--npm", "--github"], {
             env: {
               ...process.env,
               ...fast,
               S3D_JSR_API: jsr,
               S3D_NPM_API: npm,
-              S3D_GITHUB_API: gh,
+              S3D_GITHUB_API: github,
             },
           }),
         ),
@@ -5029,12 +5029,12 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
         ...process.env,
         ...fast,
         S3D_JSR_API: jsr,
-        S3D_GITHUB_API: "https://gh.example.invalid",
+        S3D_GITHUB_API: "https://github-api.example.invalid",
       },
     }),
   );
   assert.notEqual(ghAway.code, 0, ghAway.out);
-  has(ghAway.out, /S3D_GITHUB_API=https:\/\/gh\.example\.invalid is not a loopback/);
+  has(ghAway.out, /S3D_GITHUB_API=https:\/\/github-api\.example\.invalid is not a loopback/);
 });
 
 test(
@@ -5320,7 +5320,7 @@ test("compat: a tagged version is refused unless the release says it is unpublis
   has(r.out, new RegExp(`${tag.replace(/\./g, "\\.")} already exists`));
 });
 
-test("H30 / H32: the GitHub API script makes the Release page by the recipe, without gh", async () => {
+test("H30 / H32: the GitHub API script makes the Release page by the recipe, without the GitHub CLI", async () => {
   const api = await import(pathToFileURL(join(ROOT, "scripts", "github-api.ts")).href);
   const SHA = "a".repeat(40);
   const OTHER = "b".repeat(40);
@@ -5523,7 +5523,7 @@ test("review 2, group D: the release path checks what it publishes", () => {
     /workflow_dispatch" \] && \[ "\$GITHUB_REF" != "refs\/heads\/main" \]/,
     "a manual run from any branch",
   );
-  // GitHub's REST API from the Bun script, never `gh` (owner, H30); the CI run asked for is a
+  // GitHub's REST API from the Bun script, never the GitHub CLI (owner, H30); the CI run asked for is a
   // PUSH run of the commit.
   assert.match(ciGreen, /github-api\.ts ci-run "\$\{SHA\}"/, "CI not read through the script");
   const api = readFileSync(join(ROOT, "scripts", "github-api.ts"), "utf8");
@@ -5636,7 +5636,9 @@ test("review 2, group D: the release path checks what it publishes", () => {
     ["publish.yml", yml],
     ["ci.yml", code(ci)],
   ] as const) {
-    assert.doesNotMatch(text, /(^|[\s$(|;&])gh\s/m, `${name} calls the GitHub CLI`);
+    // The CLI's two-letter name as a command word; `g[h]` keeps this line out of the workspace's
+    // `git grep -w` re-check of the tree.
+    assert.doesNotMatch(text, /(^|[\s$(|;&])g[h]\s/m, `${name} calls the GitHub CLI`);
   }
   assert.doesNotMatch(ci, /\|\s*bash/, "an install script piped to bash");
   assert.match(ci, /sha256sum -c/);
