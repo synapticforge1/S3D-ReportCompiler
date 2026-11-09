@@ -1192,7 +1192,7 @@ class-B re-check at the end:
    `var`/`let`/`const` holding a literal, otherwise FAIL "cannot read the maths delimiters"; the
    verifier reads the delimiters with its own code (§9), and any pair of them printed in the PDF
    fails.
-3. **7, report identity and order.** Segment k's printed heading must equal source k's, member
+3. ✅ **DONE 2026-11-08 (known-issues #91)** — **7, report identity and order.** Segment k's printed heading must equal source k's, member
    number included; the build order must equal the verifier's own natural sort of the file names.
 4. **2, a number with its neighbours:** checked with the token after it (a unit, single letters
    included; an operator; `%`) and the operator before it. `30.483 <` → `>`, `12.5+3` → `12.5-3`
@@ -1215,7 +1215,7 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 3 (item 7, report identity and order).
+**Next step:** group 4 (item 2, a number with its neighbours: units, operators, `%`).
 
 🔒 **Owner, 2026-11-08: "skips need fixes also, unless it will be fixed in a different class."**
 Nothing is set aside without a fix. Recorded for the class it belongs to:

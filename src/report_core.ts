@@ -3822,6 +3822,28 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
     };
   }
 
+  // Each segment is its OWN source's: the heading its pages print must be the one its source
+  // carries, member number and all. Paired by position only, two reports exchanged in assembly
+  // were each compared with the other's source, and passed when the template's shared text and
+  // the member number elsewhere on the page supplied the tokens (task 18 item 7).
+  const headingOf = (text: string) =>
+    (text.match(/MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/i)?.[0] ?? "")
+      .replace(/\s+/g, "")
+      .toUpperCase();
+  for (let i = 0; i < sources.length; i++) {
+    const own = headingOf(decodeEntities(readerVisible(sources[i]).replace(SOURCE_TAG, " ")));
+    const printed = headingOf(pageTexts[starts[i]]);
+    if (own !== printed) {
+      return {
+        checked: false,
+        reason:
+          `report ${i + 1}'s pages are headed "${printed}" but its source is "${own || "(no heading)"}" ` +
+          "-- reports exchanged or out of order",
+        reports: [],
+      };
+    }
+  }
+
   const reports = sources.map((source, i) => {
     // The first report owns every page before its heading too: a report's own content printed
     // before the heading (a note at the top of its body, pushed onto a page of its own) belonged

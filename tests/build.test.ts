@@ -3342,6 +3342,42 @@ test("class B, re-check 2: every occurrence, no line-split words, capitals only 
 });
 
 test(
+  "class B, task 18 item 7: each report is its own source's, in reading order",
+  { timeout: TIMEOUT },
+  async () => {
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    // 1. Two reports exchanged, every token of each still on the other's pages (the member numbers
+    //    are values elsewhere): paired by position, both passed.
+    const a = "<html><body><h2>MEMBER # 1 DESIGN REPORT</h2><p>1 2</p></body></html>";
+    const b = "<html><body><h2>MEMBER # 2 DESIGN REPORT</h2><p>1 2</p></body></html>";
+    const swapped = core.compareEachReport(
+      [a, b],
+      ["MEMBER #2 DESIGN REPORT 1 2", "MEMBER #1 DESIGN REPORT 1 2"],
+    );
+    assert.equal(swapped.checked, false, "exchanged reports were checked as each other's");
+    assert.match(swapped.reason, /exchanged or out of order/);
+    assert.equal(
+      core.compareEachReport([a, b], ["MEMBER #1 DESIGN REPORT 1 2", "MEMBER #2 DESIGN REPORT 1 2"])
+        .checked,
+      true,
+    );
+
+    // 2. End to end: member_2 before member_10, as a reader counts, and the build agrees.
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const dir = join(work, "task18-7-order");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "member_10_report.html"), sample);
+    writeFileSync(
+      join(dir, "member_2_report.html"),
+      sample.replace("MEMBER #1 DESIGN", () => "MEMBER #3 DESIGN"),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    assert.doesNotMatch(r.out, /out of reading order|exchanged/);
+  },
+);
+
+test(
   "class B, task 18 item 1: the maths config, resolved or refused",
   { timeout: TIMEOUT },
   async () => {

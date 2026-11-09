@@ -720,6 +720,29 @@ type PdfDetail = {
 };
 
 /**
+ * How the VERIFICATION orders two report names (its own, not `sortReportNames`, §9): runs of
+ * digits compared as numbers, so member_2 comes before member_10; the rest compared as text,
+ * case and accents aside. 0 when a reader could not tell them apart -- either order is right.
+ */
+function readingOrder(a: string, b: string): number {
+  const pa = a.split(/(\d+)/);
+  const pb = b.split(/(\d+)/);
+  for (let k = 0; k < Math.min(pa.length, pb.length); k++) {
+    if (k % 2 === 1) {
+      // digits: the longer number (leading zeros aside) is the larger
+      const x = pa[k].replace(/^0+(?=\d)/, "");
+      const y = pb[k].replace(/^0+(?=\d)/, "");
+      if (x.length !== y.length) return x.length - y.length;
+      if (x !== y) return x < y ? -1 : 1;
+    } else {
+      const c = pa[k].localeCompare(pb[k], undefined, { sensitivity: "base" });
+      if (c !== 0) return c;
+    }
+  }
+  return pa.length - pb.length;
+}
+
+/**
  * The maths delimiter pairs a source declares, read by the VERIFICATION's own code -- not the
  * bake's `parseDelimiters` (design-decisions §9: a reader they shared could lose the same
  * delimiter on both sides, and every check would agree). Over-inclusive on purpose: every
@@ -1840,6 +1863,15 @@ try {
           check.failures.push(`${entries[i]}: ${drawn} image paint(s), ${want} image(s) expected`);
         }
       });
+    }
+    // The package's order is the reader's: every report after the one before it, by the
+    // verification's own reading order (task 18 item 7). The build sorts by its own rule; a change
+    // to it, or an assembly that reorders, would otherwise ship a package out of order.
+    const misordered = entries.flatMap((name, i) =>
+      i > 0 && readingOrder(entries[i - 1], name) > 0 ? [`${entries[i - 1]} before ${name}`] : [],
+    );
+    if (misordered.length > 0) {
+      check.failures.push(`reports out of reading order: ${misordered.slice(0, 5).join("; ")}`);
     }
     // Maths left as prose prints its delimiters: a declared pair around text in a report's own
     // pages means the bake never read it. The LaTeX check looks for the standard delimiters only;

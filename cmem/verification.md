@@ -108,8 +108,10 @@ heading pages do not match the source count the check reports that it did not ru
   per-report: 48/48 reports hold all their own words and numbers
 ```
 
-What it still cannot see: a value moved WITHIN one report, and the order of reports matching the
-headings only by position (segments are paired with sources in build order).
+What it still cannot see: a value moved WITHIN one report (task 18 item 2 narrows it).
+✅ Since 2026-11-08 (#91) segments are no longer paired by position alone: each segment's printed
+heading must equal its source's, member number included, and the build order must be the
+verification's own reading order.
 
 ### 2. The diagram-split check is template-specific
 
