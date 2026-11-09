@@ -3367,9 +3367,38 @@ test("class B, task 18 item 2: a number with its neighbours", async () => {
   // 2. ...and a correct page still passes: a pair wrapped onto the next line, neighbours across
   //    elements in another order on the page, a signed number MathJax spaces as a binary minus.
   assert.deepEqual(missing("<p>AISC 360-16 LRFD</p>", "AISC 360-16\nLRFD"), []);
-  assert.deepEqual(missing("<table><tr><td>16</td><td>Shape</td></tr></table>", "Shape\n16"), []);
+  //    (A row's last value and the NEXT row's label are no pair: the samples' "16 Shape".)
+  assert.deepEqual(
+    missing("<table><tr><td>16</td></tr><tr><td>Shape</td></tr></table>", "Shape\n16"),
+    [],
+  );
   assert.deepEqual(missing("[mathin]M_{u} -0.537 \\text{ kip}[mathin]", "M u - 0.537 kip"), []);
+  // 3. A unit in a cell of its own pairs with the number in the cell before it: two rows' units
+  //    exchanged keep every number and every unit, and passed.
+  const rows = (a: string, b: string) =>
+    `<table><tr><td>12</td><td>${a}</td></tr><tr><td>5</td><td>${b}</td></tr></table>`;
+  assert.ok(
+    missing(rows("m", "N"), "12 N\n5 m").includes("12 m"),
+    "units exchanged between rows passed",
+  );
+  assert.deepEqual(missing(rows("m", "N"), "12 m\n5 N"), []);
 });
+
+test(
+  "class B, task 18 item 2: a row's cells pair on the page Chrome prints",
+  { timeout: TIMEOUT },
+  () => {
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const dir = join(work, "task18-2-cells");
+    mkdirSync(dir, { recursive: true });
+    const row =
+      "<table><tr><td>Zorblax span</td><td>4471.25</td><td>mm</td><td>NG</td></tr></table>";
+    writeFileSync(join(dir, "member_0_report.html"), sample.replace(/<\/body>/i, `${row}</body>`));
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /PASS/);
+  },
+);
 
 test(
   "class B, task 18 item 7: each report is its own source's, in reading order",

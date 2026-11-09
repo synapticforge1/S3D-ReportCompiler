@@ -1215,10 +1215,9 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 5 (item 3, a number wrapped across lines, via the structure tree). ⚠️ Found
-in group 4: a unit standing in a CELL of its own, apart from its number, is still not paired with
-it (pairs are taken within one run of text) — part of group 5, which reads the structure tree
-and so knows a row.
+**Next step:** group 5 (item 3, a number wrapped across lines, via the structure tree). Group 4's
+last gap (a unit in a cell of its own) was fixed before it (owner, 2026-11-08): a table row's
+cells are one run.
 
 🔒 **Owner, 2026-11-08: "skips need fixes also, unless it will be fixed in a different class."**
 Nothing is set aside without a fix. Recorded for the class it belongs to:

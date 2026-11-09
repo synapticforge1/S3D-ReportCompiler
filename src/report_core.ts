@@ -3229,6 +3229,9 @@ export type SourceTokens = {
  */
 const SOURCE_TAG = /<\/?[a-zA-Z](?:"[^"]*"|'[^']*'|[^"'>])*>/g;
 
+/** A table cell's tag: the cells of one row are one run of text ({@link neighbourTally}). */
+const CELL_TAG = /^<\/?t[dh](?=[\s/>])/i;
+
 /**
  * The source's text as a reader sees the maths: delimiters gone, a command's NAME gone where it is
  * a command, a glyph command's glyph and an operator's name left (`\lambda` → λ, `\max` → max).
@@ -3793,9 +3796,16 @@ function sourceTally(raw: string): {
     // layout's, not the source's: a verdict box laid out apart made "1.0 STATUS" a pair the page
     // never prints in that order. So every tag but a phrasing one, display maths and `\\` end a
     // run; the HTML's own line breaks are spaces; TeX's grouping braces draw nothing.
+    // The cells of one table row are one run, as a row prints left to right: a unit in a cell of
+    // its own pairs with the number in the cell before it (`<td>12</td><td>m</td>` is "12 m"); a
+    // row's end still ends the run (task 18 item 2, its last gap).
     const runs = dropNonPrintingTex(
       decodeEntities(
-        html.replace(/\s+/g, " ").replace(SOURCE_TAG, (tag) => (INLINE_TAG.test(tag) ? "" : "\n")),
+        html
+          .replace(/\s+/g, " ")
+          .replace(SOURCE_TAG, (tag) =>
+            INLINE_TAG.test(tag) ? "" : CELL_TAG.test(tag) ? " " : "\n",
+          ),
       ),
     );
     pairs = neighbourTally(
