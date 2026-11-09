@@ -94,6 +94,7 @@
 // CHTML also leaves the equations selectable and searchable.
 // ---------------------------------------------------------------------------
 
+import { inflateSync } from "node:zlib";
 import { PDFDocument } from "pdf-lib";
 
 import {
@@ -105,6 +106,7 @@ import {
   compareEachReport,
   decodeReport,
   delimSignatures,
+  drawnImages,
   extractSourceTokens,
   findBrokenReferences,
   findLeftoverMath,
@@ -658,6 +660,318 @@ async function inlineFonts(css: string, cacheDir: string): Promise<string> {
  * "0246", and a value check could not tell them from the numbers they are not (2026-11-08, class
  * B). Measured on the samples: kerned pieces touch (gap 0), word gaps and cells are 0.2–5 heights.
  */
+// ---------------------------------------------------------------------------
+// Image pixels (roadmap task 18 item 5). Each drawn source image is decoded by the verification's
+// OWN decoders and compared, pixel for pixel, with the image the PDF draws: a count of images
+// said nothing of what they showed. Measured on Chrome's PDFs: a PNG or GIF is written as its
+// decoded pixels at full resolution (a GIF's first frame), a JPEG as its own bytes.
+// ---------------------------------------------------------------------------
+
+/** An image's pixels, 8-bit RGBA, row by row from the top. */
+type Pixels = { width: number; height: number; data: Uint8Array<ArrayBufferLike> };
+
+/** A PNG, every colour type and bit depth, with its palette, transparency and Adam7 interlace. */
+function decodePng(png: Uint8Array): Pixels {
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (!sig.every((b, i) => png[i] === b)) throw new Error("not a PNG");
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  let width = 0;
+  let height = 0;
+  let depth = 0;
+  let type = 0;
+  let interlace = 0;
+  let palette: Uint8Array<ArrayBufferLike> = new Uint8Array();
+  let trns: Uint8Array<ArrayBufferLike> | null = null;
+  const idat: Uint8Array[] = [];
+  for (let at = 8; at + 8 <= png.length;) {
+    const len = view.getUint32(at);
+    const name = String.fromCharCode(...png.subarray(at + 4, at + 8));
+    const body = png.subarray(at + 8, at + 8 + len);
+    if (name === "IHDR") {
+      width = view.getUint32(at + 8);
+      height = view.getUint32(at + 12);
+      [depth, type] = [body[8], body[9]];
+      interlace = body[12];
+    } else if (name === "PLTE") palette = body;
+    else if (name === "tRNS") trns = body;
+    else if (name === "IDAT") idat.push(body);
+    else if (name === "IEND") break;
+    at += 12 + len;
+  }
+  const joined = new Uint8Array(idat.reduce((n, c) => n + c.length, 0));
+  let offset = 0;
+  for (const c of idat) {
+    joined.set(c, offset);
+    offset += c.length;
+  }
+  const raw = inflateSync(joined);
+  const channels = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[type];
+  if (channels === undefined || ![1, 2, 4, 8, 16].includes(depth)) {
+    throw new Error(`PNG colour type ${type}, depth ${depth}`);
+  }
+  const bitsPerPixel = channels * depth;
+  const bpp = Math.max(1, bitsPerPixel >> 3);
+  const max = (1 << depth) - 1;
+  const out = new Uint8Array(width * height * 4);
+  const sample = (row: Uint8Array, i: number) => {
+    if (depth === 8) return row[i];
+    if (depth === 16) return (row[2 * i] << 8) | row[2 * i + 1];
+    const bit = i * depth;
+    return (row[bit >> 3] >> (8 - depth - (bit & 7))) & max;
+  };
+  const to8 = (v: number) =>
+    depth === 16 ? v >> 8 : depth === 8 ? v : Math.round((v * 255) / max);
+  const key = (k: number) => (trns === null ? -1 : (trns[2 * k] << 8) | trns[2 * k + 1]);
+  const passes = interlace
+    ? [
+        [0, 0, 8, 8],
+        [4, 0, 8, 8],
+        [0, 4, 4, 8],
+        [2, 0, 4, 4],
+        [0, 2, 2, 4],
+        [1, 0, 2, 2],
+        [0, 1, 1, 2],
+      ]
+    : [[0, 0, 1, 1]];
+  let pos = 0;
+  for (const [x0, y0, dx, dy] of passes) {
+    const pw = Math.ceil((width - x0) / dx);
+    const ph = Math.ceil((height - y0) / dy);
+    if (pw <= 0 || ph <= 0) continue;
+    const stride = Math.ceil((pw * bitsPerPixel) / 8);
+    let prev = new Uint8Array(stride);
+    for (let r = 0; r < ph; r++) {
+      const filter = raw[pos++];
+      const line = Uint8Array.from(raw.subarray(pos, pos + stride));
+      pos += stride;
+      for (let i = 0; i < stride; i++) {
+        const a = i >= bpp ? line[i - bpp] : 0;
+        const b = prev[i];
+        const c = i >= bpp ? prev[i - bpp] : 0;
+        if (filter === 1) line[i] = (line[i] + a) & 255;
+        else if (filter === 2) line[i] = (line[i] + b) & 255;
+        else if (filter === 3) line[i] = (line[i] + ((a + b) >> 1)) & 255;
+        else if (filter === 4) {
+          const p = a + b - c;
+          const [pa, pb, pc] = [Math.abs(p - a), Math.abs(p - b), Math.abs(p - c)];
+          line[i] = (line[i] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+        } else if (filter !== 0) throw new Error(`PNG filter ${filter}`);
+      }
+      prev = line;
+      for (let x = 0; x < pw; x++) {
+        const s = (k: number) => sample(line, x * channels + k);
+        let px: number[];
+        if (type === 0) px = [to8(s(0)), to8(s(0)), to8(s(0)), s(0) === key(0) ? 0 : 255];
+        else if (type === 2) {
+          const clear = s(0) === key(0) && s(1) === key(1) && s(2) === key(2);
+          px = [to8(s(0)), to8(s(1)), to8(s(2)), clear ? 0 : 255];
+        } else if (type === 3) {
+          const k = s(0);
+          px = [
+            palette[3 * k] ?? 0,
+            palette[3 * k + 1] ?? 0,
+            palette[3 * k + 2] ?? 0,
+            trns && k < trns.length ? trns[k] : 255,
+          ];
+        } else if (type === 4) px = [to8(s(0)), to8(s(0)), to8(s(0)), to8(s(1))];
+        else px = [to8(s(0)), to8(s(1)), to8(s(2)), to8(s(3))];
+        out.set(px, ((y0 + r * dy) * width + (x0 + x * dx)) * 4);
+      }
+    }
+  }
+  return { width, height, data: out };
+}
+
+/** A GIF's FIRST frame on its logical screen (what Chrome prints, measured), transparency kept. */
+function decodeGif(gif: Uint8Array): Pixels {
+  const head = String.fromCharCode(...gif.subarray(0, 6));
+  if (head !== "GIF87a" && head !== "GIF89a") throw new Error("not a GIF");
+  const u16 = (at: number) => gif[at] | (gif[at + 1] << 8);
+  const width = u16(6);
+  const height = u16(8);
+  let at = 13;
+  let global: Uint8Array<ArrayBufferLike> = new Uint8Array();
+  if (gif[10] & 0x80) {
+    const size = 3 * (2 << (gif[10] & 7));
+    global = gif.subarray(at, at + size);
+    at += size;
+  }
+  const out = new Uint8Array(width * height * 4); // a transparent screen
+  let transparent = -1;
+  const blocks = () => {
+    const parts: number[] = [];
+    while (gif[at] !== 0 && at < gif.length) {
+      for (let k = 1; k <= gif[at]; k++) parts.push(gif[at + k]);
+      at += gif[at] + 1;
+    }
+    at++;
+    return parts;
+  };
+  while (at < gif.length) {
+    const kind = gif[at++];
+    if (kind === 0x21) {
+      const label = gif[at++];
+      const body = blocks();
+      if (label === 0xf9 && body.length >= 4) transparent = body[0] & 1 ? body[3] : -1;
+    } else if (kind === 0x2c) {
+      const [left, top, w, h, flags] = [
+        u16(at),
+        u16(at + 2),
+        u16(at + 4),
+        u16(at + 6),
+        gif[at + 8],
+      ];
+      at += 9;
+      let table = global;
+      if (flags & 0x80) {
+        const size = 3 * (2 << (flags & 7));
+        table = gif.subarray(at, at + size);
+        at += size;
+      }
+      const minCode = gif[at++];
+      const data = blocks();
+      // LZW, least significant bit first, codes widening from minCode + 1 bits to 12.
+      const clear = 1 << minCode;
+      const indices: number[] = [];
+      let size = minCode + 1;
+      let dict: number[][] = [];
+      const reset = () => {
+        dict = Array.from({ length: clear + 2 }, (_, k) => (k < clear ? [k] : []));
+        size = minCode + 1;
+      };
+      reset();
+      let prev: number[] | null = null;
+      for (let bit = 0; bit + size <= data.length * 8;) {
+        let code = 0;
+        for (let k = 0; k < size; k++, bit++) code |= ((data[bit >> 3] >> (bit & 7)) & 1) << k;
+        if (code === clear) {
+          reset();
+          prev = null;
+          continue;
+        }
+        if (code === clear + 1) break;
+        let entry: number[];
+        if (code < dict.length) entry = dict[code];
+        else if (prev !== null) entry = [...prev, prev[0]];
+        else throw new Error("GIF data does not decode");
+        indices.push(...entry);
+        if (prev !== null && dict.length < 4096) dict.push([...prev, entry[0]]);
+        if (dict.length === 1 << size && size < 12) size++;
+        prev = entry;
+      }
+      const rows: number[] = [];
+      if (flags & 0x40)
+        for (const [s, d] of [
+          [0, 8],
+          [4, 8],
+          [2, 4],
+          [1, 2],
+        ])
+          for (let y = s; y < h; y += d) rows.push(y);
+      else for (let y = 0; y < h; y++) rows.push(y);
+      rows.forEach((y, r) => {
+        for (let x = 0; x < w; x++) {
+          const k = indices[r * w + x];
+          if (k === undefined || k === transparent) continue;
+          const o = ((top + y) * width + left + x) * 4;
+          if (top + y >= height || left + x >= width) continue;
+          out.set([table[3 * k] ?? 0, table[3 * k + 1] ?? 0, table[3 * k + 2] ?? 0, 255], o);
+        }
+      });
+      return { width, height, data: out }; // the first frame only
+    } else break;
+  }
+  throw new Error("GIF has no frame");
+}
+
+/** A JPEG's pixels as pdf.js decodes it: the same decoder that reads the PDF, its bytes unchanged. */
+async function decodeJpeg(jpeg: Uint8Array): Promise<Pixels> {
+  const doc = await PDFDocument.create();
+  const image = await doc.embedJpg(jpeg);
+  doc
+    .addPage([image.width, image.height])
+    .drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const read = await pdfjs.getDocument({ data: await doc.save() }).promise;
+  const page = await read.getPage(1);
+  const ops = await page.getOperatorList();
+  const name = ops.argsArray[ops.fnArray.indexOf(pdfjs.OPS.paintImageXObject)]?.[0] as string;
+  const img = await pdfImage(page, name);
+  if (img === null) throw new Error("JPEG does not decode");
+  return img;
+}
+
+/** A painted image's pixels from pdf.js, as RGBA. */
+async function pdfImage(
+  page: {
+    objs: { get: (n: string, cb: (v: unknown) => void) => void };
+    commonObjs: { get: (n: string, cb: (v: unknown) => void) => void };
+  },
+  name: string,
+): Promise<Pixels | null> {
+  const store = name.startsWith("g_") ? page.commonObjs : page.objs;
+  const i = (await new Promise<unknown>((resolve) => store.get(name, resolve))) as {
+    width?: number;
+    height?: number;
+    kind?: number;
+    data?: Uint8ClampedArray;
+  } | null;
+  if (!i?.data || !i.width || !i.height) return null;
+  const n = i.width * i.height;
+  const data = new Uint8Array(n * 4);
+  for (let k = 0; k < n; k++) {
+    if (i.kind === 3) data.set(i.data.subarray(4 * k, 4 * k + 4), 4 * k);
+    else if (i.kind === 2)
+      data.set([i.data[3 * k], i.data[3 * k + 1], i.data[3 * k + 2], 255], 4 * k);
+    else {
+      const on = (i.data[k >> 3] >> (7 - (k & 7))) & 1;
+      data.set(on ? [255, 255, 255, 255] : [0, 0, 0, 255], 4 * k);
+    }
+  }
+  return { width: i.width, height: i.height, data };
+}
+
+/**
+ * How two images differ, as a reader sees them -- each composited over the white page: null when
+ * they match (within 2 levels of 255 a channel: Chrome's alpha rounding measured under 1).
+ */
+function imageDifference(a: Pixels, b: Pixels): string | null {
+  if (a.width !== b.width || a.height !== b.height) {
+    return `${b.width}x${b.height} drawn, ${a.width}x${a.height} in the source`;
+  }
+  let differ = 0;
+  for (let k = 0; k < a.width * a.height; k++) {
+    const [p, q] = [a.data[4 * k + 3] / 255, b.data[4 * k + 3] / 255];
+    for (let c = 0; c < 3; c++) {
+      const over = (img: Pixels, alpha: number) => alpha * img.data[4 * k + c] + (1 - alpha) * 255;
+      if (Math.abs(over(a, p) - over(b, q)) > 2) {
+        differ++;
+        break;
+      }
+    }
+  }
+  return differ === 0 ? null : `${differ} of ${a.width * a.height} pixels differ`;
+}
+
+/** A drawn source image decoded, or why it cannot be. */
+async function decodeSource(uri: string): Promise<Pixels | string> {
+  const m = /^data:([^;,]*)((?:;[^;,]*)*),(.*)$/s.exec(uri);
+  if (!m) return "not a data: URI";
+  const mime = m[1].toLowerCase();
+  const bytes = /;base64/i.test(m[2])
+    ? Uint8Array.from(atob(m[3].replace(/\s+/g, "")), (c) => c.charCodeAt(0))
+    : new TextEncoder().encode(decodeURIComponent(m[3]));
+  try {
+    if (mime === "image/png") return decodePng(bytes);
+    if (mime === "image/gif") return decodeGif(bytes);
+    if (mime === "image/jpeg" || mime === "image/jpg") return await decodeJpeg(bytes);
+  } catch (e) {
+    return `${mime} does not decode: ${(e as Error).message}`;
+  }
+  // SVG is drawn as paths, not pixels (roadmap task 18 group 8); WebP's decoders are group 7b.
+  return `${mime || "an unnamed type"} is not verified`;
+}
+
 /**
  * A line break that may fall INSIDE a token (U+2028): written at a wrap within one structure
  * element between two letters or digits. The core joins it where a source token stands whole
@@ -813,6 +1127,8 @@ type PdfDetail = {
   lowContrastPages: Set<number>;
   /** Pages with text an opaque fill or image painted after it covers, half of it or more. */
   coveredTextPages: Set<number>;
+  /** Every image painted, in order: its page and its pixels as pdf.js decodes them. */
+  paintedImages: { page: number; pixels: Pixels | null }[];
   /** The lowest contrast of any visible text, for the log (21 = black, 1 = white). */
   lowestContrast: number;
   /** Pages with text too small to read (under {@link MIN_TEXT_PT}). */
@@ -870,6 +1186,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     invisibleTextPages: new Set(),
     lowContrastPages: new Set(),
     coveredTextPages: new Set(),
+    paintedImages: [],
     lowestContrast: 21,
     tinyTextPages: new Set(),
     smallestText: Number.POSITIVE_INFINITY,
@@ -1116,6 +1433,11 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       }
     });
     obs.imagesPerPage.push(imagesHere);
+    // Each painted image's pixels, in paint order, for the pixel check (task 18 item 5).
+    for (const q of paints) {
+      if (q.image !== undefined)
+        obs.paintedImages.push({ page: p, pixels: await pdfImage(page, q.image) });
+    }
 
     // Each visible text show against what is actually behind it, and anything drawn over it
     // (task 18 item 4). Against the white page only, white text on a dark band FAILED a correct
@@ -2065,9 +2387,11 @@ try {
         `an image drawn but not seen (under 2 pt, or mostly clipped) on page(s) ${[...observed.hiddenImagePages].join(", ")}`,
       );
     }
+    let imagesCompared = 0;
     if (observed.headingPages.length === entries.length) {
       const starts = observed.headingPages;
-      sources.forEach((source, i) => {
+      for (let i = 0; i < sources.length; i++) {
+        const source = sources[i];
         const end = i + 1 < starts.length ? starts[i + 1] - 1 : observed.pages;
         // The first report owns the pages before its heading too (as compareEachReport reads it).
         const from = i === 0 ? 0 : starts[i] - 1;
@@ -2076,7 +2400,24 @@ try {
         if (drawn !== want) {
           check.failures.push(`${entries[i]}: ${drawn} image paint(s), ${want} image(s) expected`);
         }
-      });
+        // And what each one shows (task 18 item 5): the report's drawn images, in order, against
+        // the images painted on its own pages, pixel for pixel.
+        const painted = observed.paintedImages.filter((q) => q.page > from && q.page <= end);
+        const expected = drawnImages(source);
+        for (let k = 0; k < Math.min(painted.length, expected.length); k++) {
+          const ours = await decodeSource(expected[k]);
+          const theirs = painted[k].pixels;
+          const why =
+            typeof ours === "string"
+              ? ours
+              : theirs === null
+                ? "the PDF's image does not decode"
+                : imageDifference(ours, theirs);
+          if (why !== null)
+            check.failures.push(`${entries[i]}: image ${k + 1} is not its source's -- ${why}`);
+          else imagesCompared++;
+        }
+      }
     }
     // The package's order is the reader's: every report after the one before it, by the
     // verification's own reading order (task 18 item 7). The build sorts by its own rule; a change
@@ -2128,6 +2469,9 @@ try {
         `text drawn invisibly on page(s) ${[...observed.invisibleTextPages].join(", ")}`,
       );
     }
+    console.log(
+      `  images:   ${imagesCompared} of ${expected.expectedImages} identical to their sources, pixel for pixel`,
+    );
     console.log(
       `  graphics: ${observed.imagePaints} image paint(s), ${expected.expectedImages} expected; ` +
         `${observed.diagramTitlePages.length} diagram(s) checked` +

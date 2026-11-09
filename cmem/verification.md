@@ -199,7 +199,9 @@ occurrence deleted. Now (1% and 0%, the 1% being an unsigned number after a minu
 All three real sets pass under it (2026-11-08). What it adds on the PDF side (`main.ts`): an image
 cut by a page break, seen by where it is DRAWN (past the page's edge — a count let a lost image
 cancel a split one); each report's own image count; a diagram's title without its caption in
-reading order; text drawn invisibly (render mode 3, or a tenth of full alpha or less, every
+reading order; each image's PIXELS against its source's, decoded by the verification's own PNG,
+GIF and JPEG readers (#95; any other format fails as "not verified" — WebP comes in task 18 7b, an
+SVG image in group 8); text drawn invisibly (render mode 3, or a tenth of full alpha or less, every
 enclosing group's alpha multiplied in — `opacity: 0.02` is a group); text too FAINT to read against
 what is behind it (contrast under 3:1; since #94 against the filled rectangles and images painted
 before it under its centre, an image sampled from its pixels — white on a dark band passes, grey on
@@ -214,7 +216,7 @@ is the side that does not depend on the bake); TeX sub/superscript marks in thei
 (`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
 ⚠️ Still NOT seen: text under a non-rectangular shape (curves are neither covers nor
 backgrounds); a diagram's drawing (only its
-labels are text) and an image's pixels; a one-letter unit is caught only beside its number (#92: in
+labels are text); a one-letter unit is caught only beside its number (#92: in
 its run of text, or in the next cell of its row). (A number broken across two lines failed until #93; it is
 joined now where the source has it whole.) 🔒 **Each of these is to be FIXED, not kept
 (owner, 2026-11-08: "We need fixes not limits")**, (fixed so far: occurrences, size and white-page

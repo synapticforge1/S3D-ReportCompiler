@@ -44,6 +44,59 @@ const TIMEOUT = 300_000;
 /** A 1x1 PNG of solid black (task 18 item 4: text over an image, read from its pixels). */
 const BLACK_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+/**
+ * Small images in each format the pixel check decodes (task 18 item 5), made by a scratch encoder
+ * (PNG, GIF) and by Chrome's canvas (JPEG, WebP): each must be drawn as its source.
+ */
+const IMAGE_FORMATS: [string, string, string][] = [
+  [
+    "a PNG with alpha",
+    "image/png",
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAYAAAD+Bd/7AAAAk0lEQVR4nHXDoRHDMAwF0N8RuoBAkXmoYAYwMdEAXsF/BE+guzDjYLEsYFCkiTpB3917AYDgLf8C5Q0pH9FyqJXTWBq9dI8yIstMoH4g9RCtp1ptxtrpdXjUGVmvBHhAeIqyqbEbOeicHrwieSewTshqoqurrWFck74uj3VHrieB3SC7i+6htqdxX/R9e+wncn/zB2MDRvGkEBGHAAAAAElFTkSuQmCC",
+  ],
+  [
+    "a 16-bit PNG",
+    "image/png",
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGEAIAAAAh95TvAAAA5klEQVR4nH3GIXKEMBQA0L83KPVNZqgJmspI1n9EVoAPR8jnBtkLwGTVx7I2jh7gM9MaOFA70wP0qXeBP0rDpXhVb/BTvPx/ADCmKJQ2VflurTF13fWmaq5Exjg3zabyQ87GhHCcpop3AEAsS6WxrT+sRWyarsfW3YgQvZ9mbAPljBjjcWKbHgBAVNdK09hcrSVyrutp9AMRUQjTTGO850yU0nHSuD4BgLlplObF3axl9r7reQlExBzjNPOSHjkzr+tx8rJ9AoCIc0rL7gdrRULoetnjnUgkpWmWfX3mLLJtxyn71/cveBxuq38aB4kAAAAASUVORK5CYII=",
+  ],
+  [
+    "a palette PNG with transparency",
+    "image/png",
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAMAAADJ2y/JAAAADFBMVEX/AAAA/wAAAP8UFBTU5U5gAAAAAnRSTlP/gAgPs2oAAAAiSURBVHicY2RgZGT8y8jIyMDIxAzGDFCakQFKMzHA5WAYADdHAUF1wB7lAAAAAElFTkSuQmCC",
+  ],
+  [
+    "a 1-bit grey PNG",
+    "image/png",
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGAQAAAADWfuJWAAAADklEQVR4nGMMZVjFAMUAEQcC//Lm+cUAAAAASUVORK5CYII=",
+  ],
+  [
+    "an interlaced PNG",
+    "image/png",
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAYAAAGJAu9tAAAAjklEQVR4nHXIoQ3DMBgF4ecRsoBBUHmpoQcwMfEAWSH/CJnAkplxcFgWMCjyQlepUkFBwSedzknCmSJOPWKKckHrJxT6xtVPnNJK0Kov57X8DPn0pKRMTTszNeR7pvSd2huz3zg9FrwW/SPZE2+RYJliG2Y71Q4ua0w7kUbGj40wdso4sNGo4+QaN3O8eAMLOU+0izlt2AAAAABJRU5ErkJggg==",
+  ],
+  [
+    "a GIF with transparency",
+    "image/gif",
+    "R0lGODlhCAAGAPcAAAAAAP8AAAAA/28RJ5RsNLnHQd4iTgN9WyjYaE0zdXKOgpfpj7xEnOGfqQb6titVw1Cw0HUL3Zpm6r/B9+QcBAl3ES7SHlMtK3iIOJ3jRcI+UueZXwz0bDFPeVaqhnsFk6BgoMW7reoWug9xxzTM1Fkn4X6C7qPd+8g4CO2TFRLuIjdJL1ykPIH/SaZaVsu1Y/AQcBVrfTrGil8hl4R8pKnXsc4yvvONyxjo2D1D5WKe8of5/6xUDNGvGfYKJhtlM0DAQGUbTYp2Wq/RZ9QsdPmHgR7ijkM9m2iYqI3ztbJOwtepz/wE3CFf6Ua69msVA5BwELXLHdomKv+BNyTcREk3UW6SXpPta7hIeN2jhQL+kidZn0y0rHEPuZZqxrvF0+Ag4AV77SrW+k8xB3SMFJnnIb5CLuOdOwj4SC1TVVKuYncJb5xkfMG/ieYalgt1ozDQsFUrvXqGyp/h18Q85OmX8Q7y/jNNC1ioGH0DJaJeMse5P+wUTBFvWTbKZlslc4CAgKXbjco2mu+RpxTstDlHwV6izoP926hY6M2z9fIOAhdpDzzEHGEfKYZ6NqvVQ9AwUPWLXRrmaj9Bd2SchIn3ka5SntOtq/gIuB1jxUK+0mcZ34x07LHP+dYqBvuFEyDgIEU7LWqWOo/xR7RMVNmnYf4CbiNde0i4iG0TlZJuorfJr9wkvAF/ySba1ks143CQ8JXr/bpGCt+hFwT8JClXMU6yPnMNS5hoWL3DZeIecgd5fyzUjFEvmXaKppvls8BAwOWbzQr22i9R51Ss9HkHAZ5iDsO9G+gYKA1zNTLOQlcpT3yEXKHfacY6duuVgxDwkDVLnVqmqn8Bt6RcxMm30e4S3hNt6zjI+F0jBYJ+EqfZH8w0LPGPORbqRjtFU2CgYIX7bapWes+xh/QMlBlnoT7CrmMdu4h4yK3T1dIu4veJ7xzk/EE/CWaaFov1I7BQMNWrPfoGSh9hV0S8ZGkXcY5yfrPNi9gomP2DpSLeskc5v2yUzJHv2bZK5tul8yH5BAEyAAAALAAAAAAIAAYAAAg5AAEECAAgQAAAAQIEABAgAIAAAQIACBAAQIAAAAAECAAgQAAAAQIEABAgAIAAAQIACBAAQIAAAAICADs=",
+  ],
+  [
+    "an interlaced GIF",
+    "image/gif",
+    "R0lGODlhCAAGAPcAAAAAAP8AAAAA/28RJ5RsNLnHQd4iTgN9WyjYaE0zdXKOgpfpj7xEnOGfqQb6titVw1Cw0HUL3Zpm6r/B9+QcBAl3ES7SHlMtK3iIOJ3jRcI+UueZXwz0bDFPeVaqhnsFk6BgoMW7reoWug9xxzTM1Fkn4X6C7qPd+8g4CO2TFRLuIjdJL1ykPIH/SaZaVsu1Y/AQcBVrfTrGil8hl4R8pKnXsc4yvvONyxjo2D1D5WKe8of5/6xUDNGvGfYKJhtlM0DAQGUbTYp2Wq/RZ9QsdPmHgR7ijkM9m2iYqI3ztbJOwtepz/wE3CFf6Ua69msVA5BwELXLHdomKv+BNyTcREk3UW6SXpPta7hIeN2jhQL+kidZn0y0rHEPuZZqxrvF0+Ag4AV77SrW+k8xB3SMFJnnIb5CLuOdOwj4SC1TVVKuYncJb5xkfMG/ieYalgt1ozDQsFUrvXqGyp/h18Q85OmX8Q7y/jNNC1ioGH0DJaJeMse5P+wUTBFvWTbKZlslc4CAgKXbjco2mu+RpxTstDlHwV6izoP926hY6M2z9fIOAhdpDzzEHGEfKYZ6NqvVQ9AwUPWLXRrmaj9Bd2SchIn3ka5SntOtq/gIuB1jxUK+0mcZ34x07LHP+dYqBvuFEyDgIEU7LWqWOo/xR7RMVNmnYf4CbiNde0i4iG0TlZJuorfJr9wkvAF/ySba1ks143CQ8JXr/bpGCt+hFwT8JClXMU6yPnMNS5hoWL3DZeIecgd5fyzUjFEvmXaKppvls8BAwOWbzQr22i9R51Ss9HkHAZ5iDsO9G+gYKA1zNTLOQlcpT3yEXKHfacY6duuVgxDwkDVLnVqmqn8Bt6RcxMm30e4S3hNt6zjI+F0jBYJ+EqfZH8w0LPGPORbqRjtFU2CgYIX7bapWes+xh/QMlBlnoT7CrmMdu4h4yK3T1dIu4veJ7xzk/EE/CWaaFov1I7BQMNWrPfoGSh9hV0S8ZGkXcY5yfrPNi9gomP2DpSLeskc5v2yUzJHv2bZK5tul8yH5BAAyAAAALAAAAAAIAAYAQAg5AAEMMJCAwQMJFShc0NABxAgTKRQ0gDDBQgYOHwogWOAgAoULGh5IqIBhg4cQJDJw+CCiBIoVLgICADs=",
+  ],
+  [
+    "an animated GIF",
+    "image/gif",
+    "R0lGODlhCAAGAPcAAAAAAP8AAAAA/28RJ5RsNLnHQd4iTgN9WyjYaE0zdXKOgpfpj7xEnOGfqQb6titVw1Cw0HUL3Zpm6r/B9+QcBAl3ES7SHlMtK3iIOJ3jRcI+UueZXwz0bDFPeVaqhnsFk6BgoMW7reoWug9xxzTM1Fkn4X6C7qPd+8g4CO2TFRLuIjdJL1ykPIH/SaZaVsu1Y/AQcBVrfTrGil8hl4R8pKnXsc4yvvONyxjo2D1D5WKe8of5/6xUDNGvGfYKJhtlM0DAQGUbTYp2Wq/RZ9QsdPmHgR7ijkM9m2iYqI3ztbJOwtepz/wE3CFf6Ua69msVA5BwELXLHdomKv+BNyTcREk3UW6SXpPta7hIeN2jhQL+kidZn0y0rHEPuZZqxrvF0+Ag4AV77SrW+k8xB3SMFJnnIb5CLuOdOwj4SC1TVVKuYncJb5xkfMG/ieYalgt1ozDQsFUrvXqGyp/h18Q85OmX8Q7y/jNNC1ioGH0DJaJeMse5P+wUTBFvWTbKZlslc4CAgKXbjco2mu+RpxTstDlHwV6izoP926hY6M2z9fIOAhdpDzzEHGEfKYZ6NqvVQ9AwUPWLXRrmaj9Bd2SchIn3ka5SntOtq/gIuB1jxUK+0mcZ34x07LHP+dYqBvuFEyDgIEU7LWqWOo/xR7RMVNmnYf4CbiNde0i4iG0TlZJuorfJr9wkvAF/ySba1ks143CQ8JXr/bpGCt+hFwT8JClXMU6yPnMNS5hoWL3DZeIecgd5fyzUjFEvmXaKppvls8BAwOWbzQr22i9R51Ss9HkHAZ5iDsO9G+gYKA1zNTLOQlcpT3yEXKHfacY6duuVgxDwkDVLnVqmqn8Bt6RcxMm30e4S3hNt6zjI+F0jBYJ+EqfZH8w0LPGPORbqRjtFU2CgYIX7bapWes+xh/QMlBlnoT7CrmMdu4h4yK3T1dIu4veJ7xzk/EE/CWaaFov1I7BQMNWrPfoGSh9hV0S8ZGkXcY5yfrPNi9gomP2DpSLeskc5v2yUzJHv2bZK5tul8yH/C05FVFNDQVBFMi4wAwEAAAAh+QQAMgAAACwAAAAACAAGAAAIOQADBAgQIECAAAECBAgQIECAAAECBAgQIECAAAECBAgQIECAAAECBAgQIECAAAECBAgQIECAAAECAgAh+QQAMgAAACwAAAAACAAGAAAIOQAFCBAgQIAAAQIECBAgQIAAAQIECBAgQIAAAQIECBAgQIAAAQIECBAgQIAAAQIECBAgQIAAAQICAgA7",
+  ],
+  [
+    "a JPEG",
+    "image/jpeg",
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAeACgDASIAAhEBAxEB/8QAGgAAAwEAAwAAAAAAAAAAAAAAAAECCAQHCf/EACYQAAECBAQHAQAAAAAAAAAAAAEAAgMEBgcFCBIUERMVISIxUUH/xAAWAQEBAQAAAAAAAAAAAAAAAAAHBgX/xAAgEQABAwQDAQEAAAAAAAAAAAABAAIEAwURIRIiYTHw/9oADAMBAAIRAxEAPwDpUlQSmSt9ZXcrtsbjWKpmoahpnqGMTm658zv5qFr0TUVjfFkVrRwaxo7AevqxYUUNAJTtersyGzm/Jyca/eLAJKglb/zSZXLY25sTU1RU7TPT8Yk9ryJnfzUXRrmoTHeL4rmni1zh3H79Xn6SkS10W1Rlo+I6kXNshhe3IHqCUKCUJDoQ+g0oivM7rlEqCUyVBKL4EQaSncJZ2kSoJTJUEpHgRBpGtwlnaRKFJKFe0Io4BQFeWea//9k=",
+  ],
+];
+const WEBP =
+  "UklGRrYCAABXRUJQVlA4WAoAAAAgAAAAJwAAHQAASUNDUMgBAAAAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADZWUDggyAAAANAGAJ0BKigAHgA+MRSHQqIhDVYCABABglmAJ0yhHkvmH4x8s/sf4AyZ/wDjhiNAfwAPBAK/gSJ1oilLcIJaAAD+93cWT62v7T9zcsY/6GxFyhksUgVv/h5rdMf/v066jz7AKAmcT/x/t3/H96YN4wf0z/vzWRzWH/pz6RBfW+bLuvvhToSguPvHowE7MUP4Rfjtr5LEojU5JYooxAg4yn//3gASbdaqlpaiuO/t0PHgYjX/r1RDeYSG2/+sYFoBkN/VTCFWTQAA";
 
 const work = mkdtempSync(join(tmpdir(), "s3d-test-"));
 after(() => rmSync(work, { recursive: true, force: true }));
@@ -3386,6 +3439,45 @@ test("class B, task 18 item 2: a number with its neighbours", async () => {
   );
   assert.deepEqual(missing(rows("m", "N"), "12 m\n5 N"), []);
 });
+
+test(
+  "class B, task 18 item 5: each image drawn as its source, pixel for pixel",
+  { timeout: TIMEOUT },
+  () => {
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    // The sample's own image swapped for another, styled or not.
+    const build = (what: string, mime: string, b64: string, style = "") => {
+      const dir = join(work, `task18-5-${what.replace(/\W+/g, "-")}`);
+      mkdirSync(dir, { recursive: true });
+      const html = sample.replace(
+        /(<img\b[^>]*\ssrc\s*=\s*["'])data:image\/png;base64,[^"']+(["'])/i,
+        (_m, a: string, b: string) =>
+          `${a}data:${mime};base64,${b64}${b}${style ? ` style="${style}"` : ""}`,
+      );
+      writeFileSync(join(dir, "member_0_report.html"), html);
+      return run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    };
+    // 1. Every format the check decodes, in its awkward forms, is drawn as its source and PASSES.
+    for (const [what, mime, b64] of IMAGE_FORMATS) {
+      const r = build(what, mime, b64);
+      assert.equal(r.code, 0, `${what}:\n${tail(r.out)}`);
+      has(r.out, /images: {3}1 of 1 identical to their sources, pixel for pixel/);
+    }
+    // 2. An image drawn otherwise than its source FAILS: a filter turns the figure grey.
+    const grey = build(
+      "drawn grey",
+      IMAGE_FORMATS[0][1],
+      IMAGE_FORMATS[0][2],
+      "filter:grayscale(1)",
+    );
+    assert.equal(grey.code, 1, tail(grey.out));
+    has(grey.out, /member_0_report\.html: image 1 is not its source's/);
+    // 3. A format the check cannot read yet is refused by name, never passed (WebP: task 18 7b).
+    const webp = build("webp", "image/webp", WEBP);
+    assert.equal(webp.code, 1, tail(webp.out));
+    has(webp.out, /image 1 is not its source's -- image\/webp is not verified/);
+  },
+);
 
 test("class B, task 18 item 4: text read against what is behind it", { timeout: TIMEOUT }, () => {
   // White text on a dark band, and on a dark image, is readable: against the white page alone it

@@ -1205,7 +1205,11 @@ class-B re-check at the end:
    the operator walk; the background is the last fill beneath the text (an image is sampled from
    its pixels); a fill or image painted over at least half of a text box at alpha 0.9 or more is
    covered text; WCAG contrast below the threshold fails. White on a dark band then passes.
-7. **5, image pixels:** each report's data-URI images paired, in order, with its paints; JPEG
+7. ✅ **7a DONE 2026-11-08 (known-issues #95): PNG, GIF, JPEG.** 🔒 Owner, 2026-11-08: "Can we
+   build a method for verifying the SVG, GIF and WebP file types also?" — GIF in 7a; **7b: WebP by
+   OWN decoders** (owner's choice over Chrome-as-decoder, a dependency, or refusal): lossless VP8L,
+   lossy VP8, the VP8X container with its ALPH chunk; Chrome re-encodes WebP as plain pixels
+   (measured), so the comparison is 7a's. SVG `<img>` goes to group 8 (below). — **5, image pixels:** each report's data-URI images paired, in order, with its paints; JPEG
    compared by bytes through pdf-lib if Chrome passes them through; PNG decoded on both sides and
    compared exactly (alpha is a separate mask); an SVG `<img>` gets its own check or a loud "not
    verified". Lives in main.ts. Measure first whether Chrome re-encodes, downsamples or
@@ -1216,8 +1220,13 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 7 (item 5, image pixels). Group 6 left one thing unseen, for group 8's
-geometry to take up: a non-rectangular shape over text.
+**Next step:** group 7b (WebP decoders). Then group 8, which now also takes an SVG `<img>`:
+Chrome draws it as paths (measured), so it is checked as geometry like a diagram, and left out of
+the image count (today it fails on the count, the loud direction). Group 6 left one thing unseen: a non-rectangular
+shape over text. 🔒 **Added to group 8's scope (owner, 2026-11-08: "if group eight will address the
+still not seen items, proceed to group 7"):** group 8 flattens PDF paths into polygons for the
+diagram comparison; with them, any filled shape — not only a rectangle — is tested as a cover
+over text and as a background behind it.
 Group 4's last gap (a unit in a cell of its own) was fixed before group 5 (owner, 2026-11-08): a
 table row's cells are one run.
 
