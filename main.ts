@@ -707,11 +707,27 @@ type PdfDetail = {
   hiddenImagePages: Set<number>;
   /** Pages with text drawn invisibly (rendering mode 3, or a tenth of full alpha or less). */
   invisibleTextPages: Set<number>;
-  /** Pages with text drawn in white. */
-  whiteTextPages: Set<number>;
+  /** Pages with text too light to read on the white page (contrast under {@link MIN_CONTRAST}). */
+  lowContrastPages: Set<number>;
+  /** The lowest contrast of any visible text, for the log (21 = black, 1 = white). */
+  lowestContrast: number;
+  /** Pages with text too small to read (under {@link MIN_TEXT_PT}). */
+  tinyTextPages: Set<number>;
+  /** The smallest visible text, in points, for the log. */
+  smallestText: number;
   /** Pages where a diagram's title had no caption before the page ended. */
   cutDiagramPages: number[];
 };
+
+/**
+ * The lowest contrast against the white page that text may have: WCAG's floor for large text, a
+ * floor for "can be read", not its 4.5 for comfort. Well below the lowest the real sets print,
+ * 8.6:1 in all three (measured 2026-11-08; logged on every build's `legible:` line); `#eeeeee` is
+ * 1.16, `#aaaaaa` 2.3.
+ */
+const MIN_CONTRAST = 3;
+/** The smallest text that may be printed, in points: the samples' smallest is 3.61 (subscripts). */
+const MIN_TEXT_PT = 2;
 
 async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -725,7 +741,10 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     cutImagePages: new Set(),
     hiddenImagePages: new Set(),
     invisibleTextPages: new Set(),
-    whiteTextPages: new Set(),
+    lowContrastPages: new Set(),
+    lowestContrast: 21,
+    tinyTextPages: new Set(),
+    smallestText: Number.POSITIVE_INFINITY,
     cutDiagramPages: [],
     pageTexts: [],
     text: "",
@@ -752,27 +771,40 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     // element's `opacity` is a group, its text's own alpha set inside it); and the clipping box,
     // to know an image `overflow: hidden` left mostly unseen.
     type Box = [number, number, number, number];
-    type Gs = { m: number[]; mode: number; alpha: number; white: boolean; clip: Box | null };
+    type Gs = { m: number[]; mode: number; alpha: number; fill: number[]; clip: Box | null };
     const stack: Gs[] = [];
     const groupAlpha: number[] = [1];
-    let gs: Gs = { m: [1, 0, 0, 1, 0, 0], mode: 0, alpha: 1, white: false, clip: null };
+    let gs: Gs = { m: [1, 0, 0, 1, 0, 0], mode: 0, alpha: 1, fill: [0, 0, 0], clip: null };
     let clipPending = false;
-    /**
-     * Whether a fill colour is white or so near it as to be unreadable on a white page: every
-     * channel at 0xF0 or above (pdf.js gives "#rrggbb", or numbers 0-255 or 0-1). The darkest
-     * text colour the real sets use is far below it; `#fefefe` passed the exact test.
-     */
-    const isWhite = (args: unknown[]) => {
+    /** A fill colour as RGB 0-1: pdf.js gives "#rrggbb", or numbers 0-255 or 0-1, or one grey. */
+    const rgb = (args: unknown[]): number[] => {
       if (typeof args[0] === "string") {
         const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(args[0]);
-        return hex?.slice(1).every((c) => parseInt(c, 16) >= 0xf0) === true;
+        return hex ? hex.slice(1).map((c) => parseInt(c, 16) / 255) : [0, 0, 0];
       }
       const v = args.map(Number);
-      return (
-        v.length > 0 &&
-        (v.every((c) => c >= 0xf0 && c <= 255) || v.every((c) => c >= 0.94 && c <= 1))
-      );
+      const scaled = v.some((c) => c > 1) ? v.map((c) => c / 255) : v;
+      return scaled.length === 1 ? [scaled[0], scaled[0], scaled[0]] : scaled.slice(0, 3);
     };
+    /**
+     * Text's contrast against the white page, as WCAG defines it (1:1 to 21:1), its alpha
+     * composited over white first. Since re-check 2 this replaces a test for white: every channel
+     * at `0xF0` or more passed `#eeeeee`, as unreadable on a white page (1.16:1).
+     */
+    const contrast = (fill: number[], alpha: number) => {
+      const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+      const [r, g, b] = fill.map((c) => lin(alpha * c + (1 - alpha)));
+      return 1.05 / (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.05);
+    };
+    /** Whether a text-show's glyphs draw anything but spaces. */
+    const inks = (glyphs: unknown) =>
+      Array.isArray(glyphs) &&
+      glyphs.some(
+        (g) =>
+          typeof g === "object" &&
+          g !== null &&
+          /\S/.test(String((g as { unicode?: string }).unicode ?? "")),
+      );
     /** A box under the transform, in page space. */
     const place = (b: Box, m: number[]): Box => {
       const xs = [b[0], b[2]].flatMap((x) => [b[1], b[3]].map((y) => m[0] * x + m[2] * y + m[4]));
@@ -810,7 +842,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       else if (fn === pdfjs.OPS.transform) gs = { ...gs, m: mul(args as number[], gs.m) };
       else if (fn === pdfjs.OPS.setTextRenderingMode) gs = { ...gs, mode: Number(args[0]) };
       else if (fn === pdfjs.OPS.setFillRGBColor || fn === pdfjs.OPS.setFillGray) {
-        gs = { ...gs, white: isWhite(args) };
+        gs = { ...gs, fill: rgb(args) };
       } else if (fn === pdfjs.OPS.setGState) {
         for (const [key, value] of (args[0] as [string, unknown][]) ?? []) {
           if (key === "ca") gs = { ...gs, alpha: Number(value) };
@@ -821,12 +853,16 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         if (groupAlpha.length > 1) groupAlpha.pop();
       } else if (fn === pdfjs.OPS.clip || fn === pdfjs.OPS.eoClip) {
         clipPending = true; // pdf.js gives the clip before the path it clips to
-      } else if (SHOW_TEXT.has(fn)) {
+      } else if (SHOW_TEXT.has(fn) && inks(args[0])) {
         // Faint is invisible: at a tenth of full alpha or less (text is drawn at 0.87).
         const alpha = gs.alpha * groupAlpha[groupAlpha.length - 1];
         const hidden = gs.mode % 4 === 3 || alpha <= 0.1;
         if (hidden) obs.invisibleTextPages.add(p);
-        else if (gs.white) obs.whiteTextPages.add(p);
+        else {
+          const c = contrast(gs.fill, alpha);
+          obs.lowestContrast = Math.min(obs.lowestContrast, c);
+          if (c < MIN_CONTRAST) obs.lowContrastPages.add(p);
+        }
       } else if (fn === pdfjs.OPS.paintImageXObject) {
         obs.imagePaints++;
         imagesHere++;
@@ -856,7 +892,19 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     obs.imagesPerPage.push(imagesHere);
 
     // Items are text runs or marked-content markers; only the former have text.
-    const text = pageText((await page.getTextContent()).items);
+    const items = (await page.getTextContent()).items;
+    const text = pageText(items);
+    // Text too small to read is still in the text layer: 0.17 pt and a `scale(0.01)` passed
+    // every word check (class B, re-check 2). The size is the item's smaller axis on the page.
+    for (const raw of items) {
+      const it = raw as { str?: string; transform?: number[] };
+      if (typeof it.str !== "string" || !/\S/.test(it.str) || !Array.isArray(it.transform))
+        continue;
+      const [a, b, c, d] = it.transform;
+      const size = Math.min(Math.hypot(a, b), Math.hypot(c, d));
+      obs.smallestText = Math.min(obs.smallestText, size);
+      if (size < MIN_TEXT_PT) obs.tinyTextPages.add(p);
+    }
 
     obs.text += `${text}\n`;
     obs.pageTexts.push(text);
@@ -1720,13 +1768,19 @@ try {
     if (observed.cutDiagramPages.length > 0) {
       check.failures.push(`diagram cut on page(s) ${observed.cutDiagramPages.join(", ")}`);
     }
-    // White text on a white page reads as nothing, yet passes every text check. No report of the
-    // three real sets draws text in white (measured 2026-11-08), so it FAILS, the loud direction:
-    // a template with white text on a coloured band would fail here, never pass unseen. Text
-    // covered by an opaque box cannot be told from the PDF (verification.md's limits).
-    if (observed.whiteTextPages.size > 0) {
+    // White or near-white text on a white page reads as nothing, yet passes every text check: it
+    // FAILS, the loud direction -- a template with white text on a coloured band would fail here
+    // until the background is read (roadmap task 18, item 4), never pass unseen.
+    if (observed.lowContrastPages.size > 0) {
       check.failures.push(
-        `text drawn in white on page(s) ${[...observed.whiteTextPages].join(", ")} -- unreadable on a white page`,
+        `text drawn in white or too light to read on page(s) ${[...observed.lowContrastPages].join(", ")} ` +
+          `-- contrast ${observed.lowestContrast.toFixed(2)}:1 on a white page, under ${MIN_CONTRAST}:1`,
+      );
+    }
+    if (observed.tinyTextPages.size > 0) {
+      check.failures.push(
+        `text too small to read on page(s) ${[...observed.tinyTextPages].join(", ")} ` +
+          `-- ${observed.smallestText.toFixed(2)} pt, under ${MIN_TEXT_PT} pt`,
       );
     }
     if (observed.invisibleTextPages.size > 0) {
@@ -1742,6 +1796,10 @@ try {
           : check.splitDiagrams.length === 0
             ? ", intact"
             : ", SPLIT"),
+    );
+    console.log(
+      `  legible:  lowest contrast ${observed.lowestContrast.toFixed(1)}:1 (floor ${MIN_CONTRAST}), ` +
+        `smallest text ${Number.isFinite(observed.smallestText) ? observed.smallestText.toFixed(2) : "-"} pt (floor ${MIN_TEXT_PT})`,
     );
     console.log(
       `  latex:    ${check.leftoverLatex.length} surviving, ` +

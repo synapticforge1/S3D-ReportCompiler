@@ -182,9 +182,9 @@ test(
       // The set-wide check alone still passes this — the intact copy supplies the tokens.
       /missing:\s+0 word\(s\), 0 number\(s\)/,
       /per-report: 1 of 2 report\(s\) missing their own content/,
-      // "For" since class B iteration 2: a short word keeps its case, and the row's capital one
-      // is in no other row.
-      /b_report\.html: 6 word\(s\), 0 number\(s\) -- internal, forces, For, absolute, force, bending/,
+      // Every token of the hidden row, each one occurrence short, since class B re-check 2 counts
+      // occurrences (presence saw only the 6 words that appear in no other row).
+      /b_report\.html: 24 word\(s\), 7 number\(s\) -- design \(3 of 4\), moment \(2 of 6\), of \(26 of 27\)/,
       /VERIFICATION FAILED/,
       /- content missing from its own report: b_report\.html/,
     );
@@ -3254,7 +3254,7 @@ test("class B, iteration 2: lists, signs, units, split tokens, printed names", a
   // 3. A short word keeps its case (a unit's case is its meaning); capitals still find it.
   assert.ok(missing("<p>12 MN</p>", "12 mN").includes("MN"), "MN passed as mN");
   assert.ok(missing("<p>4 MPa</p>", "4 mPa").includes("MPa"), "MPa passed as mPa");
-  assert.deepEqual(missing("<h3>Load kN</h3>", "LOAD KN"), []);
+  assert.deepEqual(missing("<h3>Load in mm</h3>", "LOAD IN MM"), []);
   // 4. Bare sub/superscript marks are prose too: not "unrendered LaTeX". Braced ones still are.
   const residue = (text: string) =>
     core
@@ -3290,6 +3290,57 @@ test("class B, iteration 2: lists, signs, units, split tokens, printed names", a
   );
 });
 
+test("class B, re-check 2: every occurrence, no line-split words, capitals only in capitals", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const heading = "MEMBER # 1 DESIGN REPORT";
+  const src = (body: string) => `<html><body><h2>${heading}</h2>${body}</body></html>`;
+  const missing = (body: string, pdf: string) => {
+    const r = core.compareEachReport([src(body)], [`${heading}\n${pdf}`]).reports[0];
+    return [...r.missingWords, ...r.missingNumbers];
+  };
+
+  // 1. A value the source shows twice must be printed twice: one changed, one line deleted, one
+  //    verdict flipped -- each passed while any one occurrence remained.
+  assert.ok(
+    missing("<p>a = 30.483</p><p>b = 30.483</p>", "a = 30.483\nb = 31.483").includes(
+      "30.483 (1 of 2)",
+    ),
+    "a changed second occurrence passed",
+  );
+  assert.ok(
+    missing("<p>Status PASS</p><p>Status PASS</p>", "Status PASS\nStatus FAIL").includes(
+      "pass (1 of 2)",
+    ),
+    "a flipped verdict passed",
+  );
+  assert.deepEqual(missing("<p>a = 30.483</p><p>b = 30.483</p>", "a = 30.483\nb = 30.483"), []);
+  // 2. One space may stand between a word's letters, a line break may not.
+  assert.ok(missing("<p>12 kN</p>", "12 k\nN").includes("kN"), "kN split over two lines passed");
+  // 3. Capitals stand in for a word only where the source had none and the line is all capitals.
+  assert.ok(missing("<p>12 mN</p>", "Axial 12 MN").includes("mN"), "mN passed as MN");
+  assert.ok(missing("<p>12 mm</p>", "Axial 12 MM").includes("mm"), "mm passed as MM");
+  assert.deepEqual(missing("<h3>Load in mm</h3>", "LOAD IN MM"), []);
+  // 4. Both sides counted by one matcher: the source's `t_{w}` prints "t w", which the PDF's
+  //    matcher reads as "tw", so the source counts it too -- or one deleted "tw" hid in a surplus.
+  assert.ok(
+    missing("[mathin]t_{w}[mathin] <p>web tw</p>", "t w\nweb").includes("tw (1 of 2)"),
+    "a deleted tw hid behind maths",
+  );
+  //    A Greek symbol does not touch a Latin word: MathJax prints `\phi P_{c}` as "ϕPc".
+  assert.deepEqual(missing("<p>Pc</p>[mathin]\\phi P_{c}[mathin]", "Pc\nϕPc"), []);
+  //    A heading's own capitals are its own token's, not a lower-case word's set upper-case.
+  assert.ok(
+    missing(
+      "<p>ratio of x</p><h3>POSITION OF Y</h3><p>areas of z</p>",
+      "ratio of x\nPOSITION OF Y\nareas z",
+    ).includes("of (1 of 2)"),
+    "a heading's OF stood in for a lost of",
+  );
+  // 5. A deleted heading is no pass: the report cannot be found, and that is a failure.
+  const lost = core.compareEachReport([src("<p>a = 30.483</p>")], ["a = 30.483"]);
+  assert.equal(lost.checked, false, "a report with no heading was checked as whole");
+});
+
 test(
   "class B: what the PDF draws -- invisible and white text, cut images, cut diagrams",
   { timeout: TIMEOUT },
@@ -3309,6 +3360,14 @@ test(
       // and an image drawn but clipped away, or drawn too small to see, is not seen.
       ["faint text", `<p style="opacity:0.02">Zorblaxian 4471</p>`, /text drawn invisibly/],
       ["near-white text", `<p style="color:#fefefe">Zorblaxian 4471</p>`, /text drawn in white/],
+      // Re-check 2: light grey is as unreadable on the white page, and so is text too small.
+      ["light grey text", `<p style="color:#eeeeee">Zorblaxian 4471</p>`, /too light to read/],
+      ["tiny text", `<p style="font-size:0.3px">Zorblaxian 4471</p>`, /text too small to read/],
+      [
+        "scaled-away text",
+        `<div style="transform:scale(0.01)">Zorblaxian 4471</div>`,
+        /text too small to read/,
+      ],
       [
         "a clipped image",
         `<div style="height:4px;overflow:hidden"><img style="display:block;width:200px;height:200px" src="data:image/png;base64,${png}"></div>`,

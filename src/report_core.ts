@@ -2900,6 +2900,11 @@ function normalizeText(text: string): string {
  * gaps ({@link compareAgainstPdf}); one letter is a variable name.
  */
 export function textWords(text: string): Set<string> {
+  return new Set(wordTokens(text));
+}
+
+/** Every word and symbol of {@link textWords}, one entry per OCCURRENCE. */
+function wordTokens(text: string): string[] {
   const t = normalizeText(text);
   // Words lower-cased, but not a short one: three letters or fewer is where the units are, and
   // case is their meaning (`MN` is not `mN`, `MPa` not `mPa`; class B, iteration 2). A symbol
@@ -2911,7 +2916,7 @@ export function textWords(text: string): Set<string> {
   // character -- so `²` (category No, not a digit) is one, and so is every non-ASCII LETTER on its
   // own: a single `λ` is no two-letter word, but λ → φ changes the quantity.
   const symbols = t.match(/[^\p{Nd}\s\p{Cf}\p{ASCII}]/gu) ?? [];
-  return new Set([...words, ...symbols]);
+  return [...words, ...symbols];
 }
 
 /**
@@ -2921,7 +2926,12 @@ export function textWords(text: string): Set<string> {
  * `1.5e3` all passed (2026-11-08, class B).
  */
 export function textNumbers(text: string): Set<string> {
-  return new Set(normalizeText(text).match(NUMBER_TOKEN) ?? []);
+  return new Set(numberTokens(text));
+}
+
+/** Every number token of {@link textNumbers}, one entry per OCCURRENCE. */
+function numberTokens(text: string): string[] {
+  return normalizeText(text).match(NUMBER_TOKEN) ?? [];
 }
 
 /**
@@ -2944,6 +2954,11 @@ const SIGN = String.raw`(?<![\p{L}\p{N}\])}.,])-`;
  * from its digits: MathJax spaces `M_{u} -0.537` as a binary minus, "- 0.537".
  */
 function hasNumber(text: string, token: string): boolean {
+  return countNumber(text, token) > 0;
+}
+
+/** How many times `token` stands whole in `text` ({@link hasNumber}'s rules). */
+function countNumber(text: string, token: string): number {
   const signed = token.startsWith("-");
   const digits = (signed ? token.slice(1) : token).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let before = signed ? String.raw`-\s?` : `(?<!${SIGN})`;
@@ -2953,27 +2968,60 @@ function hasNumber(text: string, token: string): boolean {
     before = String.raw`(?<!(?<![\d.])\d{1,3}(?:,\d{3})*,)` + before;
   // The head of one: an integer of one to three digits followed by ",ddd".
   const after = /^-?\d{1,3}$/.test(token) ? String.raw`(?!,\d{3}(?!\d))` : "";
-  return new RegExp(`${before}${digits}${after}(?!\\d|\\.\\d|[eE][-+]?\\d)`, "u").test(text);
+  const re = new RegExp(`${before}${digits}${after}(?!\\d|\\.\\d|[eE][-+]?\\d)`, "gu");
+  return (text.match(re) ?? []).length;
 }
 
 /**
- * Where `word` (a {@link textWords} token) stands in `text`: a word with no letter joined to it
- * (`kip` is not found in `kips`), a symbol anywhere. One space may stand between two of its
- * letters: maths draws a multi-letter subscript glyph by glyph (`λ_{rf}` prints "r f").
+ * How many times `word` (a {@link textWords} token) stands in `text`: a word with no letter joined
+ * to it (`kip` is not found in `kips`), a symbol anywhere. One SPACE may stand between two of its
+ * letters -- maths draws a multi-letter subscript glyph by glyph (`λ_{rf}` prints "r f") -- but not a
+ * line break: `k` at a line's end and `N` on the next passed as "kN" (class B, re-check 2).
  */
-function hasWord(text: string, word: string, exact: string): boolean {
+function countWord(
+  text: string,
+  word: string,
+  exact: string,
+  /**
+   * In capitals ({@link countWord} below): `null` never (counting a SOURCE, which a stylesheet has
+   * not set yet); otherwise how many of the capitals the source's own capital token already
+   * claims -- a heading written `OF` is that token's, not `of` set upper-case (re-check 2:
+   * counted twice, they made a surplus that hid one lost `of`).
+   */
+  claimed: number | null = 0,
+): number {
   // A symbol in the text as printed, case and all: `Δ` is not `δ`.
-  if ([...word].length === 1 || !/\p{L}/u.test(word)) return exact.includes(word);
+  if ([...word].length === 1 || !/\p{L}/u.test(word)) return exact.split(word).length - 1;
+  // What may not touch the word: a letter -- but for a word not in Greek, not a Greek one. Maths
+  // prints a symbol against its operand (`\phi P_{c}` as "ϕPc"), so "Pc" stands there whole.
+  const letter = /\p{Script=Greek}/u.test(word) ? "\\p{L}" : "(?!\\p{Script=Greek})\\p{L}";
   const pattern = (w: string) =>
     new RegExp(
-      `(?<!\\p{L})${[...w].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s?")}(?!\\p{L})`,
-      "u",
+      `(?<!${letter})${[...w].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[ ]?")}(?!${letter})`,
+      "gu",
     );
-  // A short word kept its case ({@link textWords}): found as written, or in capitals (a heading
-  // a stylesheet sets in upper case), in the text as printed.
-  if ([...word].length <= 3)
-    return pattern(word).test(exact) || pattern(word.toUpperCase()).test(exact);
-  return pattern(word).test(text);
+  if ([...word].length > 3) return (text.match(pattern(word)) ?? []).length;
+  // A short word kept its case ({@link textWords}): counted as written. In capitals only where a
+  // stylesheet could have set it so -- a source word with no capital of its own, on a PDF line with
+  // no lower-case letter (a heading). Accepted in capitals anywhere, `mN` passed as `MN`, a factor
+  // of 10⁹, and `mm` as `MM` (re-check 2).
+  let n = (exact.match(pattern(word)) ?? []).length;
+  const upper = word.toUpperCase();
+  if (claimed !== null && word === word.toLowerCase() && upper !== word) {
+    let capitals = 0;
+    for (const m of exact.matchAll(pattern(upper))) {
+      const from = exact.lastIndexOf("\n", m.index) + 1;
+      const to = exact.indexOf("\n", m.index);
+      if (!/\p{Ll}/u.test(exact.slice(from, to < 0 ? exact.length : to))) capitals++;
+    }
+    n += Math.max(0, capitals - claimed);
+  }
+  return n;
+}
+
+/** Whether `word` stands in `text` at least once ({@link countWord}). */
+function hasWord(text: string, word: string, exact: string): boolean {
+  return countWord(text, word, exact) > 0;
 }
 
 /**
@@ -3467,8 +3515,29 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
   const words = new Set<string>();
   const numbers = new Set<string>();
   let expectedImages = 0;
-
   for (const raw of sources) {
+    const one = sourceTally(raw);
+    for (const w of one.words.keys()) words.add(w);
+    for (const n of one.numbers.keys()) numbers.add(n);
+    expectedImages += one.expectedImages;
+  }
+  return { words, numbers, expectedImages };
+}
+
+/**
+ * One report's expected content ({@link extractSourceTokens}), each word and number with the
+ * number of times a reader sees it: present once was all that was checked, so a value printed
+ * twice could lose an occurrence, a line or a `PASS` → `FAIL` unseen (class B, re-check 2).
+ */
+function sourceTally(raw: string): {
+  words: Map<string, number>;
+  numbers: Map<string, number>;
+  expectedImages: number;
+} {
+  const words = new Map<string, number>();
+  const numbers = new Map<string, number>();
+  let expectedImages = 0;
+  {
     let html = withoutSpinner(readerVisible(raw));
 
     // Only the body is drawn; <title> would otherwise read as missing. The body as a READER sees
@@ -3534,11 +3603,21 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
       );
     // Numbers from the text as written: a sign needs nothing before it but a space or an operator,
     // so `M_{p}-0.7` keeps its BINARY minus (the `}` before it).
-    for (const n of textNumbers(prose)) numbers.add(n);
+    // Each token counted with the SAME matcher the PDF is counted with: by tokens, `t_{w}` was no
+    // "tw", but its printed "t w" matched one in the PDF, so the PDF always held a surplus and one
+    // occurrence could go unseen (`of`, `tw`, `Pr`, `ry` on member_0).
+    const numberText = normalizeText(prose);
+    for (const n of new Set(numberTokens(prose))) {
+      numbers.set(n, Math.max(1, countNumber(numberText, n)));
+    }
     // Words with each sub- or superscript as its own token, as it is printed: `F_yS` is F, y and S
     // (not the "word" yS), `M_{nz}` is M and nz.
     const scripts = prose.replace(/[_^]\{([^{}]*)\}/g, " $1 ").replace(/[_^]([^\s{\\])/g, " $1 ");
-    for (const w of textWords(scripts)) words.add(w);
+    const exact = normalizeText(scripts);
+    const lower = exact.toLowerCase();
+    for (const w of new Set(wordTokens(scripts))) {
+      words.set(w, Math.max(1, countWord(lower, w, exact, null)));
+    }
   }
 
   return { words, numbers, expectedImages };
@@ -3703,13 +3782,22 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
     const segment = pageTexts
       .slice(i === 0 ? 0 : starts[i], i + 1 < starts.length ? starts[i + 1] : pageTexts.length)
       .join("\n");
-    const own = extractSourceTokens([source]);
+    const own = sourceTally(source);
     const text = normalizeText(segment);
     const lower = text.toLowerCase();
+    // Each as many times as the source shows it: a token found fewer times is named with its
+    // counts, "30.483 (2 of 3)"; one not found at all, by itself.
+    const short = (want: Map<string, number>, count: (t: string) => number) =>
+      [...want].flatMap(([t, n]) => {
+        const found = count(t);
+        return found >= n ? [] : [found === 0 ? t : `${t} (${found} of ${n})`];
+      });
     return {
       report: i,
-      missingWords: [...own.words].filter((w) => !hasWord(lower, w, text)),
-      missingNumbers: [...own.numbers].filter((n) => !hasNumber(text, n)),
+      missingWords: short(own.words, (w) =>
+        countWord(lower, w, text, own.words.get(w.toUpperCase()) ?? 0),
+      ),
+      missingNumbers: short(own.numbers, (n) => countNumber(text, n)),
     };
   });
   return { checked: true, reason: "", reports };

@@ -158,7 +158,15 @@ occurrence deleted. Now (1% and 0%, the 1% being an unsigned number after a minu
   4.3 heights apart or more in both PDFs).
 - **Tokens are matched WHOLE**: a number with no digit, point or separator joined to it; a word
   with no letter joined to it (one space may stand between its letters — maths draws `λ_{rf}`'s
-  subscript as "r f").
+  subscript as "r f" — but never a line break; a Greek symbol does not count as joined to a Latin
+  word, as MathJax prints `\phi P_{c}` as "ϕPc").
+- **Every occurrence, per report (since 2026-11-08, #89).** A report's pages must hold each word
+  and number at least as many times as its source shows it; a short one is named with its counts,
+  `30.483 (2 of 3)`. Presence alone let a changed second occurrence, a deleted line or one
+  `PASS` → `FAIL` through. ⚠️ Both sides are counted by ONE matcher, the source on its own text
+  read as the PDF is: counted by tokens, the source had fewer than the PDF's matcher found (its
+  `t_{w}` prints "t w", which reads as "tw"), and that surplus hid a lost occurrence. The set-wide
+  check stays a presence check; the per-report one is the strict one.
 - **Number tokens keep** their sign (a "-" with nothing alphanumeric before it, so `M_{p}-0.7` is a
   binary minus), thousands separators, decimal part and exponent; `−` and the dashes read as "-".
   A comma is a thousands separator only inside a whole integer of groups (`1,250`, `12,300.5`);
@@ -167,8 +175,9 @@ occurrence deleted. Now (1% and 0%, the 1% being an unsigned number after a minu
   print its minus spaced, as MathJax sets a binary minus (`M_{u} -0.537` → "- 0.537").
 - **Words are two letters or more, in any script; every non-ASCII character is a symbol** (`λ`,
   `≤`, `²`, `°`), matched case and all (`Δ` is not `δ`). A word of three letters or fewer keeps its
-  case — that is where the units are (`MN` is not `mN`) — and is found as written or in capitals (a
-  heading set upper-case by CSS). A command that prints a glyph expects it (`\lambda` → λ, `\phi` →
+  case — that is where the units are (`MN` is not `mN`) — and is found as written, or in capitals
+  only where a stylesheet could have set it so: a source word with no capital of its own, on a PDF
+  line with no lower-case letter, beyond the occurrences the source's own capital token claims. A command that prints a glyph expects it (`\lambda` → λ, `\phi` →
   U+03D5 as MathJax writes it, `\circ` → ∘); an operator name expects its name (`\max` → "max");
   any other command name is blanked only where it is a command, so prose "Max" is still checked
   beside a `\max`. A phrasing tag joins what is either side of it (`<b>0</b>.95` is 0.95), and
@@ -178,18 +187,20 @@ All three real sets pass under it (2026-11-08). What it adds on the PDF side (`m
 cut by a page break, seen by where it is DRAWN (past the page's edge — a count let a lost image
 cancel a split one); each report's own image count; a diagram's title without its caption in
 reading order; text drawn invisibly (render mode 3, or a tenth of full alpha or less, every
-enclosing group's alpha multiplied in — `opacity: 0.02` is a group); text drawn in WHITE or near it
-(every channel ≥ `0xF0`; none in the real sets — a template with white text on a band would fail
-here, the loud direction); an image drawn but not seen (under 2 pt on a side, or less than half
+enclosing group's alpha multiplied in — `opacity: 0.02` is a group); text too LIGHT to read on the
+white page (contrast under 3:1, its alpha composited first; the real sets' lowest is 8.6:1 — a
+template with white text on a band would fail here until backgrounds are read, task 18 item 4);
+text too SMALL to read (under 2 pt; the real sets' smallest is 3.61). Both measured figures are on
+every build's `legible:` line; an image drawn but not seen (under 2 pt on a side, or less than half
 inside its clipping box); TeX sub/superscript marks in their braced form left in the printed text
 (`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
 ⚠️ Still NOT seen: text covered by an opaque box, or grey on grey; a diagram's drawing (only its
 labels are text) and an image's pixels; a one-letter unit (`12 m` → `12 N` — a single letter is in
 every report, so alone it proves nothing). A number broken across two lines fails (lines are never
 joined, else table rows would be) — the loud direction. 🔒 **Each of these is to be FIXED, not kept
-(owner, 2026-11-08: "We need fixes not limits")**, along with re-check 2's gaps (one occurrence of a
-value is enough; text under 2 pt; ASCII operators and `%`; light grey on the page): the plan and
-order are roadmap task 18.
+(owner, 2026-11-08: "We need fixes not limits")**, along with re-check 2's ASCII operators and `%` (its
+occurrence, size and white-page contrast gaps are fixed, #89): the plan and order are roadmap task
+18.
 
 Two extraction rules that were bugs first:
 
