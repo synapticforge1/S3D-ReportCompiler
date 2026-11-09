@@ -23,6 +23,10 @@ export type Primitive = {
   funcs?: Record<string, Record<string, string>>;
   /** feMerge's `feMergeNode`s, each its `in` (undefined: the one before). */
   nodes?: (string | undefined)[];
+  /** The lighting primitives' light, positions in USER units (task 18 8k). */
+  light?: Light;
+  /** `lighting-color`, straight RGB in sRGB 0-1. */
+  lightColour?: number[];
   /** The subregion in pixels of the raster, [x0, y0, x1, y1], or the whole when absent. */
   region?: number[];
 };
@@ -35,6 +39,12 @@ export type FilterRun = {
   unit: number[];
   /** The filter region in pixels, [x0, y0, x1, y1]: nothing is painted outside it. */
   region: number[];
+  /** User space at a position of the raster, pixel corners at integers (task 18 8k). */
+  toUser?: (i: number, j: number) => number[];
+  /** What an feImage paints, a raster of the run's size (premultiplied sRGB), or null. */
+  image?: (p: Primitive) => Raster | null;
+  /** Chrome's device pixels a pixel of this raster spans (feTile snaps to them). */
+  device?: number;
 };
 
 export function blank(width: number, height: number): Raster {
@@ -333,18 +343,381 @@ export function flood(width: number, height: number, rgba: number[], region: num
   return out;
 }
 
-/** Everything outside a pixel region made transparent. */
+/**
+ * Everything outside a pixel region made transparent -- the region rounded OUT to whole pixels, as
+ * Skia's crop rounds it (task 18 8k: a centre test dropped a partly covered edge row, 182 pixels of
+ * Chrome's turbulence).
+ */
 function cut(r: Raster, region: number[]): Raster {
   const out = blank(r.width, r.height);
+  const x0 = Math.floor(region[0] + 1e-6);
+  const y0 = Math.floor(region[1] + 1e-6);
+  const x1 = Math.ceil(region[2] - 1e-6);
+  const y1 = Math.ceil(region[3] - 1e-6);
   for (let y = 0; y < r.height; y++) {
     for (let x = 0; x < r.width; x++) {
-      if (x + 0.5 < region[0] || x + 0.5 > region[2] || y + 0.5 < region[1] || y + 0.5 > region[3])
-        continue;
+      if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
       const k = 4 * (y * r.width + x);
       for (let c = 0; c < 4; c++) out.data[k + c] = r.data[k + c];
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// task 18 8k: the rest of Filter Effects 1's primitives
+// ---------------------------------------------------------------------------
+
+/**
+ * feTurbulence's noise, the specification's reference algorithm (Filter Effects 1 § 15.27, the
+ * SVG 1.1 code): a lattice and gradients from its seeded generator, `noise2`, octaves summed.
+ */
+export class Turbulence {
+  private lattice = new Int32Array(0x200 + 2);
+  private gradient: Float64Array[][] = [];
+  constructor(seed: number) {
+    const B = 0x100;
+    const [m, a, q, r] = [2147483647, 16807, 127773, 2836];
+    let s = Math.trunc(seed);
+    if (s <= 0) s = -(s % (m - 1)) + 1;
+    if (s > m - 1) s = m - 1;
+    const rand = () => {
+      s = a * (s % q) - r * Math.trunc(s / q);
+      if (s <= 0) s += m;
+      return s;
+    };
+    this.gradient = Array.from({ length: 4 }, () =>
+      Array.from({ length: B + B + 2 }, () => new Float64Array(2)),
+    );
+    let i = 0;
+    for (let k = 0; k < 4; k++) {
+      for (i = 0; i < B; i++) {
+        this.lattice[i] = i;
+        const g = this.gradient[k][i];
+        for (let j = 0; j < 2; j++) g[j] = ((rand() % (B + B)) - B) / B;
+        const len = Math.sqrt(g[0] * g[0] + g[1] * g[1]);
+        g[0] /= len;
+        g[1] /= len;
+      }
+    }
+    while (--i) {
+      const k = this.lattice[i];
+      const j = rand() % B;
+      this.lattice[i] = this.lattice[j];
+      this.lattice[j] = k;
+    }
+    for (i = 0; i < B + 2; i++) {
+      this.lattice[B + i] = this.lattice[i];
+      for (let k = 0; k < 4; k++) {
+        this.gradient[k][B + i][0] = this.gradient[k][i][0];
+        this.gradient[k][B + i][1] = this.gradient[k][i][1];
+      }
+    }
+  }
+  private noise2(ch: number, vx: number, vy: number, st: number[] | null): number {
+    const [BM, N] = [0xff, 0x1000];
+    let t = vx + N;
+    let bx0 = Math.trunc(t) & BM;
+    let bx1 = (bx0 + 1) & BM;
+    const rx0 = t - Math.trunc(t);
+    const rx1 = rx0 - 1;
+    t = vy + N;
+    let by0 = Math.trunc(t) & BM;
+    let by1 = (by0 + 1) & BM;
+    const ry0 = t - Math.trunc(t);
+    const ry1 = ry0 - 1;
+    if (st) {
+      const [w, h, wx, wy] = st;
+      if (bx0 >= wx) bx0 -= w;
+      if (bx1 >= wx) bx1 -= w;
+      if (by0 >= wy) by0 -= h;
+      if (by1 >= wy) by1 -= h;
+    }
+    bx0 &= BM;
+    bx1 &= BM;
+    by0 &= BM;
+    by1 &= BM;
+    const L = this.lattice;
+    const [i, j] = [L[bx0], L[bx1]];
+    const [b00, b10, b01, b11] = [L[i + by0], L[j + by0], L[i + by1], L[j + by1]];
+    const curve = (x: number) => x * x * (3 - 2 * x);
+    const lerp = (x: number, p: number, q2: number) => p + x * (q2 - p);
+    const [sx, sy] = [curve(rx0), curve(ry0)];
+    const G = this.gradient[ch];
+    const a = lerp(sx, rx0 * G[b00][0] + ry0 * G[b00][1], rx1 * G[b10][0] + ry0 * G[b10][1]);
+    const b = lerp(sx, rx0 * G[b01][0] + ry1 * G[b01][1], rx1 * G[b11][0] + ry1 * G[b11][1]);
+    return lerp(sy, a, b);
+  }
+  /**
+   * One channel's sum at a point of user space: fractal noise, or turbulence (absolute values).
+   * `stitch`, when stitching, is the lattice width and height a tile spans at the (already
+   * fitted) frequencies; the wrap points are counted from the noise's origin, as Skia counts them
+   * (task 18 8k, measured: Skia's `StitchData` sets wrapX = 4096 + width, where the specification
+   * adds the tile's x -- the specification's form FAILED Chrome's stitched noise).
+   */
+  value(
+    ch: number,
+    x: number,
+    y: number,
+    freq: number[],
+    octaves: number,
+    fractal: boolean,
+    stitch: number[] | null,
+  ): number {
+    const [fx, fy] = freq;
+    let st: number[] | null = stitch
+      ? [stitch[0], stitch[1], 0x1000 + stitch[0], 0x1000 + stitch[1]]
+      : null;
+    let [vx, vy] = [x * fx, y * fy];
+    let [sum, ratio] = [0, 1];
+    for (let o = 0; o < octaves; o++) {
+      const n = this.noise2(ch, vx, vy, st);
+      sum += (fractal ? n : Math.abs(n)) / ratio;
+      vx *= 2;
+      vy *= 2;
+      ratio *= 2;
+      // stitching doubles with the octave: width, height, and their wrap points
+      if (st) st = [st[0] * 2, st[1] * 2, 2 * st[2] - 0x1000, 2 * st[3] - 0x1000];
+    }
+    return sum;
+  }
+}
+
+/**
+ * feTurbulence over a raster whose pixel centres map to user space by `toUser` (x, y of pixel
+ * column i, row j); straight RGBA from the four channels, premultiplied (Filter Effects 1 § 15.27).
+ */
+export function turbulence(
+  width: number,
+  height: number,
+  toUser: (i: number, j: number) => number[],
+  freq: number[],
+  octaves: number,
+  seed: number,
+  fractal: boolean,
+  stitch: number[] | null,
+): Raster {
+  const t = new Turbulence(seed);
+  const out = blank(width, height);
+  for (let j = 0; j < height; j++) {
+    for (let i = 0; i < width; i++) {
+      const [x, y] = toUser(i + 0.5, j + 0.5);
+      const v = [0, 1, 2, 3].map((ch) => {
+        const s = t.value(ch, x, y, freq, octaves, fractal, stitch);
+        return Math.max(0, Math.min(1, fractal ? (s + 1) / 2 : s));
+      });
+      out.data.set([v[0] * v[3], v[1] * v[3], v[2] * v[3], v[3]], 4 * (j * width + i));
+    }
+  }
+  return out;
+}
+
+/** feDisplacementMap: `src` sampled at each pixel displaced by `scale` x (channel - 0.5) of `map`. */
+export function displacement(
+  src: Raster,
+  map: Raster,
+  sx: number,
+  sy: number,
+  xc: number,
+  yc: number,
+): Raster {
+  const out = blank(src.width, src.height);
+  const at = (x: number, y: number, c: number) =>
+    x < 0 || y < 0 || x >= src.width || y >= src.height ? 0 : src.data[4 * (y * src.width + x) + c];
+  for (let y = 0; y < src.height; y++) {
+    for (let x = 0; x < src.width; x++) {
+      const k = 4 * (y * src.width + x);
+      const a = map.data[k + 3];
+      const ch = (c: number) => (c === 3 ? a : a > 0 ? map.data[k + c] / a : 0);
+      const px = x + sx * (ch(xc) - 0.5);
+      const py = y + sy * (ch(yc) - 0.5);
+      const [x0, y0] = [Math.floor(px), Math.floor(py)];
+      for (let c = 0; c < 4; c++) out.data[k + c] = at(x0, y0, c);
+    }
+  }
+  return out;
+}
+
+/** feConvolveMatrix, in pixels (Filter Effects 1 § 15.13): the kernel applied rotated, edges by mode. */
+export function convolve(
+  r: Raster,
+  order: number[],
+  kernel: number[],
+  divisor: number,
+  bias: number,
+  target: number[],
+  edge: string,
+  preserveAlpha: boolean,
+): Raster {
+  const [ox, oy] = order;
+  const out = blank(r.width, r.height);
+  const sample = (x: number, y: number, c: number) => {
+    let [xx, yy] = [x, y];
+    if (edge === "wrap") {
+      xx = ((xx % r.width) + r.width) % r.width;
+      yy = ((yy % r.height) + r.height) % r.height;
+    } else if (edge === "duplicate") {
+      xx = Math.max(0, Math.min(r.width - 1, xx));
+      yy = Math.max(0, Math.min(r.height - 1, yy));
+    } else if (xx < 0 || yy < 0 || xx >= r.width || yy >= r.height) return 0;
+    const k = 4 * (yy * r.width + xx);
+    if (!preserveAlpha) return r.data[k + c];
+    const a = r.data[k + 3];
+    return c === 3 ? a : a > 0 ? r.data[k + c] / a : 0;
+  };
+  for (let y = 0; y < r.height; y++) {
+    for (let x = 0; x < r.width; x++) {
+      const k = 4 * (y * r.width + x);
+      const v = [0, 0, 0, 0];
+      for (let c = 0; c < (preserveAlpha ? 3 : 4); c++) {
+        let s = 0;
+        for (let j = 0; j < oy; j++)
+          for (let i = 0; i < ox; i++)
+            s +=
+              sample(x - target[0] + i, y - target[1] + j, c) *
+              kernel[(oy - 1 - j) * ox + (ox - 1 - i)];
+        v[c] = s / divisor + bias * (preserveAlpha ? 1 : r.data[k + 3]);
+      }
+      if (preserveAlpha) {
+        const a = r.data[k + 3];
+        for (let c = 0; c < 3; c++) out.data[k + c] = Math.max(0, Math.min(1, v[c])) * a;
+        out.data[k + 3] = a;
+      } else {
+        out.data[k + 3] = Math.max(0, Math.min(1, v[3]));
+        for (let c = 0; c < 3; c++) out.data[k + c] = Math.max(0, Math.min(out.data[k + 3], v[c]));
+      }
+    }
+  }
+  return out;
+}
+
+/** A light for the lighting primitives (Filter Effects 1 § 15.15-15.17), positions in pixels. */
+export type Light =
+  | { kind: "distant"; azimuth: number; elevation: number }
+  | { kind: "point"; x: number; y: number; z: number }
+  | {
+      kind: "spot";
+      x: number;
+      y: number;
+      z: number;
+      at: number[];
+      exponent: number;
+      cone: number | null;
+    };
+
+/**
+ * feDiffuseLighting and feSpecularLighting: the alpha as a surface (times `surfaceScale`), its
+ * normal by the specification's Sobel kernels (edges and corners by their own), lit by `light`
+ * in `colour` (linear or sRGB as the filter works); diffuse is opaque, specular's alpha the most
+ * of its colour.
+ */
+export function lighting(
+  r: Raster,
+  specular: boolean,
+  surfaceScale: number,
+  constant: number,
+  exponent: number,
+  colour: number[],
+  light: Light,
+): Raster {
+  const [W, H] = [r.width, r.height];
+  const A = (x: number, y: number) =>
+    r.data[4 * (Math.max(0, Math.min(H - 1, y)) * W + Math.max(0, Math.min(W - 1, x))) + 3];
+  const out = blank(W, H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      // The specification's Sobel normal and its border table, as one rule: the weighted
+      // differences of the rows (columns) there are -- weight 2 for its own, 1 for each other --
+      // over their weights' sum, doubled where the difference is one-sided (inside 1/4, a border
+      // row 1/3, a border column 1/2, a corner 2/3).
+      const [left, right, up, down] = [x > 0, x < W - 1, y > 0, y < H - 1];
+      const across = (dy: number) => A(right ? x + 1 : x, y + dy) - A(left ? x - 1 : x, y + dy);
+      const along = (dx: number) => A(x + dx, down ? y + 1 : y) - A(x + dx, up ? y - 1 : y);
+      const rows = [...(up ? [-1] : []), 0, ...(down ? [1] : [])];
+      const cols = [...(left ? [-1] : []), 0, ...(right ? [1] : [])];
+      const weight = (d: number) => (d === 0 ? 2 : 1);
+      const gx =
+        ((left && right ? 1 : 2) / rows.reduce((s, d) => s + weight(d), 0)) *
+        rows.reduce((s, d) => s + weight(d) * across(d), 0);
+      const gy =
+        ((up && down ? 1 : 2) / cols.reduce((s, d) => s + weight(d), 0)) *
+        cols.reduce((s, d) => s + weight(d) * along(d), 0);
+      const nx = -surfaceScale * gx;
+      const ny = -surfaceScale * gy;
+      const nlen = Math.hypot(nx, ny, 1);
+      const N = [nx / nlen, ny / nlen, 1 / nlen];
+      const z = surfaceScale * A(x, y);
+      let L: number[];
+      let Lc = colour;
+      if (light.kind === "distant") {
+        const [az, el] = [(light.azimuth * Math.PI) / 180, (light.elevation * Math.PI) / 180];
+        L = [Math.cos(az) * Math.cos(el), Math.sin(az) * Math.cos(el), Math.sin(el)];
+      } else {
+        const d = [light.x - (x + 0.5), light.y - (y + 0.5), light.z - z];
+        const len = Math.hypot(d[0], d[1], d[2]) || 1;
+        L = d.map((v) => v / len);
+        if (light.kind === "spot") {
+          const s = [light.at[0] - light.x, light.at[1] - light.y, light.at[2] - light.z];
+          const sl = Math.hypot(s[0], s[1], s[2]) || 1;
+          const minusLdotS = -(L[0] * s[0] + L[1] * s[1] + L[2] * s[2]) / sl;
+          // Skia's cone: cut at its angle, faded over the last 0.016 of its cosine (antialiased)
+          const outer = light.cone === null ? -1 : Math.cos((light.cone * Math.PI) / 180);
+          let f = minusLdotS > 0 && minusLdotS >= outer ? minusLdotS ** light.exponent : 0;
+          if (light.cone !== null && minusLdotS < outer + 0.016)
+            f *= Math.max(0, (minusLdotS - outer) / 0.016);
+          Lc = colour.map((c) => c * f);
+        }
+      }
+      let rgb: number[];
+      let a: number;
+      if (!specular) {
+        const ndl = Math.max(0, N[0] * L[0] + N[1] * L[1] + N[2] * L[2]);
+        rgb = Lc.map((c) => Math.min(1, constant * ndl * c));
+        a = 1;
+      } else {
+        const Hh = [L[0], L[1], L[2] + 1];
+        const hl = Math.hypot(Hh[0], Hh[1], Hh[2]) || 1;
+        const ndh = Math.max(0, (N[0] * Hh[0] + N[1] * Hh[1] + N[2] * Hh[2]) / hl);
+        rgb = Lc.map((c) => Math.min(1, constant * ndh ** exponent * c));
+        a = Math.max(...rgb);
+      }
+      // As premultiplied, both (measured: Chrome's specular pixel is the light's colour at the
+      // alpha, so R, G, B with alpha their most is already premultiplied); diffuse is opaque.
+      out.data.set([rgb[0], rgb[1], rgb[2], a], 4 * (y * W + x));
+    }
+  }
+  return out;
+}
+
+/**
+ * feTile: the input's subregion (pixels [x0, y0, x1, y1]) repeated over the raster -- its corner
+ * and size rounded to whole DEVICE pixels (`device`: device pixels a raster pixel), as Chrome tiles
+ * (task 18 8k, measured: a 10-unit tile repeats every 46 device pixels, 9.92 units).
+ */
+export function tile(r: Raster, region: number[], device = 1): Raster {
+  const snap = (v: number) => Math.round(v * device) / device;
+  const [x0, y0] = [snap(region[0]), snap(region[1])];
+  const [w, h] = [
+    Math.max(1 / device, snap(region[2]) - x0),
+    Math.max(1 / device, snap(region[3]) - y0),
+  ];
+  const out = blank(r.width, r.height);
+  for (let y = 0; y < r.height; y++) {
+    for (let x = 0; x < r.width; x++) {
+      // the pixel's centre, back into the tile, to the source pixel there
+      const sx = Math.floor(x0 + ((((x + 0.5 - x0) % w) + w) % w));
+      const sy = Math.floor(y0 + ((((y + 0.5 - y0) % h) + h) % h));
+      if (sx < 0 || sy < 0 || sx >= r.width || sy >= r.height) continue;
+      for (let c = 0; c < 4; c++)
+        out.data[4 * (y * r.width + x) + c] = r.data[4 * (sy * r.width + sx) + c];
+    }
+  }
+  return out;
+}
+
+/** A light's x, y (pixels) and z as an object. */
+function xyz(p: number[], z: number) {
+  return { x: p[0], y: p[1], z };
 }
 
 /** The primitives this module runs; any other is named by the reader, not passed. */
@@ -359,6 +732,14 @@ export const PRIMITIVES = new Set([
   "feblend",
   "femorphology",
   "fedropshadow",
+  // task 18 8k
+  "feturbulence",
+  "fedisplacementmap",
+  "feconvolvematrix",
+  "fediffuselighting",
+  "fespecularlighting",
+  "fetile",
+  "feimage",
 ]);
 
 /**
@@ -375,7 +756,9 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
     return out;
   };
   const results = new Map<string, Raster>();
+  const regions = new Map<string, number[]>();
   let last = source;
+  let lastRegion = run.region;
   const input = (name: string | undefined) => {
     if (name === undefined || name === "") return last;
     if (name === "SourceGraphic") return source;
@@ -384,6 +767,13 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
     if (!r) throw new Error(`the filter input "${name}"`);
     return r;
   };
+  /** An input's subregion in pixels (feTile repeats it). */
+  const regionOf = (name: string | undefined) =>
+    name === undefined || name === "" ? lastRegion : (regions.get(name) ?? run.region);
+  const toUser = run.toUser ?? ((i: number, j: number) => [i * run.unit[0], j * run.unit[1]]);
+  // pixels from user space, for a light's place (the raster is axis-aligned to user space)
+  const [ox, oy] = toUser(0, 0);
+  const fromUser = (x: number, y: number) => [(x - ox) / run.unit[0], (y - oy) / run.unit[1]];
   const num = (s: string | undefined, d: number) => {
     const v = Number.parseFloat(s ?? "");
     return Number.isFinite(v) ? v : d;
@@ -398,9 +788,36 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
   };
   const space = (rgba: number[]) =>
     run.linear ? [toLinear(rgba[0]), toLinear(rgba[1]), toLinear(rgba[2]), rgba[3]] : rgba;
+  /**
+   * A primitive's default subregion (Filter Effects 1 § 9.4): for one with inputs, the union of
+   * theirs (`SourceGraphic` and `SourceAlpha` the filter region's); for a generator (flood,
+   * turbulence, image), the filter region (task 18 8k: every primitive took the filter region, so
+   * an feTile of an offset flood tiled the whole region where Chrome tiles the flood's).
+   */
+  const defaultRegion = (p: Primitive): number[] => {
+    const inputs =
+      p.tag === "femerge"
+        ? (p.nodes ?? [])
+        : p.tag === "fecomposite" || p.tag === "feblend" || p.tag === "fedisplacementmap"
+          ? [p.attrs.in, p.attrs.in2]
+          : // feTile replicates to fill: the filter region, as generators (§ 9.4's exception)
+            ["feflood", "feturbulence", "feimage", "fetile"].includes(p.tag)
+            ? []
+            : [p.attrs.in];
+    if (inputs.length === 0) return run.region;
+    const boxes = inputs.map((name) =>
+      name === "SourceGraphic" || name === "SourceAlpha" ? run.region : regionOf(name),
+    );
+    return [
+      Math.min(...boxes.map((b) => b[0])),
+      Math.min(...boxes.map((b) => b[1])),
+      Math.max(...boxes.map((b) => b[2])),
+      Math.max(...boxes.map((b) => b[3])),
+    ];
+  };
   for (const p of run.primitives) {
     const a = p.attrs;
-    const region = p.region ?? run.region;
+    const region = p.region ?? defaultRegion(p);
     let out: Raster;
     switch (p.tag) {
       case "fegaussianblur": {
@@ -464,12 +881,128 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster {
         out = overRaster(src, colour);
         break;
       }
+      case "feturbulence": {
+        let [fx, fy] = pair(a.basefrequency, 0).map((f) => Math.max(0, f));
+        let stitch: number[] | null = null;
+        if (a.stitchtiles === "stitch") {
+          // Skia's stitching (via Blink): the tile -- the subregion -- in device pixels, rounded;
+          // each frequency fitted to a whole number of periods in it, the nearer by ratio; the
+          // lattice width and height it spans then rounded.
+          const [tw, th] = [Math.round(region[2] - region[0]), Math.round(region[3] - region[1])];
+          const fit = (f: number, size: number, unit: number) => {
+            const perPixel = f * unit;
+            if (perPixel === 0 || size <= 0) return f;
+            const lo = Math.floor(size * perPixel) / size;
+            const hi = Math.ceil(size * perPixel) / size;
+            return (lo > 0 && perPixel / lo < hi / perPixel ? lo : hi) / unit;
+          };
+          fx = fit(fx, tw, run.unit[0]);
+          fy = fit(fy, th, run.unit[1]);
+          stitch = [Math.round(tw * fx * run.unit[0]), Math.round(th * fy * run.unit[1])];
+        }
+        // Stitched noise is counted from the tile's corner (its wrap is from the noise origin).
+        const [cx, cy] = stitch ? toUser(region[0], region[1]) : [0, 0];
+        out = turbulence(
+          W,
+          H,
+          (i, j) => {
+            const [x, y] = toUser(i, j);
+            return [x - cx, y - cy];
+          },
+          [fx, fy],
+          // Blink caps the octaves at 9 (what 8 bits can show, and one)
+          Math.min(9, Math.max(0, Math.trunc(num(a.numoctaves, 1)))),
+          num(a.seed, 0),
+          a.type === "fractalNoise",
+          stitch,
+        );
+        break;
+      }
+      case "fedisplacementmap": {
+        const channel = (s: string | undefined) => ({ R: 0, G: 1, B: 2, A: 3 })[s ?? "A"] ?? 3;
+        const scale = num(a.scale, 0);
+        out = displacement(
+          input(a.in),
+          input(a.in2),
+          scale / run.unit[0],
+          scale / run.unit[1],
+          channel(a.xchannelselector),
+          channel(a.ychannelselector),
+        );
+        break;
+      }
+      case "feconvolvematrix": {
+        const [ox2, oy2] = pair(a.order, 3).map((v) => Math.trunc(v));
+        const kernel = (a.kernelmatrix ?? "")
+          .trim()
+          .split(/[\s,]+/)
+          .filter(Boolean)
+          .map(Number);
+        if (kernel.length !== ox2 * oy2 || ox2 < 1 || oy2 < 1)
+          throw new Error("a convolution's kernel");
+        const sum = kernel.reduce((s, v) => s + v, 0);
+        out = convolve(
+          input(a.in),
+          [ox2, oy2],
+          kernel,
+          num(a.divisor, sum === 0 ? 1 : sum) || 1,
+          num(a.bias, 0),
+          [num(a.targetx, Math.floor(ox2 / 2)), num(a.targety, Math.floor(oy2 / 2))],
+          a.edgemode ?? "duplicate",
+          a.preservealpha === "true",
+        );
+        break;
+      }
+      case "fediffuselighting":
+      case "fespecularlighting": {
+        if (!p.light) throw new Error(`a <${p.tag}> with no light`);
+        const specular = p.tag === "fespecularlighting";
+        const L = p.light;
+        // a light's place, in pixels; its height scaled as its x is
+        const lit: Light =
+          L.kind === "distant"
+            ? L
+            : L.kind === "point"
+              ? { ...L, ...xyz(fromUser(L.x, L.y), L.z / run.unit[0]) }
+              : {
+                  ...L,
+                  ...xyz(fromUser(L.x, L.y), L.z / run.unit[0]),
+                  at: [...fromUser(L.at[0], L.at[1]), L.at[2] / run.unit[0]],
+                };
+        out = lighting(
+          input(a.in),
+          specular,
+          // the surface is in device pixels, its height scaled with them (measured: Chrome's
+          // edges match only at surfaceScale times pixels a unit, as its light's height is)
+          num(a.surfacescale, 1) / Math.sqrt(run.unit[0] * run.unit[1]),
+          num(specular ? a.specularconstant : a.diffuseconstant, 1),
+          num(a.specularexponent, 1),
+          space([...(p.lightColour ?? [1, 1, 1]), 1]).slice(0, 3),
+          lit,
+        );
+        break;
+      }
+      case "fetile":
+        out = tile(input(a.in), regionOf(a.in), run.device ?? 1);
+        break;
+      case "feimage": {
+        const img = run.image?.(p) ?? null;
+        if (!img) throw new Error("an <feImage> this check cannot paint");
+        out = run.linear ? convert(img, true) : img;
+        break;
+      }
       default:
         throw new Error(`the filter primitive <${p.tag}>`);
     }
     out = cut(out, region);
+    // each result as Chrome keeps it: 8 bits a channel, premultiplied (task 18 8k)
+    for (let q = 0; q < out.data.length; q++) out.data[q] = Math.round(out.data[q] * 255) / 255;
     last = out;
-    if (a.result) results.set(a.result, out);
+    lastRegion = region;
+    if (a.result) {
+      results.set(a.result, out);
+      regions.set(a.result, region);
+    }
   }
   return cut(run.linear ? convert(last, false) : last, run.region);
 }

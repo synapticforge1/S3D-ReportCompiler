@@ -965,6 +965,9 @@ function imageDifference(a: Pixels, b: Pixels): string | null {
   return differ === 0 ? null : `${differ} of ${a.width * a.height} pixels differ`;
 }
 
+/** A tiling pattern's raster as the walk finds it: image id, unit square to page, its repeat. */
+type RasterRef = { id: string; m: number[]; tile?: { pm: number[]; step: number[] } };
+
 /** Every stylesheet of a report, in document order: a browser styles an inline SVG with all. */
 function reportCss(source: string): string {
   return [
@@ -1307,8 +1310,8 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       fillAlphaShading?: PdfShading;
       strokeAlphaShading?: PdfShading;
       // Group 8g: a pattern's raster, by image id and its matrix to the page.
-      fillRaster?: { id: string; m: number[] };
-      strokeRaster?: { id: string; m: number[] };
+      fillRaster?: RasterRef;
+      strokeRaster?: RasterRef;
       // Group 8h: the soft mask in force (`SMask` set), as its content was recorded.
       smask?: PdfMask;
       // Group 8d: every clip in force, as polygons on the page; the line cap, join, miter limit.
@@ -1336,9 +1339,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     let clipPending = false;
     let clipEvenOdd = false;
     /** A pattern's raster found while reading its paint (group 8g), handed to the graphics state. */
-    let rasterPending: { id: string; m: number[] } | null = null;
+    let rasterPending: RasterRef | null = null;
     /** The paths painted with a pattern's raster, whose pixels are fetched after the walk. */
-    const rastersToFetch: { at: number; as: "fill" | "stroke"; id: string; m: number[] }[] = [];
+    const rastersToFetch: ({ at: number; as: "fill" | "stroke" } & RasterRef)[] = [];
     // Group 8h: soft masks. A group with one is a mask's DEFINITION: what it paints is the mask,
     // not paint a reader sees; `SMask` set in the graphics state then puts the last one defined
     // over what follows (measured on Chrome's PDFs for an SVG mask, 2026-11-09).
@@ -1710,7 +1713,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           // pattern holds only image paints -- the pattern rasterised over the drawing's whole
           // viewport at a pixel a point, and one of no height that paints nothing. Kept as that one
           // image under its matrix to the page; its pixels are fetched after the walk.
-          let rasterAt: { id: string; m: number[] } | null = null;
+          let rasterAt: RasterRef | null = null;
           if (!shading && ir) {
             const inner: number[][] = [];
             let cm = [1, 0, 0, 1, 0, 0];
@@ -1739,7 +1742,13 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
             // The companion "of no height" is not exactly none (its height rounds to 0.000): it
             // paints under a square point, where the raster covers thousands.
             const seen = images.filter((x) => Math.abs(x.m[0] * x.m[3] - x.m[1] * x.m[2]) >= 1);
-            if (!odd && seen.length === 1) rasterAt = seen[0];
+            // with the pattern's matrix and step: it repeats (feTile, task 18 8k)
+            const step = [Number(args[5]), Number(args[6])];
+            if (!odd && seen.length === 1)
+              rasterAt = {
+                ...seen[0],
+                ...(step.every((s) => s > 0) ? { tile: { pm, step } } : {}),
+              };
           }
           if (rasterAt) {
             other = undefined;
@@ -1997,7 +2006,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     for (const r of rastersToFetch) {
       const pixels = await pdfImage(page, r.id);
       const v = obs.vectors[r.at];
-      const raster = { m: r.m, pixels };
+      const raster = { m: r.m, pixels, ...(r.tile ? { tile: r.tile } : {}) };
       if (r.as === "fill") v.fillRaster = raster;
       else v.strokeRaster = raster;
     }
@@ -3108,7 +3117,18 @@ try {
             if (typeof d === "string") check.failures.push(`${label} -- an <image> -- ${d}`);
           }
           imagesDrawn += read.images.length;
-          const result = compareSvg(read, vectors, runs, used, imagePaints, sizeOf);
+          // an feImage's data: image too (task 18 8k)
+          for (const f of read.filters)
+            for (const p of f.primitives) {
+              const href = (p.attrs.href ?? p.attrs["xlink:href"] ?? "").trim();
+              if (p.tag === "feimage" && href.startsWith("data:") && !decoded.has(href))
+                decoded.set(href, await decodeSource(href));
+            }
+          const pixelsOf = (uri: string) => {
+            const d = decoded.get(uri);
+            return d && typeof d !== "string" ? d : null;
+          };
+          const result = compareSvg(read, vectors, runs, used, imagePaints, sizeOf, pixelsOf);
           for (const match of result.images) {
             const ours = decoded.get(match.uri);
             const theirs = painted.find(

@@ -229,9 +229,10 @@ by pixel against the pattern's own content (within the range its edges can blur 
 through the verification's own primitives (`src/report_filter.ts`); since #105 `<switch>` and
 conditional attributes (the render pinned to `--lang=en-US`), a `foreignObject`'s text inside its
 box, an SVG `<image>` as its own drawing, a mask in a mask, sibling combinators and pseudo-classes.
-⚠️ Not yet verified, and named as such: lighting, turbulence, displacement, convolution, `feTile`
-/ `feImage`; a drawing of filtered elements alone (unplaceable); `:has()`; an `<image>` outside
-the document; WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
+Since #106 `:has()`, and convolution, lighting, fractal noise and feImage.
+⚠️ Not yet verified, and named as such: turbulence of type `turbulence`, stitched noise, `feTile`,
+`feDisplacementMap`, specular light from a spot (each run, but not yet matching Chrome); a drawing
+of filtered elements alone (unplaceable); an `<image>` outside the document; WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
 style — of HTML text and of SVG labels.
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in

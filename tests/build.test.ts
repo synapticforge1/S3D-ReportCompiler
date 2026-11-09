@@ -3739,13 +3739,20 @@ test(
       "<style>.probe polyline { stroke: #00aa00; stroke-width: 2 }</style>",
     );
     assert.equal(styled.code, 0, tail(styled.out));
-    // (`:first-child` and the sibling combinators are read since task 18 8j; `:has()` is not.)
+    // A :has() rule (read since 8k) restyles groups whose own paths keep their stroke -- and not a
+    // marker's arrow, whose content the reader walks as a group (it did, and the build FAILED).
+    const hasRule = plant("a has rule", "<style>.probe g:has(path) { stroke: #00aa00 }</style>");
+    assert.equal(hasRule.code, 0, tail(hasRule.out));
+    // (`:nth-child(... of S)` is not read.)
     const unknown = plant(
       "an unread rule",
-      "<style>.probe g:has(path) { stroke: #00aa00 }</style>",
+      "<style>.probe path:nth-child(2 of .x) { stroke: #00aa00 }</style>",
     );
     assert.equal(unknown.code, 1, tail(unknown.out));
-    has(unknown.out, /drawing 2 -- the style rule ".probe g:has\(path\)" is not verified/);
+    has(
+      unknown.out,
+      /drawing 2 -- the style rule ".probe path:nth-child\(2 of \.x\)" is not verified/,
+    );
   },
 );
 
@@ -4900,6 +4907,137 @@ test(
     writeFileSync(
       join(dir, "member_0_report.html"),
       sample.replace(/<\/body>/i, () => `${PROBE_8J}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+  },
+);
+
+// Group 8k: :has(), and the filter primitives that now match Chrome -- fractal noise, convolution,
+// diffuse light (distant, point, spot), specular light (distant), feImage of an element and of a
+// PNG, a flood coloured by a stylesheet. Lights coloured, as white light on white paper shows
+// nothing of its strength. The square places the drawing.
+const PROBE_8K = `<svg viewBox="0 0 300 150" width="600" height="300" xmlns="http://www.w3.org/2000/svg">
+<style>.k8 g:has(> circle) rect { fill: #cc0000 } .k8 rect:has(+ circle) { stroke: #0000cc; stroke-width: 2 } .k8:has(ellipse) rect { fill-opacity: 0.5 } .k8 g:has(svg circle) rect { fill-opacity: 0.3 } .k8f feFlood { flood-color: #aa00aa }</style>
+<defs>
+<filter id="k8-noise"><feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="2" seed="3"/></filter>
+<filter id="k8-conv"><feConvolveMatrix order="3" kernelMatrix="1 0 0 0 1 0 0 0 1" edgeMode="none"/></filter>
+<filter id="k8-dist"><feDiffuseLighting surfaceScale="3" lighting-color="#ffeecc"><feDistantLight azimuth="45" elevation="40"/></feDiffuseLighting></filter>
+<filter id="k8-point"><feDiffuseLighting surfaceScale="2" lighting-color="#ccddff"><fePointLight x="160" y="70" z="30"/></feDiffuseLighting></filter>
+<filter id="k8-spot"><feDiffuseLighting surfaceScale="2" lighting-color="#ff3300"><feSpotLight x="230" y="20" z="40" pointsAtX="240" pointsAtY="50" pointsAtZ="0" specularExponent="2" limitingConeAngle="40"/></feDiffuseLighting></filter>
+<filter id="k8-spec"><feSpecularLighting surfaceScale="2" specularConstant="1.2" specularExponent="8" lighting-color="#ff3300"><feDistantLight azimuth="30" elevation="50"/></feSpecularLighting></filter>
+<rect id="k8-src" x="10" y="8" width="15" height="10" fill="#0000cc"/>
+<filter id="k8-el"><feImage href="#k8-src"/></filter>
+<filter id="k8-png"><feImage href="data:image/png;base64,${PNG_4X2}" x="195" y="65" width="30" height="20" preserveAspectRatio="none"/></filter>
+<filter id="k8-flood" class="k8f"><feFlood class="k8f" flood-opacity="0.5"/></filter>
+</defs>
+<rect x="10" y="10" width="50" height="30" fill="#cc6600" filter="url(#k8-noise)"/>
+<rect x="80" y="10" width="50" height="30" fill="#cc6600" filter="url(#k8-conv)"/>
+<rect x="150" y="10" width="50" height="30" fill="#cc6600" filter="url(#k8-dist)"/>
+<rect x="220" y="10" width="50" height="30" fill="#cc6600" filter="url(#k8-spot)"/>
+<rect x="145" y="60" width="30" height="30" fill="#cc6600" filter="url(#k8-point)"/>
+<rect x="10" y="60" width="50" height="30" fill="#cc6600" filter="url(#k8-spec)"/>
+<rect x="80" y="60" width="50" height="30" fill="#cc6600" filter="url(#k8-el)"/>
+<rect x="190" y="60" width="50" height="30" fill="#cc6600" filter="url(#k8-png)"/>
+<rect x="10" y="110" width="50" height="30" fill="#cc6600" filter="url(#k8-flood)"/>
+<g class="k8"><g><rect x="80" y="110" width="10" height="10"/><circle cx="95" cy="115" r="4"/></g><g><rect x="110" y="110" width="10" height="10"/></g><rect x="130" y="110" width="10" height="10"/><circle cx="150" cy="115" r="4"/></g>
+<rect x="285" y="135" width="10" height="10" fill="#333333"/>
+</svg>`;
+
+test(
+  "class B, task 18 group 8k: :has(), and filter primitives that match Chrome's",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const fx = await import(pathToFileURL(join(ROOT, "src", "report_filter.ts")).href);
+    const read = svgs.readSvg(PROBE_8K);
+    assert.deepEqual(read.unread, []);
+    // :has(): the group holding a circle child is red; the rect followed by a circle is stroked;
+    // nothing holds an ellipse
+    const hexOf = (c: number[] | null) =>
+      c
+        ? `#${c
+            .map((v) =>
+              Math.round(v * 255)
+                .toString(16)
+                .padStart(2, "0"),
+            )
+            .join("")}`
+        : "none";
+    const small = read.shapes.filter((s: { lines: { points: number[][] }[] }) => {
+      const xs = s.lines.flatMap((l) => l.points.map((p) => p[0]));
+      return (
+        Math.max(...xs) - Math.min(...xs) <= 10.001 &&
+        Math.min(...xs) >= 80 &&
+        Math.max(...xs) <= 155
+      );
+    });
+    assert.deepEqual(
+      small.map((s: { fill: number[] | null }) => hexOf(s.fill)),
+      ["#cc0000", "#000000", "#000000", "#000000", "#000000"],
+    );
+    assert.deepEqual(
+      small.map((s: { stroke: number[] | null }) => hexOf(s.stroke)),
+      ["#0000cc", "none", "none", "#0000cc", "none"],
+    );
+    // :has(ellipse) matches nothing; :has(svg circle) is anchored at the group -- no <svg> inside
+    // it, though the drawing's own root holds the circle (unanchored, it would match)
+    assert.ok(
+      small.every((s: { fillAlpha: number }) => s.fillAlpha === 1),
+      "no :has() fading",
+    );
+    // What still differs from Chrome is named, never judged.
+    const refused = (f: string) =>
+      svgs.readSvg(
+        `<svg width="10" height="10"><defs><filter id="f">${f}</filter></defs><rect width="9" height="9" filter="url(#f)"/></svg>`,
+      ).unread;
+    assert.deepEqual(refused('<feTurbulence baseFrequency="0.1"/>'), [
+      "an <feTurbulence> of type turbulence",
+    ]);
+    assert.deepEqual(
+      refused('<feTurbulence type="fractalNoise" baseFrequency="0.1" stitchTiles="stitch"/>'),
+      ["a stitched <feTurbulence>"],
+    );
+    assert.deepEqual(refused("<feTile/>"), ["an <fetile>"]);
+    assert.deepEqual(refused('<feDisplacementMap in2="SourceGraphic"/>'), [
+      "an <fedisplacementmap>",
+    ]);
+    assert.deepEqual(refused("<feSpecularLighting><feSpotLight/></feSpecularLighting>"), [
+      "an <fespecularlighting> of a spot light",
+    ]);
+    // The primitives against values worked by hand.
+    //   a flat surface lit straight down: N.L = 1, so diffuse gives kd times the light
+    const flat = fx.blank(5, 5);
+    for (let k = 0; k < 25; k++) flat.data[4 * k + 3] = 1;
+    const lit = fx.lighting(flat, false, 1, 0.5, 1, [1, 0.5, 0.25], {
+      kind: "distant",
+      azimuth: 0,
+      elevation: 90,
+    });
+    assert.deepEqual(
+      Array.from(lit.data.slice(48, 52) as Float64Array).map((v) => +v.toFixed(6)),
+      [0.5, 0.25, 0.125, 1],
+    );
+    //   a convolution's kernel is applied turned: its top-left weighs the source pixel down-right
+    //   (Filter Effects 1 § 15.13), so a lone dot comes out up-left
+    const dot = fx.blank(3, 3);
+    dot.data.set([1, 1, 1, 1], 4 * 4);
+    const conv = fx.convolve(dot, [3, 3], [1, 0, 0, 0, 0, 0, 0, 0, 0], 1, 0, [1, 1], "none", false);
+    assert.equal(conv.data[3], 1, "the dot moved up-left");
+    assert.equal(conv.data[4 * 8 + 3], 0);
+    //   a tile repeats its region
+    const cell = fx.blank(6, 2);
+    cell.data.set([1, 0, 0, 1], 0);
+    const tiled = fx.tile(cell, [0, 0, 2, 2]);
+    assert.equal(tiled.data[4 * 2 + 3], 1, "the cell's first pixel again two along");
+
+    // End to end: Chrome draws each, and the build PASSES.
+    const dir = join(work, "task18-8k");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8K}</body>`),
     );
     const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
     assert.equal(r.code, 0, tail(r.out));

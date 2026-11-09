@@ -168,8 +168,72 @@ export function svgMaskValue(m: SvgMask, x: number, y: number, tol: number): num
   return m.type === "alpha" ? c[3] : (0.2125 * c[0] + 0.7154 * c[1] + 0.0721 * c[2]) * c[3];
 }
 
-/** A raster a PDF paints with: the unit square under `m` (row 0 at v = 1), its pixels. */
-export type PdfRaster = { m: Matrix; pixels: RasterPixels | null };
+/**
+ * A raster a PDF paints with: the unit square under `m` (row 0 at v = 1), its pixels; `tile`, when
+ * it repeats -- its pattern's matrix to the page and its step in pattern space (task 18 8k: Chrome
+ * writes feTile as a fill with such a pattern).
+ */
+export type PdfRaster = {
+  m: Matrix;
+  pixels: RasterPixels | null;
+  tile?: { pm: Matrix; step: number[] };
+};
+
+/**
+ * A path filled with a repeating raster, as one image (task 18 8k): on the cell image's own pixel
+ * lattice over the path's box, each pixel taken from the cell at its place modulo the step.
+ */
+export function tiledPaint(v: PdfVector): PdfImagePaint | null {
+  const r = v.fillRaster;
+  if (!r?.pixels || !r.tile) return null;
+  const { width: CW, height: CH, data } = r.pixels;
+  const [ps, qs] = [Math.abs(r.m[0]) / CW, Math.abs(r.m[3]) / CH];
+  if (Math.abs(r.m[1]) > 1e-9 || Math.abs(r.m[2]) > 1e-9 || !(ps > 0 && qs > 0)) return null;
+  const box = polygonBox(polygonsOf(v.lines, v.m));
+  const W = Math.round((box[2] - box[0]) / ps);
+  const H = Math.round((box[3] - box[1]) / qs);
+  if (W <= 0 || H <= 0 || W * H > 4e6) return null;
+  const toPattern = invert(r.tile.pm);
+  const unitToPattern = mul(r.m, toPattern);
+  const cellUnit = invert(unitToPattern); // pattern space to the cell image's unit square
+  const [sx, sy] = r.tile.step;
+  // the cell's own place in pattern space: the least corner of its image (the image's (0, 0) is
+  // its BOTTOM there, measured: a cell under [82, 0, 0, -55, 0, 55])
+  const corners = [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+    [1, 1],
+  ].map(([u, w]) => apply(unitToPattern, u, w));
+  const ox = Math.min(...corners.map((c) => c[0]));
+  const oy = Math.min(...corners.map((c) => c[1]));
+  const out = new Uint8Array(W * H * 4);
+  for (let j = 0; j < H; j++) {
+    for (let i = 0; i < W; i++) {
+      const [x, y] = [box[0] + (i + 0.5) * ps, box[3] - (j + 0.5) * qs];
+      let [px, py] = apply(toPattern, x, y);
+      // back into the first cell
+      px = ox + ((((px - ox) % sx) + sx) % sx);
+      py = oy + ((((py - oy) % sy) + sy) % sy);
+      const [u, vv] = apply(cellUnit, px, py);
+      if (u < 0 || u >= 1 || vv <= 0 || vv > 1) continue;
+      const k =
+        4 *
+        (Math.min(CH - 1, Math.floor((1 - vv) * CH)) * CW + Math.min(CW - 1, Math.floor(u * CW)));
+      out.set(data.subarray(k, k + 4), 4 * (j * W + i));
+    }
+  }
+  return {
+    page: v.page,
+    order: v.order,
+    m: [W * ps, 0, 0, H * qs, box[0], box[1]],
+    width: W,
+    height: H,
+    alpha: v.fillAlpha,
+    clips: v.clips ?? [],
+    pixels: { width: W, height: H, data: out },
+  };
+}
 
 /**
  * An SVG `<pattern>`, resolved (its `href` chain followed): the tile in `units`, the transform,
@@ -230,6 +294,8 @@ export type SvgFilterUse = {
   primitives: Primitive[];
   linear: boolean;
   alpha: number;
+  /** What each feImage of an element paints, its shapes in the user space (task 18 8k). */
+  feImages?: SvgShape[][];
 };
 
 /** One text label of the source SVG. */
@@ -418,7 +484,18 @@ function rectPolygon(x: number, y: number, w: number, h: number, m: Matrix): num
 // Reading the SVG
 // ---------------------------------------------------------------------------
 
-type Node = { tag: string; attrs: Map<string, string>; children: Node[]; text: string };
+/**
+ * An element. `as`: what a stand-in group really is -- a marker's, a symbol's, a pattern's or a
+ * mask's content is walked as a `g`, but a selector sees the `<marker>` (task 18 8k: a
+ * `g:has(path)` rule restyled a marker's arrow, which Chrome does not).
+ */
+type Node = {
+  tag: string;
+  attrs: Map<string, string>;
+  children: Node[];
+  text: string;
+  as?: string;
+};
 
 /** The SVG as a tree of elements, text kept (entities decoded), comments and CDATA dropped. */
 function parse(svg: string): Node {
@@ -889,12 +966,13 @@ export function filterDifference(
   use: SvgFilterUse,
   p: PdfImagePaint,
   toPage: Matrix,
+  pixelsOf: (uri: string) => RasterPixels | null = () => null,
 ): string | null {
   if (!p.pixels) return "an image that does not decode";
   if (Math.abs(p.alpha - use.alpha) > 0.02)
     return `at opacity ${p.alpha.toFixed(2)}, ${use.alpha.toFixed(2)} in its source`;
   const { width: W, height: H, data } = p.pixels;
-  const run = filterExpected(use, p.m, W, H, toPage);
+  const run = filterExpected(use, p.m, W, H, toPage, pixelsOf);
   if (typeof run === "string") return run;
   const { expected, gi0, gj0, GW, GH, doubtful, ox, oy, ux, uy } = run;
   const overWhite = (r: typeof expected, k: number) =>
@@ -950,12 +1028,142 @@ export function filterDifference(
 }
 
 /**
+ * What an feImage paints on a filter's raster (task 18 8k): an element of the drawing, painted in
+ * the filtered element's user space (3 by 3 points a pixel); or a data: raster, fitted into the
+ * primitive's subregion by `preserveAspectRatio` and sampled at pixel centres. Premultiplied sRGB.
+ */
+function feImageRaster(
+  p: Primitive,
+  use: SvgFilterUse,
+  GW: number,
+  GH: number,
+  toUser: (i: number, j: number) => number[],
+  region: number[],
+  pixelsOf: (uri: string) => RasterPixels | null,
+) {
+  const out = blank(GW, GH);
+  const element = p.attrs["#element"];
+  if (element !== undefined) {
+    const content = use.feImages?.[Number(element)] ?? [];
+    // Chrome paints the element moved to the subregion's corner (measured: an element at 45, 35
+    // in a region from 34, 26 drawn at 78.9, 60.8)
+    const sub = p.region ?? region;
+    const [sx, sy] = toUser(sub[0], sub[1]);
+    for (let j = 0; j < GH; j++) {
+      for (let i = 0; i < GW; i++) {
+        const acc = [0, 0, 0, 0];
+        for (let a = 0; a < 3; a++)
+          for (let b = 0; b < 3; b++) {
+            const [ux, uy] = toUser(i + (a + 0.5) / 3, j + (b + 0.5) / 3);
+            const [x, y] = [ux - sx, uy - sy];
+            const c = contentColour(content, x, y, 0) ?? [0, 0, 0, 0];
+            for (let k = 0; k < 3; k++) acc[k] += (c[k] * c[3]) / 9;
+            acc[3] += c[3] / 9;
+          }
+        out.data.set(acc, 4 * (j * GW + i));
+      }
+    }
+    return out;
+  }
+  const href = (p.attrs.href ?? p.attrs["xlink:href"] ?? "").trim();
+  const px = pixelsOf(href);
+  if (!px) return null;
+  const sub = p.region ?? region;
+  const [x0, y0] = toUser(sub[0], sub[1]);
+  const [x1, y1] = toUser(sub[2], sub[3]);
+  const fit = mul(
+    viewBoxMatrix([0, 0, px.width, px.height], x1 - x0, y1 - y0, p.attrs.preserveaspectratio),
+    [1, 0, 0, 1, x0, y0],
+  );
+  const back = invert(fit);
+  for (let j = 0; j < GH; j++) {
+    for (let i = 0; i < GW; i++) {
+      const [x, y] = toUser(i + 0.5, j + 0.5);
+      const [u, v] = apply(back, x, y);
+      if (u < 0 || v < 0 || u >= px.width || v >= px.height) continue;
+      const k = 4 * (Math.floor(v) * px.width + Math.floor(u));
+      const a = px.data[k + 3] / 255;
+      out.data.set([0, 1, 2].map((c) => (px.data[k + c] / 255) * a).concat(a), 4 * (j * GW + i));
+    }
+  }
+  return out;
+}
+
+/**
  * A filter's expected output on the lattice of an image of `W` by `H` pixels painted under `m`
  * (its unit square on the page), widened to the filter region: the raster (premultiplied sRGB),
  * where it sits against the image's pixels (`gi0`, `gj0`), and the pixels whose value the content's
  * uncertain edges reach (`doubtful`); or why it cannot be laid out or run.
  */
-export function filterExpected(use: SvgFilterUse, m: Matrix, W: number, H: number, toPage: Matrix) {
+export function filterExpected(
+  use: SvgFilterUse,
+  m: Matrix,
+  W: number,
+  H: number,
+  toPage: Matrix,
+  /** A data: image's pixels, for an feImage (task 18 8k; the caller decodes). */
+  pixelsOf: (uri: string) => RasterPixels | null = () => null,
+  /** Run at this many times finer and averaged down (set by the coarse case below). */
+  fine = 0,
+):
+  | string
+  | {
+      expected: ReturnType<typeof blank>;
+      gi0: number;
+      gj0: number;
+      GW: number;
+      GH: number;
+      doubtful: Uint8Array;
+      ox: number;
+      oy: number;
+      ux: number;
+      uy: number;
+    } {
+  // Chrome runs a filter at 300 dpi (measured: 4.64 pixels a unit at 1.11 points a unit) and
+  // resamples where it writes coarser -- feTile's cell is at a pixel a point (task 18 8k). A
+  // coarser lattice is run k times finer and averaged down, k = 300 dpi over its own.
+  const k =
+    fine ||
+    Math.max(
+      1,
+      Math.round((scaleOf(toPage) * (300 / 72) * Math.abs(mul(m, invert(toPage))[0])) / W),
+    );
+  if (k > 1) {
+    const f = filterExpected(use, m, W * k, H * k, toPage, pixelsOf, 1);
+    if (typeof f === "string") return f;
+    // the coarse pixels whose k by k fine ones the fine lattice holds
+    const ci0 = Math.ceil(f.gi0 / k);
+    const cj0 = Math.ceil(f.gj0 / k);
+    const CW = Math.floor((f.gi0 + f.GW) / k) - ci0;
+    const CH = Math.floor((f.gj0 + f.GH) / k) - cj0;
+    const out = blank(CW, CH);
+    const doubt = new Uint8Array(CW * CH);
+    for (let J = 0; J < CH; J++)
+      for (let I = 0; I < CW; I++) {
+        const acc = [0, 0, 0, 0];
+        for (let s = 0; s < k; s++)
+          for (let t = 0; t < k; t++) {
+            const fi = (ci0 + I) * k + s - f.gi0;
+            const fj = (cj0 + J) * k + t - f.gj0;
+            const at = fj * f.GW + fi;
+            for (let c = 0; c < 4; c++) acc[c] += f.expected.data[4 * at + c] / (k * k);
+            if (f.doubtful[at]) doubt[J * CW + I] = 1;
+          }
+        out.data.set(acc, 4 * (J * CW + I));
+      }
+    return {
+      expected: out,
+      gi0: ci0,
+      gj0: cj0,
+      GW: CW,
+      GH: CH,
+      doubtful: doubt,
+      ox: f.ox,
+      oy: f.oy,
+      ux: f.ux * k,
+      uy: f.uy * k,
+    };
+  }
   const U = mul(m, invert(toPage)); // the image's unit square in the element's user space
   if (Math.abs(U[1]) > 1e-6 * Math.abs(U[0]) || Math.abs(U[2]) > 1e-6 * Math.abs(U[3]))
     return "drawn turned, which this check does not run";
@@ -1008,6 +1216,19 @@ export function filterExpected(use: SvgFilterUse, m: Matrix, W: number, H: numbe
         linear: use.linear,
         unit: [ux, uy],
         region,
+        toUser: (i: number, j: number) => [ox + (gi0 + i) * ux, oy + (gj0 + j) * uy],
+        // Chrome's device pixels (300 dpi) one of this lattice's spans
+        device: scaleOf(toPage) * (300 / 72) * ux,
+        image: (p) =>
+          feImageRaster(
+            p,
+            use,
+            GW,
+            GH,
+            (i, j) => [ox + (gi0 + i) * ux, oy + (gj0 + j) * uy],
+            region,
+            pixelsOf,
+          ),
       },
       source,
     );
@@ -1677,13 +1898,28 @@ const SVG_PROPS = new Set([
   "stroke-linejoin",
   "stroke-miterlimit",
   "overflow",
+  // filters and masks, set by a stylesheet too (task 18 8k)
+  "flood-color",
+  "flood-opacity",
+  "lighting-color",
+  "color-interpolation-filters",
+  "mask-type",
 ]);
 
 /**
  * A pseudo-class (task 18 8j): structural ones by position among the element's siblings; `not`,
  * `is` and `where` over compounds; `never` for one that matches nothing in a print (`:hover`).
  */
-type Pseudo = { kind: string; a?: number; b?: number; inner?: Compound[] };
+type Pseudo = {
+  kind: string;
+  a?: number;
+  b?: number;
+  inner?: Compound[];
+  /** `:has()`'s relative selectors (task 18 8k): each its leading combinator and selector. */
+  relative?: { how: Combinator; sel: Selector }[];
+  /** For the internal `scope` kind: the one node it matches (a relative selector's anchor). */
+  node?: Node;
+};
 /** One compound selector: a tag (or any), classes, an id, attribute tests, pseudo-classes. */
 type Compound = {
   tag: string | null;
@@ -1715,7 +1951,9 @@ function cssRules(css: string, unread: Set<string>, startOrder: number): Rule[] 
     while (k < text.length) {
       const open = text.indexOf("{", k);
       if (open < 0) break;
-      const prelude = text.slice(k, open).trim();
+      // what follows the last `;` before the block: a statement before it (`@import ...;`, a
+      // stray `;`) is no part of its selector (task 18 8k: ";\n.fa-angle-down" was refused)
+      const prelude = (text.slice(k, open).split(";").pop() ?? "").trim();
       // the block's end, braces balanced
       let depth = 1;
       let end = open + 1;
@@ -1747,14 +1985,14 @@ function cssRules(css: string, unread: Set<string>, startOrder: number): Rule[] 
         const sel = parseSelector(s.trim());
         if (sel) rules.push({ sel, decls, order: order++ });
         else {
-          // Only a selector that could reach an SVG element matters.
-          const last =
-            s
-              .trim()
-              .split(/[\s>+~]+/)
-              .pop() ?? "";
-          const tag = /^[a-zA-Z][\w-]*/.exec(last)?.[0]?.toLowerCase();
-          if ((tag && SVG_TAGS.has(tag)) || /\bsvg\b/i.test(s))
+          // Only a selector that could reach an SVG element matters: its last compound (cut by
+          // the bracket-aware tokens -- split at every space, `:nth-child(2 of .x)` ended in ".x)"
+          // and passed as HTML, task 18 8k) with an SVG tag, or no tag at all.
+          const last = selectorTokens(s.trim())
+            .filter((t) => !/^[>+~]$/.test(t))
+            .pop();
+          const tag = /^[a-zA-Z][\w-]*/.exec(last ?? "")?.[0]?.toLowerCase();
+          if (!tag || SVG_TAGS.has(tag) || /\bsvg\b/i.test(s))
             unread.add(`the style rule "${s.trim()}"`);
         }
       }
@@ -1762,6 +2000,23 @@ function cssRules(css: string, unread: Set<string>, startOrder: number): Rule[] 
   };
   body(css.replace(/\/\*[\s\S]*?\*\//g, ""));
   return rules;
+}
+
+/** A list split at its top-level commas (none inside brackets or parentheses). */
+function splitTopLevel(s: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let depth = 0;
+  for (const ch of s) {
+    if (ch === "[" || ch === "(") depth++;
+    if (ch === "]" || ch === ")") depth--;
+    if (ch === "," && depth === 0) {
+      out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
 }
 
 /** A selector cut into compounds and combinators, brackets and parentheses kept whole. */
@@ -1851,7 +2106,12 @@ function parseCompound(t: string): { c: Compound; spec: number } | null {
       rest = rest.slice(m[0].length);
       continue;
     }
-    if (rest.startsWith("::")) return null; // a pseudo-element draws nothing of a shape's
+    if (rest.startsWith("::")) {
+      // a pseudo-element draws nothing on an SVG shape: the rule styles nothing here
+      c.pseudo.push({ kind: "never" });
+      rest = rest.replace(/^::[\w-]+(\([^)]*\))?/, "");
+      continue;
+    }
     m = /^:([\w-]+)(?:\(((?:[^()]|\([^()]*\))*)\))?/.exec(rest);
     if (!m) return null;
     const [name, arg] = [m[1].toLowerCase(), m[2]];
@@ -1882,8 +2142,20 @@ function parseCompound(t: string): { c: Compound; spec: number } | null {
       if (!f) return null;
       c.pseudo.push({ kind: name, ...f });
       spec += 100;
+    } else if (name === "has" && arg !== undefined) {
+      // relative selectors: each may lead with a combinator (descendant when none)
+      const relative: { how: Combinator; sel: Selector }[] = [];
+      for (const part of splitTopLevel(arg)) {
+        const t = part.trim();
+        const lead = /^([>+~])\s*/.exec(t);
+        const sel = parseSelector(lead ? t.slice(lead[0].length) : t);
+        if (!sel) return null;
+        relative.push({ how: (lead?.[1] ?? " ") as Combinator, sel });
+      }
+      c.pseudo.push({ kind: "has", relative });
+      spec += Math.max(0, ...relative.map((r) => r.sel.spec));
     } else if (["not", "is", "where"].includes(name) && arg !== undefined) {
-      const inner = arg.split(",").map((x) => parseCompound(x.trim()));
+      const inner = splitTopLevel(arg).map((x) => parseCompound(x.trim()));
       if (inner.some((x) => x === null)) return null;
       const list = inner as { c: Compound; spec: number }[];
       c.pseudo.push({ kind: name, inner: list.map((x) => x.c) });
@@ -1920,9 +2192,46 @@ function parseSelector(s: string): Selector | null {
   return parts.length && pending === null ? { parts, spec } : null;
 }
 
-/** Whether a node, its parent given (for its siblings), matches a compound selector. */
-function matchesCompound(n: Node, c: Compound, parent: Node | undefined): boolean {
-  if (c.tag !== null && c.tag !== n.tag) return false;
+/**
+ * Whether `:has()`'s relative selector finds a match from `n` (its ancestors `anc`): the selector
+ * anchored at `n` by its leading combinator, tried on what that combinator reaches -- `n`'s
+ * descendants, its children, its next sibling, or every later one.
+ */
+function hasMatch(n: Node, anc: Node[], r: { how: Combinator; sel: Selector }): boolean {
+  const scope: Compound = {
+    tag: null,
+    classes: [],
+    id: null,
+    attrs: [],
+    pseudo: [{ kind: "scope", node: n }],
+  };
+  const anchored: Selector = {
+    parts: [
+      { c: scope, before: null },
+      { ...r.sel.parts[0], before: r.how },
+      ...r.sel.parts.slice(1),
+    ],
+    spec: r.sel.spec,
+  };
+  const elements = (k: Node) => k.children.filter((c) => c.tag !== "#text");
+  if (r.how === "+" || r.how === "~") {
+    const parent = anc[anc.length - 1];
+    if (!parent) return false;
+    const siblings = elements(parent);
+    const later = siblings.slice(siblings.indexOf(n) + 1);
+    return (r.how === "+" ? later.slice(0, 1) : later).some((s) => matches(anchored, s, anc));
+  }
+  const below = (k: Node, kAnc: Node[], deep: boolean): boolean =>
+    elements(k).some(
+      (c) => matches(anchored, c, [...kAnc, k]) || (deep && below(c, [...kAnc, k], true)),
+    );
+  return below(n, anc, r.how === " ");
+}
+
+/** Whether a node, its ancestors given (nearest last; the parent for its siblings), matches a compound. */
+function matchesCompound(n: Node, c: Compound, anc: Node[]): boolean {
+  const parent = anc[anc.length - 1];
+  if (c.tag !== null && c.tag !== (n.as ?? n.tag)) return false;
   if (c.id !== null && n.attrs.get("id") !== c.id) return false;
   const classes = (n.attrs.get("class") ?? "").split(/\s+/);
   if (!c.classes.every((k) => classes.includes(k))) return false;
@@ -1956,33 +2265,37 @@ function matchesCompound(n: Node, c: Compound, parent: Node | undefined): boolea
     const ok =
       p.kind === "never"
         ? false
-        : p.kind === "root"
-          ? false // an inline drawing's root is not the document's
-          : p.kind === "empty"
-            ? n.children.every((k) => k.tag === "#text" && k.text === "")
-            : p.kind === "first-child"
-              ? i === 0
-              : p.kind === "last-child"
-                ? i === siblings.length - 1
-                : p.kind === "only-child"
-                  ? siblings.length === 1
-                  : p.kind === "first-of-type"
-                    ? t === 0
-                    : p.kind === "last-of-type"
-                      ? t === of.length - 1
-                      : p.kind === "only-of-type"
-                        ? of.length === 1
-                        : p.kind === "nth-child"
-                          ? fits(i + 1, p.a, p.b)
-                          : p.kind === "nth-last-child"
-                            ? fits(siblings.length - i, p.a, p.b)
-                            : p.kind === "nth-of-type"
-                              ? fits(t + 1, p.a, p.b)
-                              : p.kind === "nth-last-of-type"
-                                ? fits(of.length - t, p.a, p.b)
-                                : p.kind === "not"
-                                  ? !(p.inner ?? []).some((x) => matchesCompound(n, x, parent))
-                                  : (p.inner ?? []).some((x) => matchesCompound(n, x, parent)); // is, where
+        : p.kind === "scope"
+          ? n === p.node
+          : p.kind === "has"
+            ? (p.relative ?? []).some((r) => hasMatch(n, anc, r))
+            : p.kind === "root"
+              ? false // an inline drawing's root is not the document's
+              : p.kind === "empty"
+                ? n.children.every((k) => k.tag === "#text" && k.text === "")
+                : p.kind === "first-child"
+                  ? i === 0
+                  : p.kind === "last-child"
+                    ? i === siblings.length - 1
+                    : p.kind === "only-child"
+                      ? siblings.length === 1
+                      : p.kind === "first-of-type"
+                        ? t === 0
+                        : p.kind === "last-of-type"
+                          ? t === of.length - 1
+                          : p.kind === "only-of-type"
+                            ? of.length === 1
+                            : p.kind === "nth-child"
+                              ? fits(i + 1, p.a, p.b)
+                              : p.kind === "nth-last-child"
+                                ? fits(siblings.length - i, p.a, p.b)
+                                : p.kind === "nth-of-type"
+                                  ? fits(t + 1, p.a, p.b)
+                                  : p.kind === "nth-last-of-type"
+                                    ? fits(of.length - t, p.a, p.b)
+                                    : p.kind === "not"
+                                      ? !(p.inner ?? []).some((x) => matchesCompound(n, x, anc))
+                                      : (p.inner ?? []).some((x) => matchesCompound(n, x, anc)); // is, where
     if (!ok) return false;
   }
   return true;
@@ -1991,7 +2304,7 @@ function matchesCompound(n: Node, c: Compound, parent: Node | undefined): boolea
 /** Whether a node, with its ancestors (nearest last), matches a selector: right to left, backtracking. */
 function matches(sel: Selector, n: Node, ancestors: Node[]): boolean {
   const at = (k: number, node: Node, anc: Node[]): boolean => {
-    if (!matchesCompound(node, sel.parts[k].c, anc[anc.length - 1])) return false;
+    if (!matchesCompound(node, sel.parts[k].c, anc)) return false;
     if (k === 0) return true;
     const how = sel.parts[k].before;
     if (how === ">") return anc.length > 0 && at(k - 1, anc[anc.length - 1], anc.slice(0, -1));
@@ -2033,6 +2346,8 @@ export function readSvg(
   const images: SvgImage[] = [];
   const filters: SvgFilterUse[] = [];
   const foreign: SvgForeign[] = [];
+  /** What each feImage of an element paints: that element's shapes (task 18 8k), by index. */
+  const feImageContent: SvgShape[][] = [];
   /** The copies of filtered elements being read for their content (their filter set aside). */
   const filtering = new Set<Node>();
   /**
@@ -2266,7 +2581,7 @@ export function readSvg(
     resolving.add(holder);
     const [s, l, im] = [shapes.length, labels.length, images.length];
     walk(
-      { tag: "g", attrs: new Map(), children: holder.children, text: "" },
+      { tag: "g", as: "pattern", attrs: new Map(), children: holder.children, text: "" },
       IDENTITY,
       start,
       1,
@@ -2383,7 +2698,7 @@ export function readSvg(
       (own(target, "mask-type", anc) ?? "luminance").trim() === "alpha" ? "alpha" : "luminance";
     const [s, l, im] = [shapes.length, labels.length, images.length];
     walk(
-      { tag: "g", attrs: new Map(), children: target.children, text: "" },
+      { tag: "g", as: "mask", attrs: new Map(), children: target.children, text: "" },
       IDENTITY,
       start,
       1,
@@ -2621,6 +2936,19 @@ export function readSvg(
     };
     for (const p of target.children.filter((c) => c.tag !== "#text")) {
       if (!PRIMITIVES.has(p.tag)) return `the filter primitive <${p.tag}>`;
+      // Run by report_filter.ts but not yet matching Chrome's output, so still named rather than
+      // judged (task 18 8k, measured): turbulence of type "turbulence" (a small bias, 178 of
+      // 76,162 pixels), stitched noise (Skia counts its tiles in a way still unknown), feTile (its
+      // period rounds differently), feDisplacementMap (2 pixels, 8-bit maps).
+      if (p.tag === "feturbulence" && (p.attrs.get("type") ?? "turbulence") !== "fractalNoise")
+        return "an <feTurbulence> of type turbulence";
+      if (p.tag === "feturbulence" && p.attrs.get("stitchtiles") === "stitch")
+        return "a stitched <feTurbulence>";
+      if (p.tag === "fetile" || p.tag === "fedisplacementmap") return `an <${p.tag}>`;
+      // specular from a spot light: 77 pixels at a shape's edge still differ (diffuse spot and
+      // specular distant match)
+      if (p.tag === "fespecularlighting" && p.children.some((c) => c.tag === "fespotlight"))
+        return "an <fespecularlighting> of a spot light";
       spaces.add(
         (
           own(p, "color-interpolation-filters", [target]) ??
@@ -2657,6 +2985,54 @@ export function readSvg(
         prim.nodes = p.children
           .filter((c) => c.tag === "femergenode")
           .map((c) => c.attrs.get("in"));
+      // task 18 8k: a lighting primitive's light (user units; bounding-box units scaled), colour
+      if (p.tag === "fediffuselighting" || p.tag === "fespecularlighting") {
+        const src = p.children.find((c) =>
+          ["fedistantlight", "fepointlight", "fespotlight"].includes(c.tag),
+        );
+        if (!src) return `a <${p.tag}> with no light`;
+        const v = (a: string, d: number) => {
+          const x = Number.parseFloat(src.attrs.get(a) ?? "");
+          return Number.isFinite(x) ? x : d;
+        };
+        const bb = pUnits === "objectBoundingBox";
+        const X = (a: string) => (bb ? bx + v(a, 0) * bw : v(a, 0));
+        const Y = (a: string) => (bb ? by + v(a, 0) * bh : v(a, 0));
+        const Z = (a: string) => (bb ? v(a, 0) * Math.sqrt((bw * bw + bh * bh) / 2) : v(a, 0));
+        prim.light =
+          src.tag === "fedistantlight"
+            ? { kind: "distant", azimuth: v("azimuth", 0), elevation: v("elevation", 0) }
+            : src.tag === "fepointlight"
+              ? { kind: "point", x: X("x"), y: Y("y"), z: Z("z") }
+              : {
+                  kind: "spot",
+                  x: X("x"),
+                  y: Y("y"),
+                  z: Z("z"),
+                  at: [X("pointsatx"), Y("pointsaty"), Z("pointsatz")],
+                  exponent: v("specularexponent", 1),
+                  cone: src.attrs.has("limitingconeangle") ? v("limitingconeangle", 90) : null,
+                };
+        const lc = paintOf(own(p, "lighting-color", [target]) ?? "white", [1, 1, 1]);
+        if (!lc) return `a light coloured "${own(p, "lighting-color", [target])}"`;
+        prim.lightColour = lc.slice(0, 3);
+      }
+      // an feImage: a data: raster (decoded by the caller), or an element of the drawing, read
+      if (p.tag === "feimage") {
+        const href = (p.attrs.get("href") ?? p.attrs.get("xlink:href") ?? "").trim();
+        if (href.startsWith("#")) {
+          const ref = ids.get(href.slice(1));
+          if (ref) {
+            const [s0, l0, i0, f0] = [shapes.length, labels.length, images.length, filters.length];
+            walk(ref, IDENTITY, start, depth + 1, []);
+            const drawn = shapes.splice(s0);
+            if (labels.splice(l0).length + images.splice(i0).length + filters.splice(f0).length > 0)
+              return "an <feImage> of text, an image or a filter";
+            attrs["#element"] = String(feImageContent.push(drawn) - 1);
+          }
+        } else if (!/^data:image\/(?!svg\+xml)/i.test(href))
+          return `an <feImage> of "${href.slice(0, 40)}"`;
+      }
       // a subregion of its own, in user units [x0, y0, x1, y1] (converted to pixels by the check)
       if (["x", "y", "width", "height"].some((a) => p.attrs.has(a))) {
         const sx = len(p, "x", null, bw, bx, pUnits) ?? rx;
@@ -2689,6 +3065,7 @@ export function readSvg(
       primitives,
       linear: [...spaces][0] !== "srgb",
       alpha,
+      feImages: feImageContent,
     });
     return null;
   };
@@ -2913,6 +3290,7 @@ export function readSvg(
             }
             const content: Node = {
               tag: "g",
+              as: "marker",
               attrs: new Map(
                 [...marker.attrs].filter(([k]) => !["transform", "display", "id"].includes(k)),
               ),
@@ -3062,7 +3440,7 @@ export function readSvg(
         }
         ancestors.push(n);
         walk(
-          target.tag === "symbol" ? { ...target, tag: "g" } : target,
+          target.tag === "symbol" ? { ...target, tag: "g", as: "symbol" } : target,
           mul(at, m),
           here,
           depth + 1,
@@ -3259,6 +3637,8 @@ export function compareSvg(
   /** Group 8f: the images the PDF paints, and each source image's pixel size (its decoded URI). */
   imagePaints: PdfImagePaint[] = [],
   sizeOf: (uri: string) => number[] | null = () => null,
+  /** Group 8k: a data: image's pixels, for an feImage (decoded by the caller). */
+  pixelsOf: (uri: string) => RasterPixels | null = () => null,
 ): SvgCheck {
   const problems = svg.unread.map((u) => `${u} is not verified`);
   const imageKey = (p: PdfImagePaint) => `${p.page}:${p.order}:image`;
@@ -3851,16 +4231,34 @@ export function compareSvg(
     let right: PdfImagePaint | null = null;
     for (const p of imagePaints) {
       if (used.has(imageKey(p)) || !p.pixels || !within(p)) continue;
-      const w = filterDifference(use, p, toPage);
+      const w = filterDifference(use, p, toPage, pixelsOf);
       if (w === null) {
         right = p;
         break;
       }
       why = w;
     }
+    // or a path filled with a repeating raster (feTile, task 18 8k), taken as one image
+    let byPath: PdfVector | null = null;
+    if (!right) {
+      for (const v of vectors) {
+        if (used.has(key(v, "fill")) || !v.fillRaster?.tile) continue;
+        const p = tiledPaint(v);
+        if (!p || !within(p)) continue;
+        const w = filterDifference(use, p, toPage, pixelsOf);
+        if (w === null) {
+          byPath = v;
+          break;
+        }
+        why = w;
+      }
+    }
     if (right) {
       used.add(imageKey(right));
       matchedImages.push(right);
+    } else if (byPath) {
+      used.add(key(byPath, "fill"));
+      matched.push(byPath);
     } else missing.push(`a <${use.what}>'s filter ${why}`);
   }
   if (missing.length > 0)

@@ -1255,6 +1255,13 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
 - ✅ **8j, DONE 2026-11-09 (known-issues #105):** `foreignObject` (its text inside its box),
   `<switch>` and conditional attributes (the render pinned to `--lang=en-US`), an SVG `<image>`,
   a mask in a mask, a selector engine with sibling combinators and pseudo-classes.
+- 🟡 **8k, part 1 DONE 2026-11-09 (known-issues #106; owner: "we need to implement the still
+  refused items"):** `:has()`; convolution, diffuse light (distant, point, spot), specular
+  (distant), fractal noise, feImage, filter properties from stylesheets. **Open, each measured:**
+  turbulence type `turbulence` (178 px), stitching, feTile's period (228 px), displacement (2
+  px), specular from a spot (77 px) -- the run code exists, refused by name until it matches;
+  Skia's per-point noise code is the missing source. Then: feImage past its region, a drawing of
+  filtered elements alone, an `<image>` outside the document.
 Then group 7b (WebP decoders); then the fresh class-B re-check. Earlier:
 group 8's geometry FIRST (owner, 2026-11-08: "can we work on group 8 then come
 back to the SVG and WebP issues?"): the diagrams, and any filled shape as cover and background.
