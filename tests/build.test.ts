@@ -3486,6 +3486,10 @@ test("class B, task 18 item 4: text read against what is behind it", { timeout: 
   for (const [what, plant] of [
     ["white on a dark band", `<p style="background:#003366;color:#ffffff">Zorblaxian 4471</p>`],
     [
+      "white on a dark circle",
+      `<div style="width:160px;height:160px;border-radius:50%;background:#111111;color:#ffffff;display:flex;align-items:center;justify-content:center">Zorblaxian 4471</div>`,
+    ],
+    [
       "white on a black image",
       `<div style="position:relative;width:300px;height:40px"><img src="data:image/png;base64,${BLACK_PNG}" style="display:block;width:300px;height:40px"><span style="position:absolute;left:4px;top:8px;color:#ffffff">Zorblaxian 4471</span></div>`,
     ],
@@ -3703,6 +3707,17 @@ test(
         "a covered value",
         `<div style="position:relative">Zorblaxian 4471<div style="position:absolute;left:0;top:0;width:100%;height:100%;background:#ffffff"></div></div>`,
         /text covered by a box or image drawn over it/,
+      ],
+      // Group 8a: a curved shape is a cover and a background as a rectangle is.
+      [
+        "a rounded box over a value",
+        `<div style="position:relative">Zorblaxian 4471<div style="position:absolute;left:0;top:0;width:100%;height:100%;border-radius:12px;background:#ffffff"></div></div>`,
+        /text covered by a box or image drawn over it/,
+      ],
+      [
+        "dark on a dark circle",
+        `<div style="width:160px;height:160px;border-radius:50%;background:#111111;color:#000000;display:flex;align-items:center;justify-content:center">Zorblaxian 4471</div>`,
+        /too faint to read against its background/,
       ],
       [
         "black on a black image",

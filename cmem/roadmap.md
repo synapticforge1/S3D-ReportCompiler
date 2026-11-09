@@ -1220,7 +1220,9 @@ class-B re-check at the end:
    tolerance, nothing extra, colours equal; each `<text>` at its own position. Its CSS read for
    `display: none`. member_0's SVG: 24 paths, 54 lines, 23 texts in 8 groups.
 
-**Next step:** group 7b (WebP decoders). Then group 8, which now also takes an SVG `<img>`:
+**Next step:** group 8's geometry FIRST (owner, 2026-11-08: "can we work on group 8 then come
+back to the SVG and WebP issues?"): the diagrams, and any filled shape as cover and background.
+Then the SVG `<img>` (below) and group 7b (WebP decoders). Group 8 also takes the SVG `<img>`:
 Chrome draws it as paths (measured), so it is checked as geometry like a diagram, and left out of
 the image count (today it fails on the count, the loud direction). Group 6 left one thing unseen: a non-rectangular
 shape over text. 🔒 **Added to group 8's scope (owner, 2026-11-08: "if group eight will address the

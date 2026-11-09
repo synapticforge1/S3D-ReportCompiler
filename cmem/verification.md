@@ -214,8 +214,8 @@ pages (read from the source by the verification's own reader, over-inclusively, 
 #90 — the bake refuses a config it cannot read, and the guard checks what the bake read, so this
 is the side that does not depend on the bake); TeX sub/superscript marks in their braced form left in the printed text
 (`k_{2}`), whatever delimiter the bake missed — not a bare `x_1`, which prose writes too.
-⚠️ Still NOT seen: text under a non-rectangular shape (curves are neither covers nor
-backgrounds); a diagram's drawing (only its
+(Since #96 any filled shape, curves included, is a cover and a background, by its outline.)
+⚠️ Still NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in
 its run of text, or in the next cell of its row). (A number broken across two lines failed until #93; it is
 joined now where the source has it whole.) 🔒 **Each of these is to be FIXED, not kept

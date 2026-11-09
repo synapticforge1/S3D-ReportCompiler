@@ -1288,7 +1288,19 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     ]);
     // What stands behind text and what is drawn over it (task 18 item 4): every filled rectangle
     // and image, and every visible text show, each with its box on the page and its paint order.
-    type Paint = { order: number; box: Box; fill: number[]; alpha: number; image?: string };
+    // Since group 8a any filled SHAPE, not only a rectangle: its outline as polygons on the page
+    // (curves flattened), with its fill rule; a rectangle or an image is one polygon. A curve
+    // over text was neither cover nor background.
+    type Paint = {
+      order: number;
+      box: Box;
+      fill: number[];
+      alpha: number;
+      image?: string;
+      polygons: number[][][];
+      evenOdd: boolean;
+      clip: Box | null;
+    };
     const paints: Paint[] = [];
     /** Each image's whole box (not clipped): where its pixels are on the page. */
     const imageBoxes = new Map<string, Box>();
@@ -1306,14 +1318,57 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       tlm = mul([1, 0, 0, 1, tx, ty], tlm);
       tm = tlm;
     };
-    /** A rectangle's box, when a path is one: moveTo, three lineTo, closePath, axis-aligned. */
-    const rectangle = (data: unknown): boolean => {
+    /**
+     * A path's outline as polygons on the page: pdf.js 6 gives its commands and points as numbers
+     * (moveTo 0 x y, lineTo 1 x y, curveTo 2 x1 y1 x2 y2 x y, quadraticCurveTo 3 x1 y1 x y,
+     * closePath 4), in the space of the transform `m`; a curve is flattened into 8 segments.
+     */
+    const outline = (data: unknown, m: number[]): number[][][] => {
       const d = Array.from(((Array.isArray(data) ? data[0] : data) ?? []) as ArrayLike<number>);
-      if (d.length !== 13 || d[0] !== 0 || d[3] !== 1 || d[6] !== 1 || d[9] !== 1 || d[12] !== 4)
-        return false;
-      const xs = [d[1], d[4], d[7], d[10]];
-      const ys = [d[2], d[5], d[8], d[11]];
-      return new Set(xs).size <= 2 && new Set(ys).size <= 2;
+      const at = (x: number, y: number) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+      const polygons: number[][][] = [];
+      let current: number[][] = [];
+      let [cx, cy] = [0, 0];
+      for (let k = 0; k < d.length;) {
+        const op = d[k++];
+        if (op === 0) {
+          if (current.length > 1) polygons.push(current);
+          [cx, cy] = [d[k++], d[k++]];
+          current = [at(cx, cy)];
+        } else if (op === 1) {
+          [cx, cy] = [d[k++], d[k++]];
+          current.push(at(cx, cy));
+        } else if (op === 2 || op === 3) {
+          const pts = d.slice(k, k + (op === 2 ? 6 : 4));
+          k += op === 2 ? 6 : 4;
+          const [x0, y0] = [cx, cy];
+          for (let s = 1; s <= 8; s++) {
+            const t = s / 8;
+            const u = 1 - t;
+            const x =
+              op === 2
+                ? u * u * u * x0 +
+                  3 * u * u * t * pts[0] +
+                  3 * u * t * t * pts[2] +
+                  t * t * t * pts[4]
+                : u * u * x0 + 2 * u * t * pts[0] + t * t * pts[2];
+            const y =
+              op === 2
+                ? u * u * u * y0 +
+                  3 * u * u * t * pts[1] +
+                  3 * u * t * t * pts[3] +
+                  t * t * t * pts[5]
+                : u * u * y0 + 2 * u * t * pts[1] + t * t * pts[3];
+            current.push(at(x, y));
+          }
+          [cx, cy] = op === 2 ? [pts[4], pts[5]] : [pts[2], pts[3]];
+        } else if (op === 4) {
+          if (current.length > 1) polygons.push(current);
+          current = [current[0] ?? at(cx, cy)];
+        } else break;
+      }
+      if (current.length > 1) polygons.push(current);
+      return polygons;
     };
     const FILLS = new Set([
       pdfjs.OPS.fill,
@@ -1406,6 +1461,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           fill: [1, 1, 1],
           alpha: gs.alpha * groupAlpha[groupAlpha.length - 1],
           image: String(args[0]),
+          polygons: [outline([[0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 4]], gs.m)[0]],
+          evenOdd: false,
+          clip: gs.clip,
         });
         imageBoxes.set(String(args[0]), box);
       } else if (fn === pdfjs.OPS.constructPath) {
@@ -1414,19 +1472,21 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         if (clipPending && minMax && minMax.length === 4) {
           const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
           gs = { ...gs, clip: gs.clip === null ? box : meet(gs.clip, box) };
-        } else if (
-          FILLS.has(Number(args[0])) &&
-          minMax &&
-          minMax.length === 4 &&
-          rectangle(args[1])
-        ) {
-          // A filled rectangle: a background, a band, a box -- inside its clip.
+        } else if (FILLS.has(Number(args[0])) && minMax && minMax.length === 4) {
+          // A filled shape: a background, a band, a box, a curve -- inside its clip.
           const box = place([minMax[0], minMax[1], minMax[2], minMax[3]], gs.m);
+          const op = Number(args[0]);
           paints.push({
             order: i,
             box: gs.clip === null ? box : meet(box, gs.clip),
             fill: gs.fill,
             alpha: gs.alpha * groupAlpha[groupAlpha.length - 1],
+            polygons: outline(args[1], gs.m),
+            evenOdd:
+              op === pdfjs.OPS.eoFill ||
+              op === pdfjs.OPS.eoFillStroke ||
+              op === pdfjs.OPS.closeEOFillStroke,
+            clip: gs.clip,
           });
         }
         clipPending = false;
@@ -1485,6 +1545,38 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     };
     const contains = (outer: Box, x: number, y: number) =>
       x >= outer[0] && x <= outer[2] && y >= outer[1] && y <= outer[3];
+    /** Whether a paint covers a point: inside its clip, and inside its outline by its fill rule. */
+    const paintsAt = (q: Paint, x: number, y: number) => {
+      if (!contains(q.box, x, y) || (q.clip !== null && !contains(q.clip, x, y))) return false;
+      let winding = 0;
+      let crossings = 0;
+      for (const poly of q.polygons) {
+        for (let k = 0; k < poly.length; k++) {
+          const [ax, ay] = poly[k];
+          const [bx, by] = poly[(k + 1) % poly.length];
+          if (ay <= y !== by <= y) {
+            const xi = ax + ((y - ay) / (by - ay)) * (bx - ax);
+            if (xi > x) {
+              crossings++;
+              winding += by > ay ? 1 : -1;
+            }
+          }
+        }
+      }
+      return q.evenOdd ? crossings % 2 === 1 : winding !== 0;
+    };
+    /** How much of a box a paint covers: the share of a 7 by 3 grid of points inside it. */
+    const share = (q: Paint, b: Box) => {
+      let n = 0;
+      for (let i = 0; i < 7; i++) {
+        for (let j = 0; j < 3; j++) {
+          const x = b[0] + ((i + 0.5) / 7) * (b[2] - b[0]);
+          const y = b[1] + ((j + 0.5) / 3) * (b[3] - b[1]);
+          if (paintsAt(q, x, y)) n++;
+        }
+      }
+      return n / 21;
+    };
     for (const s of shows) {
       const cx = (s.box[0] + s.box[2]) / 2;
       const cy = (s.box[1] + s.box[3]) / 2;
@@ -1492,7 +1584,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       // the one under it by its alpha, from the white page up.
       let ground = [1, 1, 1];
       for (const q of paints) {
-        if (q.order > s.order || !contains(q.box, cx, cy)) continue;
+        if (q.order > s.order || !paintsAt(q, cx, cy)) continue;
         const colour = q.image === undefined ? q.fill : await imageColour(q.image, s.box);
         if (colour === null) continue;
         ground = ground.map((g, c) => q.alpha * colour[c] + (1 - q.alpha) * g);
@@ -1500,9 +1592,14 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       const c = contrastOn(s.fill, s.alpha, ground);
       obs.lowestContrast = Math.min(obs.lowestContrast, c);
       if (c < MIN_CONTRAST) obs.lowContrastPages.add(p);
-      // Over it: an opaque fill or image painted after it, over half of its box or more.
+      // Over it: an opaque fill or image painted after it, over half of its box or more -- by its
+      // outline, so a curve counts and a rectangle's corner does not overreach.
       const covered = paints.some(
-        (q) => q.order > s.order && q.alpha >= 0.9 && area(meet(q.box, s.box)) >= 0.5 * area(s.box),
+        (q) =>
+          q.order > s.order &&
+          q.alpha >= 0.9 &&
+          area(meet(q.box, s.box)) > 0 &&
+          share(q, s.box) >= 0.5,
       );
       if (covered && area(s.box) > 0) obs.coveredTextPages.add(p);
     }
