@@ -226,10 +226,12 @@ luminosity mask read as a second shading); since #101 a drawing's `<image>`, by 
 and pixel for pixel (a `slice` as Chrome's crop); since #102 a `<pattern>` paint, its raster pixel
 by pixel against the pattern's own content (within the range its edges can blur to); since #103 a
 `mask`, its value where the shape is; since #104 a `filter`, its image against the source run
-through the verification's own primitives (`src/report_filter.ts`). ⚠️ Not yet verified, and
-named as such: lighting, turbulence, displacement, convolution, `feTile` / `feImage`; a drawing
-of filtered elements alone (unplaceable); an `<image>` of SVG; a mask inside a mask;
-`foreignObject`; `<switch>`; WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
+through the verification's own primitives (`src/report_filter.ts`); since #105 `<switch>` and
+conditional attributes (the render pinned to `--lang=en-US`), a `foreignObject`'s text inside its
+box, an SVG `<image>` as its own drawing, a mask in a mask, sibling combinators and pseudo-classes.
+⚠️ Not yet verified, and named as such: lighting, turbulence, displacement, convolution, `feTile`
+/ `feImage`; a drawing of filtered elements alone (unplaceable); `:has()`; an `<image>` outside
+the document; WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
 style — of HTML text and of SVG labels.
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in

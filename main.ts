@@ -1347,16 +1347,35 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     let lastMask: PdfMask | undefined;
     /** Mask images whose pixels are fetched after the walk. */
     const maskImagesToFetch: { item: { pixels: Pixels | null }; id: string }[] = [];
-    /** Whether a mask with no image is nothing at every corner and the centre of a box. */
-    const maskedAway = (mask: PdfMask | undefined, box: Box) => {
-      if (!mask || mask.items.some((it) => it.kind !== "fill")) return false;
-      return [
-        [box[0], box[1]],
-        [box[2], box[1]],
-        [box[2], box[3]],
-        [box[0], box[3]],
-        [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2],
-      ].every(([x, y]) => pdfMaskValue(mask, x, y) === 0);
+    /**
+     * The masks around each group being painted (task 18 8j): a group's result goes through the
+     * mask in force when it began, so masks nest -- the effective mask is the chain of them.
+     */
+    const outerMasks: (PdfMask | undefined)[] = [];
+    const effectiveMask = (): PdfMask | undefined => {
+      let chain: PdfMask | undefined;
+      for (const m of [...outerMasks, gs.smask]) {
+        if (m) chain = chain ? { ...m, outer: chain } : m;
+      }
+      return chain;
+    };
+    /** Whether some mask of a chain, one with no image, is nothing at every corner and the centre of a box. */
+    const maskedAway = (chain: PdfMask | undefined, box: Box): boolean => {
+      for (let mask = chain; mask; mask = mask.outer) {
+        if (mask.items.some((it) => it.kind !== "fill")) continue;
+        const one = { ...mask, outer: undefined };
+        if (
+          [
+            [box[0], box[1]],
+            [box[2], box[1]],
+            [box[2], box[3]],
+            [box[0], box[3]],
+            [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2],
+          ].every(([x, y]) => pdfMaskValue(one, x, y) === 0)
+        )
+          return true;
+      }
+      return false;
     };
     /** A fill colour as RGB 0-1: pdf.js gives "#rrggbb", or numbers 0-255 or 0-1, or one grey. */
     const rgb = (args: unknown[]): number[] => {
@@ -1771,6 +1790,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       } else if (fn === pdfjs.OPS.beginGroup) {
         groupAlpha.push(groupAlpha[groupAlpha.length - 1] * gs.alpha);
         groupDepth++;
+        // the mask in force goes over the group's result; inside it, none yet (PDF 32000 11.6.4)
+        outerMasks.push(gs.smask);
+        gs = { ...gs, smask: undefined };
         const group = args[0] as {
           smask?: { subtype?: string; backdrop?: unknown; transferMap?: ArrayLike<number> } | null;
         } | null;
@@ -1790,6 +1812,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         if (defining.length > 0 && defining[defining.length - 1].depth === groupDepth)
           lastMask = defining.pop()?.mask;
         groupDepth = Math.max(0, groupDepth - 1);
+        if (outerMasks.length > 0) gs = { ...gs, smask: outerMasks.pop() };
       } else if (fn === pdfjs.OPS.clip || fn === pdfjs.OPS.eoClip) {
         clipPending = true; // pdf.js gives the clip before the path it clips to
         clipEvenOdd = fn === pdfjs.OPS.eoClip;
@@ -1814,7 +1837,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         // Text inside a mask's definition, or under a mask that is nothing, is not seen (Chrome
         // draws masked content once under nothing, then again under the mask, measured).
         const textBox = place([0, -0.2 * fontSize, width, 0.8 * fontSize], mul(tm, gs.m));
-        if (inks(glyphs) && defining.length === 0 && !maskedAway(gs.smask, textBox)) {
+        if (inks(glyphs) && defining.length === 0 && !maskedAway(effectiveMask(), textBox)) {
           // Faint is invisible: at a tenth of full alpha or less (text is drawn at 0.87).
           const alpha = gs.alpha * groupAlpha[groupAlpha.length - 1];
           const hidden = gs.mode % 4 === 3 || alpha <= 0.1;
@@ -1833,7 +1856,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         maskImagesToFetch.push({ item, id: String(args[0]) });
       } else if (
         fn === pdfjs.OPS.paintImageXObject &&
-        maskedAway(gs.smask, place([0, 0, 1, 1], gs.m))
+        maskedAway(effectiveMask(), place([0, 0, 1, 1], gs.m))
       ) {
         // painted under a mask that is nothing: not seen
       } else if (fn === pdfjs.OPS.paintImageXObject) {
@@ -1876,7 +1899,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         // mask that is nothing (group 8h).
         const unseen =
           !clipPending &&
-          (defining.length > 0 || (pathBox !== null && maskedAway(gs.smask, pathBox)));
+          (defining.length > 0 || (pathBox !== null && maskedAway(effectiveMask(), pathBox)));
         if (!clipPending && defining.length > 0 && FILLS.has(Number(args[0]))) {
           const op = Number(args[0]);
           defining[defining.length - 1].mask.items.push({
@@ -1953,7 +1976,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
             cap: gs.cap,
             join: gs.join,
             miter: gs.miter,
-            ...(gs.smask ? { mask: gs.smask } : {}),
+            ...(effectiveMask() ? { mask: effectiveMask() } : {}),
             ...(fills && gs.fillShading ? { fillShading: gs.fillShading } : {}),
             ...(fills && gs.fillAlphaShading ? { fillAlphaShading: gs.fillAlphaShading } : {}),
             ...(strokes && gs.strokeAlphaShading
@@ -2889,6 +2912,10 @@ try {
       // It used to be off everywhere, justified as "the input is a document this script generated
       // itself" -- but the bake is made from whatever reports are in the folder (2026-11-06).
       ...(noSandbox ? ["--no-sandbox"] : []),
+      // One language whatever the host's (task 18 8j): SVG's `systemLanguage` and `<switch>` draw
+      // by it, so a host in another locale drew a different report; the verification reads by the
+      // same "en-US" (measured: en, en-US, en-GB and "de, en" drawn; fr and "" not).
+      "--lang=en-US",
       "--no-first-run",
       "--disable-extensions",
       // Chrome refuses to start against a profile already in use.

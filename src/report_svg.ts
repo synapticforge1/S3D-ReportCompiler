@@ -97,6 +97,8 @@ export type RasterPixels = { width: number; height: number; data: Uint8Array };
 export type PdfMask = {
   subtype: "Alpha" | "Luminosity";
   transfer?: number[];
+  /** The mask in force around the group this one is in (task 18 8j): the values multiply. */
+  outer?: PdfMask;
   items: (
     | { kind: "fill"; polygons: number[][][]; evenOdd: boolean; colour: number[]; alpha: number }
     | { kind: "image"; m: Matrix; pixels: RasterPixels | null }
@@ -105,6 +107,8 @@ export type PdfMask = {
 
 /** A soft mask's value, 0 to 1, at a point of the page: its group composited, then its transfer. */
 export function pdfMaskValue(mask: PdfMask, x: number, y: number): number {
+  if (mask.outer)
+    return pdfMaskValue(mask.outer, x, y) * pdfMaskValue({ ...mask, outer: undefined }, x, y);
   let rgba = [0, 0, 0, 0];
   for (const it of mask.items) {
     if (it.kind === "fill") {
@@ -135,7 +139,12 @@ export type SvgMask = {
   region: number[][];
   toDrawing: Matrix;
   content: SvgShape[];
+  /** A mask around this one (task 18 8j): the values multiply. */
+  outer?: SvgMask;
 };
+
+/** A `foreignObject` (task 18 8j): its HTML's text, and its box in the drawing's coordinates. */
+export type SvgForeign = { text: string; box: number[][] };
 
 /**
  * A source mask's value at a point of the drawing: 0 outside its region; else its content there,
@@ -143,6 +152,13 @@ export type SvgMask = {
  * alpha; `null` within `tol` of an edge.
  */
 export function svgMaskValue(m: SvgMask, x: number, y: number, tol: number): number | null {
+  if (m.outer) {
+    const [outer, inner] = [
+      svgMaskValue(m.outer, x, y, tol),
+      svgMaskValue({ ...m, outer: undefined }, x, y, tol),
+    ];
+    return outer === null || inner === null ? null : outer * inner;
+  }
   if (edgeDistance([m.region], x, y) < tol) return null;
   if (!polygonsContain([m.region], false, x, y)) return 0;
   const back = invert(m.toDrawing);
@@ -1566,7 +1582,51 @@ const NOT_DRAWN = new Set([
 ]);
 
 /** What this reader does not compare, named in a failure rather than passed. */
-const UNREAD = new Set(["foreignobject", "switch"]);
+const UNREAD = new Set<string>();
+
+/**
+ * Whether an element passes SVG's conditional processing as Chrome renders here (task 18 8j,
+ * measured with the render pinned to `--lang=en-US`): `requiredExtensions`, even empty, fails;
+ * `systemLanguage` passes when a listed language's primary tag is `en` (`en`, `en-GB`, `de, en`
+ * drawn; `fr` and "" not); `requiredFeatures` is ignored.
+ */
+function conditionsPass(n: Node): boolean {
+  if (n.attrs.has("requiredextensions")) return false;
+  const langs = n.attrs.get("systemlanguage");
+  if (langs === undefined) return true;
+  return langs
+    .split(",")
+    .map((l) => l.trim().toLowerCase().split("-")[0])
+    .some((l) => l === "en");
+}
+
+/** A transform carried into every part of a read drawing: shapes, clips, masks, labels, images. */
+function carryClip(c: SvgClip, t: Matrix): SvgClip {
+  return {
+    parts: c.parts.map((p) => ({
+      polygons: p.polygons.map((q) => q.map(([x, y]) => apply(t, x, y))),
+      evenOdd: p.evenOdd,
+      ...(p.within ? { within: carryClip(p.within, t) } : {}),
+    })),
+    ...(c.within ? { within: carryClip(c.within, t) } : {}),
+  };
+}
+function carryMask(m: SvgMask, t: Matrix): SvgMask {
+  return {
+    ...m,
+    region: m.region.map(([x, y]) => apply(t, x, y)),
+    toDrawing: mul(m.toDrawing, t),
+    ...(m.outer ? { outer: carryMask(m.outer, t) } : {}),
+  };
+}
+function carryShape(s: SvgShape, t: Matrix): SvgShape {
+  return {
+    ...s,
+    e: mul(s.e, t),
+    clips: (s.clips ?? []).map((c) => carryClip(c, t)),
+    ...(s.mask ? { mask: carryMask(s.mask, t) } : {}),
+  };
+}
 
 /** The SVG elements a stylesheet rule could restyle here. */
 const SVG_TAGS = new Set([
@@ -1619,15 +1679,23 @@ const SVG_PROPS = new Set([
   "overflow",
 ]);
 
-/** One compound selector: a tag (or any), classes, an id, attribute tests. */
+/**
+ * A pseudo-class (task 18 8j): structural ones by position among the element's siblings; `not`,
+ * `is` and `where` over compounds; `never` for one that matches nothing in a print (`:hover`).
+ */
+type Pseudo = { kind: string; a?: number; b?: number; inner?: Compound[] };
+/** One compound selector: a tag (or any), classes, an id, attribute tests, pseudo-classes. */
 type Compound = {
   tag: string | null;
   classes: string[];
   id: string | null;
-  attrs: [string, string | null][];
+  /** name, operator (=, ~=, |=, ^=, $=, *=; null: present), value, case-insensitive */
+  attrs: [string, string | null, string | null, boolean][];
+  pseudo: Pseudo[];
 };
+type Combinator = " " | ">" | "+" | "~";
 /** A selector: its compounds left to right, each with the combinator BEFORE it (null for the first). */
-type Selector = { parts: { c: Compound; before: " " | ">" | null }[]; spec: number };
+type Selector = { parts: { c: Compound; before: Combinator | null }[]; spec: number };
 type Rule = {
   sel: Selector;
   decls: Map<string, { value: string; important: boolean }>;
@@ -1696,70 +1764,251 @@ function cssRules(css: string, unread: Set<string>, startOrder: number): Rule[] 
   return rules;
 }
 
-/** A selector of compounds with descendant and child combinators; `null` for anything else. */
-function parseSelector(s: string): Selector | null {
-  if (!s || /[+~:]|::/.test(s)) return null;
-  const tokens = s
-    .replace(/\s*>\s*/g, " > ")
-    .split(/\s+/)
-    .filter(Boolean);
-  const parts: { c: Compound; before: " " | ">" | null }[] = [];
-  let pending: " " | ">" | null = null;
+/** A selector cut into compounds and combinators, brackets and parentheses kept whole. */
+function selectorTokens(s: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let depth = 0;
+  for (const ch of s) {
+    if (ch === "[" || ch === "(") depth++;
+    if (ch === "]" || ch === ")") depth--;
+    if (depth === 0 && (ch === ">" || ch === "+" || ch === "~")) {
+      if (cur) out.push(cur);
+      out.push(ch);
+      cur = "";
+    } else if (depth === 0 && /\s/.test(ch)) {
+      if (cur) out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Pseudo-classes that match nothing in a print (no pointer, no focus, no history, no form). */
+const NEVER_IN_PRINT = new Set([
+  "hover",
+  "focus",
+  "focus-within",
+  "focus-visible",
+  "active",
+  "visited",
+  "target",
+  "checked",
+  "disabled",
+  "indeterminate",
+  "placeholder-shown",
+]);
+
+/** An `an+b` (or odd, even, a number); `null` for one this reader cannot read. */
+function nth(s: string): { a: number; b: number } | null {
+  const t = s.replace(/\s+/g, "").toLowerCase();
+  if (t === "odd") return { a: 2, b: 1 };
+  if (t === "even") return { a: 2, b: 0 };
+  const m = /^([+-]?\d*)n([+-]\d+)?$/.exec(t);
+  if (m)
+    return {
+      a: m[1] === "" || m[1] === "+" ? 1 : m[1] === "-" ? -1 : Number(m[1]),
+      b: Number(m[2] ?? 0),
+    };
+  return /^[+-]?\d+$/.test(t) ? { a: 0, b: Number(t) } : null;
+}
+
+/** One compound, with its specificity; `null` for one this reader cannot read. */
+function parseCompound(t: string): { c: Compound; spec: number } | null {
+  const c: Compound = { tag: null, classes: [], id: null, attrs: [], pseudo: [] };
   let spec = 0;
-  for (const t of tokens) {
-    if (t === ">") {
-      if (parts.length === 0) return null;
-      pending = ">";
+  let rest = t;
+  const head = /^(\*|[a-zA-Z][\w-]*)/.exec(rest);
+  if (head) {
+    if (head[1] !== "*") {
+      c.tag = head[1].toLowerCase();
+      spec += 1;
+    }
+    rest = rest.slice(head[1].length);
+  }
+  while (rest) {
+    let m = /^([.#])([\w-]+)/.exec(rest);
+    if (m) {
+      if (m[1] === ".") c.classes.push(m[2]);
+      else c.id = m[2];
+      spec += m[1] === "#" ? 10000 : 100;
+      rest = rest.slice(m[0].length);
       continue;
     }
-    const m = /^(\*|[a-zA-Z][\w-]*)?((?:[.#][\w-]+|\[[^\]]+\])*)$/.exec(t);
-    if (!m || (!m[1] && !m[2])) return null;
-    const c: Compound = {
-      tag: m[1] && m[1] !== "*" ? m[1].toLowerCase() : null,
-      classes: [],
-      id: null,
-      attrs: [],
-    };
-    for (const p of m[2].matchAll(
-      /([.#])([\w-]+)|\[\s*([\w:-]+)\s*(?:=\s*["']?([^"'\]]*)["']?)?\s*\]/g,
-    )) {
-      if (p[1] === ".") c.classes.push(p[2]);
-      else if (p[1] === "#") c.id = p[2];
-      else c.attrs.push([p[3].toLowerCase(), p[4] ?? null]);
+    m =
+      /^\[\s*([\w:-]+)\s*(?:([~|^$*]?=)\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]+))\s*([is])?)?\s*\]/i.exec(
+        rest,
+      );
+    if (m) {
+      c.attrs.push([
+        m[1].toLowerCase(),
+        m[2] ?? null,
+        m[3] ?? m[4] ?? m[5] ?? null,
+        (m[6] ?? "").toLowerCase() === "i",
+      ]);
+      spec += 100;
+      rest = rest.slice(m[0].length);
+      continue;
     }
-    spec += (c.id ? 10000 : 0) + (c.classes.length + c.attrs.length) * 100 + (c.tag ? 1 : 0);
-    parts.push({ c, before: parts.length === 0 ? null : (pending ?? " ") });
+    if (rest.startsWith("::")) return null; // a pseudo-element draws nothing of a shape's
+    m = /^:([\w-]+)(?:\(((?:[^()]|\([^()]*\))*)\))?/.exec(rest);
+    if (!m) return null;
+    const [name, arg] = [m[1].toLowerCase(), m[2]];
+    rest = rest.slice(m[0].length);
+    if (NEVER_IN_PRINT.has(name)) {
+      c.pseudo.push({ kind: "never" });
+      spec += 100;
+    } else if (
+      [
+        "first-child",
+        "last-child",
+        "only-child",
+        "first-of-type",
+        "last-of-type",
+        "only-of-type",
+        "empty",
+        "root",
+      ].includes(name) &&
+      arg === undefined
+    ) {
+      c.pseudo.push({ kind: name });
+      spec += 100;
+    } else if (
+      ["nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"].includes(name) &&
+      arg !== undefined
+    ) {
+      const f = nth(arg);
+      if (!f) return null;
+      c.pseudo.push({ kind: name, ...f });
+      spec += 100;
+    } else if (["not", "is", "where"].includes(name) && arg !== undefined) {
+      const inner = arg.split(",").map((x) => parseCompound(x.trim()));
+      if (inner.some((x) => x === null)) return null;
+      const list = inner as { c: Compound; spec: number }[];
+      c.pseudo.push({ kind: name, inner: list.map((x) => x.c) });
+      spec += name === "where" ? 0 : Math.max(0, ...list.map((x) => x.spec));
+    } else return null;
+  }
+  if (!head && c.classes.length + c.attrs.length + c.pseudo.length === 0 && c.id === null)
+    return null;
+  return { c, spec };
+}
+
+/**
+ * A selector of compounds with every combinator -- descendant, child, next sibling, later sibling
+ * (task 18 8j; only the first two before) -- and the pseudo-classes {@link parseCompound} reads;
+ * `null` for anything else.
+ */
+function parseSelector(s: string): Selector | null {
+  if (!s) return null;
+  const parts: { c: Compound; before: Combinator | null }[] = [];
+  let pending: Combinator | null = null;
+  let spec = 0;
+  for (const t of selectorTokens(s)) {
+    if (t === ">" || t === "+" || t === "~") {
+      if (parts.length === 0 || pending !== null) return null;
+      pending = t;
+      continue;
+    }
+    const c = parseCompound(t);
+    if (!c) return null;
+    spec += c.spec;
+    parts.push({ c: c.c, before: parts.length === 0 ? null : (pending ?? " ") });
     pending = null;
   }
   return parts.length && pending === null ? { parts, spec } : null;
 }
 
-/** Whether a node matches a compound selector. */
-function matchesCompound(n: Node, c: Compound): boolean {
+/** Whether a node, its parent given (for its siblings), matches a compound selector. */
+function matchesCompound(n: Node, c: Compound, parent: Node | undefined): boolean {
   if (c.tag !== null && c.tag !== n.tag) return false;
   if (c.id !== null && n.attrs.get("id") !== c.id) return false;
   const classes = (n.attrs.get("class") ?? "").split(/\s+/);
   if (!c.classes.every((k) => classes.includes(k))) return false;
-  return c.attrs.every(([a, v]) => n.attrs.has(a) && (v === null || n.attrs.get(a) === v));
+  for (const [a, op, v, insensitive] of c.attrs) {
+    if (!n.attrs.has(a)) return false;
+    if (op === null || v === null) continue;
+    let got = n.attrs.get(a) ?? "";
+    let want = v;
+    if (insensitive) [got, want] = [got.toLowerCase(), want.toLowerCase()];
+    const ok =
+      op === "="
+        ? got === want
+        : op === "~="
+          ? got.split(/\s+/).includes(want)
+          : op === "|="
+            ? got === want || got.startsWith(`${want}-`)
+            : op === "^="
+              ? want !== "" && got.startsWith(want)
+              : op === "$="
+                ? want !== "" && got.endsWith(want)
+                : want !== "" && got.includes(want);
+    if (!ok) return false;
+  }
+  const siblings = parent ? parent.children.filter((k) => k.tag !== "#text") : [n];
+  const of = siblings.filter((k) => k.tag === n.tag);
+  const fits = (pos: number, a = 0, b = 0) =>
+    a === 0 ? pos === b : (pos - b) / a >= 0 && Number.isInteger((pos - b) / a);
+  for (const p of c.pseudo) {
+    const i = siblings.indexOf(n);
+    const t = of.indexOf(n);
+    const ok =
+      p.kind === "never"
+        ? false
+        : p.kind === "root"
+          ? false // an inline drawing's root is not the document's
+          : p.kind === "empty"
+            ? n.children.every((k) => k.tag === "#text" && k.text === "")
+            : p.kind === "first-child"
+              ? i === 0
+              : p.kind === "last-child"
+                ? i === siblings.length - 1
+                : p.kind === "only-child"
+                  ? siblings.length === 1
+                  : p.kind === "first-of-type"
+                    ? t === 0
+                    : p.kind === "last-of-type"
+                      ? t === of.length - 1
+                      : p.kind === "only-of-type"
+                        ? of.length === 1
+                        : p.kind === "nth-child"
+                          ? fits(i + 1, p.a, p.b)
+                          : p.kind === "nth-last-child"
+                            ? fits(siblings.length - i, p.a, p.b)
+                            : p.kind === "nth-of-type"
+                              ? fits(t + 1, p.a, p.b)
+                              : p.kind === "nth-last-of-type"
+                                ? fits(of.length - t, p.a, p.b)
+                                : p.kind === "not"
+                                  ? !(p.inner ?? []).some((x) => matchesCompound(n, x, parent))
+                                  : (p.inner ?? []).some((x) => matchesCompound(n, x, parent)); // is, where
+    if (!ok) return false;
+  }
+  return true;
 }
 
 /** Whether a node, with its ancestors (nearest last), matches a selector: right to left, backtracking. */
 function matches(sel: Selector, n: Node, ancestors: Node[]): boolean {
-  const k = sel.parts.length - 1;
-  if (!matchesCompound(n, sel.parts[k].c)) return false;
-  const left = (part: number, upTo: number): boolean => {
-    if (part < 0) return true;
-    const how = sel.parts[part + 1].before;
-    if (how === ">")
-      return (
-        upTo >= 0 && matchesCompound(ancestors[upTo], sel.parts[part].c) && left(part - 1, upTo - 1)
-      );
-    for (let a = upTo; a >= 0; a--) {
-      if (matchesCompound(ancestors[a], sel.parts[part].c) && left(part - 1, a - 1)) return true;
+  const at = (k: number, node: Node, anc: Node[]): boolean => {
+    if (!matchesCompound(node, sel.parts[k].c, anc[anc.length - 1])) return false;
+    if (k === 0) return true;
+    const how = sel.parts[k].before;
+    if (how === ">") return anc.length > 0 && at(k - 1, anc[anc.length - 1], anc.slice(0, -1));
+    if (how === " ") {
+      for (let a = anc.length - 1; a >= 0; a--) if (at(k - 1, anc[a], anc.slice(0, a))) return true;
+      return false;
     }
+    // a sibling before it: the next one (+) or any (~)
+    const parent = anc[anc.length - 1];
+    if (!parent) return false;
+    const siblings = parent.children.filter((c) => c.tag !== "#text");
+    const i = siblings.indexOf(node);
+    if (how === "+") return i > 0 && at(k - 1, siblings[i - 1], anc);
+    for (let j = i - 1; j >= 0; j--) if (at(k - 1, siblings[j], anc)) return true;
     return false;
   };
-  return left(k - 1, ancestors.length - 1);
+  return at(sel.parts.length - 1, n, ancestors);
 }
 
 /**
@@ -1777,13 +2026,81 @@ export function readSvg(
   viewport: number[] | null;
   images: SvgImage[];
   filters: SvgFilterUse[];
+  foreign: SvgForeign[];
 } {
   const root = parse(svg);
   const shapes: SvgShape[] = [];
   const images: SvgImage[] = [];
   const filters: SvgFilterUse[] = [];
+  const foreign: SvgForeign[] = [];
   /** The copies of filtered elements being read for their content (their filter set aside). */
   const filtering = new Set<Node>();
+  /**
+   * An SVG `<image>` read and carried into this drawing (task 18 8j): its document read by itself,
+   * its root fitted into the image's box by `preserveAspectRatio`, then the image's place, and
+   * clipped to the box; what its reading could not read is named.
+   */
+  const carryImageSvg = (
+    uri: string,
+    box: number[],
+    par: string | undefined,
+    m: Matrix,
+    clips: SvgClip[],
+    opacity: number,
+  ): string | null => {
+    const d = /^data:[^,]*?(;base64)?,(.*)$/is.exec(uri);
+    let text: string;
+    try {
+      text = d?.[1]
+        ? new TextDecoder().decode(
+            Uint8Array.from(atob(d[2].replace(/\s+/g, "")), (c) => c.charCodeAt(0)),
+          )
+        : decodeURIComponent(d?.[2] ?? "");
+    } catch {
+      return "an SVG <image> that does not decode";
+    }
+    const inner = readSvg(text);
+    const rootNode = parse(text).children.find((c) => c.tag === "svg");
+    const vb = (rootNode?.attrs.get("viewbox") ?? "").split(/[\s,]+/).map(Number);
+    const iw = cssLength(rootNode?.attrs.get("width") ?? "", 0);
+    const ih = cssLength(rootNode?.attrs.get("height") ?? "", 0);
+    const view =
+      vb.length === 4 && vb[2] > 0 && vb[3] > 0 ? vb : iw > 0 && ih > 0 ? [0, 0, iw, ih] : null;
+    if (!view) return "an SVG <image> with no size of its own";
+    const t = mul(mul(viewBoxMatrix(view, box[2], box[3], par), [1, 0, 0, 1, box[0], box[1]]), m);
+    const own: SvgClip = {
+      parts: [{ polygons: [rectPolygon(box[0], box[1], box[2], box[3], m)], evenOdd: false }],
+    };
+    const around = [...clips, own];
+    for (const u of inner.unread) unread.add(`in an SVG <image>: ${u}`);
+    for (const s of inner.shapes) {
+      const c = carryShape(s, t);
+      shapes.push({
+        ...c,
+        clips: [...around, ...(c.clips ?? [])],
+        fillAlpha: c.fillAlpha * opacity,
+        strokeAlpha: c.strokeAlpha * opacity,
+      });
+    }
+    for (const l of inner.labels) labels.push({ ...l, e: mul(l.e, t) });
+    for (const img of inner.images)
+      images.push({
+        ...img,
+        e: mul(img.e, t),
+        alpha: img.alpha * opacity,
+        clips: [...around, ...img.clips.map((c) => carryClip(c, t))],
+      });
+    for (const f of inner.filters)
+      filters.push({
+        ...f,
+        e: mul(f.e, t),
+        alpha: f.alpha * opacity,
+        content: f.content.map((s) => carryShape(s, t)),
+      });
+    for (const fo of inner.foreign)
+      foreign.push({ ...fo, box: fo.box.map(([x, y]) => apply(t, x, y)) });
+    return null;
+  };
   const labels: SvgLabel[] = [];
   const unread = new Set<string>();
   // Every stylesheet rule that could restyle the drawing: the report's, then the drawing's own
@@ -2377,6 +2694,7 @@ export function readSvg(
   };
   const walk = (n: Node, e: Matrix, inh: Inherited, depth: number, outerClips: SvgClip[] = []) => {
     if (n.tag === "#text" || NOT_DRAWN.has(n.tag) || depth > 32) return;
+    if (!conditionsPass(n)) return;
     if (UNREAD.has(n.tag)) {
       unread.add(`<${n.tag}>`);
       return;
@@ -2427,11 +2745,7 @@ export function readSvg(
         unread.add(mk);
         return;
       }
-      if (mk && inh.mask) {
-        unread.add("a mask inside a mask");
-        return;
-      }
-      if (mk) here.mask = mk;
+      if (mk) here.mask = inh.mask ? { ...mk, outer: inh.mask } : mk;
     }
     // The clips around this element and what it holds (group 8d): those around it, then its own
     // `clip-path` in its user space.
@@ -2616,11 +2930,49 @@ export function readSvg(
       return; // a shape draws no children
     }
     switch (n.tag) {
+      case "switch": {
+        // Only its first child whose conditions pass is drawn (task 18 8j, measured).
+        const chosen = n.children.find((c) => c.tag !== "#text" && conditionsPass(c));
+        if (chosen) {
+          ancestors.push(n);
+          walk(chosen, m, here, depth + 1, clips);
+          ancestors.pop();
+        }
+        return;
+      }
+      case "foreignobject": {
+        // HTML in a drawing (task 18 8j): Chrome prints its text as text (measured). Its text must
+        // be printed inside its box; its styling is the text check's (group 9).
+        const [x, y, w, h] = [num("x"), num("y"), num("width"), num("height")];
+        const html = n.children
+          .map(function flat(k: Node): string {
+            return k.tag === "#text" ? k.text : ` ${k.children.map(flat).join("")} `;
+          })
+          .join("");
+        const text = decodeEntities(html).replace(/\s+/g, " ").trim();
+        if (here.visible && w > 0 && h > 0 && text)
+          foreign.push({ text, box: rectPolygon(x, y, w, h, m) });
+        return;
+      }
       case "image": {
         // A raster image (group 8f): Chrome paints it as an image (measured), checked by where it
         // is painted and, by the caller, pixel for pixel. An SVG one, or one not embedded, is not.
         const uri = (n.attrs.get("href") ?? n.attrs.get("xlink:href") ?? "").trim();
         const [w, h] = [num("width", Number.NaN), num("height", Number.NaN)];
+        if (/^data:image\/svg\+xml/i.test(uri) && w > 0 && h > 0 && here.visible) {
+          // An SVG image (task 18 8j): Chrome draws its paths, fitted into the box and clipped to
+          // it (measured). Read as its own document -- its own stylesheet only -- and carried in.
+          const why = carryImageSvg(
+            uri,
+            [num("x"), num("y"), w, h],
+            n.attrs.get("preserveaspectratio"),
+            m,
+            clips,
+            here.opacity,
+          );
+          if (why) unread.add(why);
+          return;
+        }
         if (!/^data:image\/(?!svg\+xml)/i.test(uri)) {
           unread.add(`an <image> of "${uri.slice(0, 40)}"`);
           return;
@@ -2767,7 +3119,7 @@ export function readSvg(
     }
     walk(c, IDENTITY, start, 0, clips);
   }
-  return { shapes, labels, unread: [...unread], viewport, images, filters };
+  return { shapes, labels, unread: [...unread], viewport, images, filters, foreign };
 }
 
 // ---------------------------------------------------------------------------
@@ -3559,6 +3911,14 @@ export function compareSvg(
       b[3] <= onPage[3] + 1
     );
   };
+  // Each foreignObject's box on the page (task 18 8j): what lies in one is its HTML's.
+  const foreignBoxes = svg.foreign.map((fo) =>
+    polygonBox([fo.box.map(([x, y]) => apply(base, x, y))]),
+  );
+  const inForeign = (b: number[]) =>
+    foreignBoxes.some(
+      (f) => b[0] >= f[0] - 1 && b[1] >= f[1] - 1 && b[2] <= f[2] + 1 && b[3] <= f[3] + 1,
+    );
   const pagesDrawn = new Set([...matched.map((v) => v.page), ...matchedImages.map((p) => p.page)]);
   for (const page of pagesDrawn) {
     const orders = [...matched, ...matchedImages]
@@ -3578,7 +3938,22 @@ export function compareSvg(
     for (let k = at(lo) - 1; k >= 0 && here[k].on(); k--) lo = here[k].order;
     for (let k = at(hi) + 1; k < here.length && here[k].on(); k++) hi = here[k].order;
     for (const p of imagePaints) {
-      if (p.page === page && p.order >= lo && p.order <= hi && !used.has(imageKey(p)))
+      if (
+        p.page === page &&
+        p.order >= lo &&
+        p.order <= hi &&
+        !used.has(imageKey(p)) &&
+        !inForeign(
+          polygonBox(
+            [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 1],
+            ].map(([u, v]) => [apply(p.m, u, v)]),
+          ),
+        )
+      )
         extra.add(imageKey(p));
     }
     for (const v of vectors) {
@@ -3588,6 +3963,8 @@ export function compareSvg(
       // (the zip set, measured 2026-11-09, found once the span reached past the last match). Under
       // 0.05 pt across, its stroke width included, is far below any mark (a hairline is 0.12 pt).
       if (length(v.lines) === 0 && enclosed(v.lines) === 0) continue;
+      // inside a foreignObject's box: the HTML's own paint (its styling is the text check's)
+      if (inForeign(polygonBox(polygonsOf(v.lines, v.m)))) continue;
       const vb = polygonBox(polygonsOf(v.lines, v.m));
       const across = Math.hypot(vb[2] - vb[0], vb[3] - vb[1]) + v.lineWidth * scaleOf(v.m);
       if (across < 0.05) continue;
@@ -3668,6 +4045,27 @@ export function compareSvg(
         `the label "${l.text}" not where its source puts it (${l.anchor} at (${x.toFixed(1)}, ${y.toFixed(1)}), size ${size.toFixed(1)}${where})`,
       );
     }
+  }
+  // Each foreignObject's text printed inside its box (task 18 8j): the runs whose baseline starts
+  // there, read top to bottom, left to right, hold it.
+  for (const [k, fo] of svg.foreign.entries()) {
+    const b = foreignBoxes[k];
+    const got = runs
+      .filter(
+        (r) =>
+          pages.has(r.page) &&
+          r.x >= b[0] - 1 &&
+          r.x <= b[2] + 1 &&
+          r.y >= b[1] - 1 &&
+          r.y <= b[3] + 1,
+      )
+      .sort((a, c) => c.y - a.y || a.x - c.x)
+      .map((r) => r.text)
+      .join("")
+      .replace(/\s+/g, "");
+    if (got.includes(fo.text.replace(/\s+/g, ""))) placed++;
+    else
+      problems.push(`the foreignObject text "${fo.text.slice(0, 40)}" not printed inside its box`);
   }
   return {
     compared: matched.length + matchedImages.length + placed,

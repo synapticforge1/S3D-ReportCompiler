@@ -3516,9 +3516,9 @@ test(
     assert.ok(read.shapes[6].dashed.length > 20, "a dashed line cut into its dashes");
     //    What it does not read is named, never passed.
     // (A marker or a gradient is read since 8b, a <pattern> since 8g, a mask since 8h, a filter
-    // since 8i; a <switch> and a foreignObject are not, yet.)
+    // since 8i, a switch and a foreignObject since 8j; turbulence and an outside image are not.)
     const odd = svgs.readSvg(
-      `<svg><switch><path d="M0 0L9 9"/></switch><foreignObject width="9" height="9"/></svg>`,
+      `<svg><defs><filter id="t"><feTurbulence baseFrequency="0.1"/></filter></defs><path d="M0 0L9 9" stroke="#000" filter="url(#t)"/><image width="9" height="9" href="x.png"/></svg>`,
     );
     assert.equal(odd.unread.length, 2, JSON.stringify(odd.unread));
 
@@ -3739,12 +3739,13 @@ test(
       "<style>.probe polyline { stroke: #00aa00; stroke-width: 2 }</style>",
     );
     assert.equal(styled.code, 0, tail(styled.out));
+    // (`:first-child` and the sibling combinators are read since task 18 8j; `:has()` is not.)
     const unknown = plant(
       "an unread rule",
-      "<style>.probe path:first-child { stroke: #00aa00 }</style>",
+      "<style>.probe g:has(path) { stroke: #00aa00 }</style>",
     );
     assert.equal(unknown.code, 1, tail(unknown.out));
-    has(unknown.out, /drawing 2 -- the style rule ".probe path:first-child" is not verified/);
+    has(unknown.out, /drawing 2 -- the style rule ".probe g:has\(path\)" is not verified/);
   },
 );
 
@@ -4769,6 +4770,139 @@ test(
     const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
     assert.equal(r.code, 0, tail(r.out));
     has(r.out, /graphics: 10 image paint\(s\), 10 expected/);
+  },
+);
+
+// Group 8j: what was still refused -- a <switch>, conditional attributes, a foreignObject, an SVG
+// <image>, a mask in a mask, and selectors with sibling combinators and pseudo-classes.
+const SVG_IN_SVG = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="#c03020"/></svg>')}`;
+const PROBE_8J = `<svg viewBox="0 0 300 100" width="600" height="200" xmlns="http://www.w3.org/2000/svg">
+<style>.j8 rect:nth-child(3) { fill: #cc0000 } .j8 .a + rect { stroke: #0000cc; stroke-width: 3 } .j8 rect:not(.a) { fill-opacity: 0.8 } .j8 [data-k^="ze"] { fill: #00aa00 } .j8 rect:hover { fill: #ffff00 }</style>
+<defs><mask id="j8-a"><rect width="300" height="100" fill="#808080"/></mask><mask id="j8-b"><rect x="0" y="0" width="100" height="100" fill="#ffffff"/></mask></defs>
+<switch><rect x="10" y="10" width="20" height="10" fill="#008800" systemLanguage="xx"/><rect x="40" y="10" width="20" height="10" fill="#000088"/><rect x="70" y="10" width="20" height="10" fill="#880000"/></switch>
+<rect x="100" y="10" width="10" height="10" fill="#111111" systemLanguage="en-GB"/><rect x="115" y="10" width="10" height="10" fill="#222222" systemLanguage="fr"/><rect x="130" y="10" width="10" height="10" fill="#333333" requiredExtensions="x"/>
+<foreignObject x="150" y="5" width="140" height="25"><div xmlns="http://www.w3.org/1999/xhtml" style="font:10px sans-serif">Qwixel 17.25 kN</div></foreignObject>
+<image x="10" y="35" width="40" height="20" href="${SVG_IN_SVG}"/>
+<g mask="url(#j8-a)"><rect x="60" y="35" width="80" height="20" fill="#008800" mask="url(#j8-b)"/></g>
+<g class="j8"><rect class="a" x="10" y="70" width="20" height="20"/><rect x="40" y="70" width="20" height="20"/><rect class="b" x="70" y="70" width="20" height="20"/><rect data-k="zero" x="100" y="70" width="20" height="20"/></g>
+</svg>`;
+
+test(
+  "class B, task 18 group 8j: switch, languages, foreignObject, an SVG image, nested masks, selectors",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const read = svgs.readSvg(PROBE_8J);
+    assert.deepEqual(read.unread, []);
+    const hexOf = (c: number[] | null) =>
+      c
+        ? `#${c
+            .map((v) =>
+              Math.round(v * 255)
+                .toString(16)
+                .padStart(2, "0"),
+            )
+            .join("")}`
+        : "none";
+    const fills = read.shapes.map((s: { fill: number[] | null }) => hexOf(s.fill));
+    // the switch draws its first child that passes (not #008800, not #880000); en-GB passes, fr and
+    // requiredExtensions do not (measured with the render at en-US)
+    assert.deepEqual(fills.slice(0, 2), ["#000088", "#111111"]);
+    assert.ok(
+      !fills.includes("#008800") || fills.indexOf("#008800") > 2,
+      "the switch's failing child",
+    );
+    assert.ok(!fills.includes("#222222") && !fills.includes("#333333"));
+    // the SVG image: its rect fitted 2x into the box at (10, 35), clipped to it
+    const img = read.shapes[2];
+    assert.equal(hexOf(img.fill), "#c03020");
+    assert.deepEqual(
+      svgs.mul(img.e, [1, 0, 0, 1, 0, 0]).map((v: number) => +v.toFixed(6)),
+      [2, 0, 0, 2, 10, 35],
+    );
+    // its clips: the drawing's viewport, the image's box (10..50 x 35..55), its own root's viewport
+    const boxes = img.clips.map((c: { parts: { polygons: number[][][] }[] }) => {
+      const pts = c.parts[0].polygons[0];
+      return [
+        Math.min(...pts.map((p) => p[0])),
+        Math.min(...pts.map((p) => p[1])),
+        Math.max(...pts.map((p) => p[0])),
+        Math.max(...pts.map((p) => p[1])),
+      ].map((v) => +v.toFixed(6));
+    });
+    assert.deepEqual(boxes, [
+      [0, 0, 300, 100],
+      [10, 35, 50, 55],
+      [10, 35, 50, 55],
+    ]);
+    // nested masks: 0.5 (grey) times 1 inside the inner one's content (x < 100), 0 beyond it
+    const masked = read.shapes[3];
+    assert.ok(masked.mask?.outer, "a mask in a mask");
+    assert.equal(+svgs.svgMaskValue(masked.mask, 80, 45, 0.1).toFixed(3), 0.502);
+    assert.equal(svgs.svgMaskValue(masked.mask, 120, 45, 0.1), 0);
+    // selectors: nth-child(3) red, the .a's next sibling stroked, :not(.a) faded, ^= green, :hover never
+    const sel = read.shapes.slice(4);
+    assert.deepEqual(
+      sel.map((s: { fill: number[] | null }) => hexOf(s.fill)),
+      ["#000000", "#000000", "#cc0000", "#00aa00"],
+    );
+    assert.deepEqual(
+      sel.map((s: { stroke: number[] | null }) => hexOf(s.stroke)),
+      ["none", "#0000cc", "none", "none"],
+    );
+    assert.deepEqual(
+      sel.map((s: { fillAlpha: number }) => s.fillAlpha),
+      [1, 0.8, 0.8, 0.8],
+    );
+    // the foreignObject: its text, its box
+    assert.equal(read.foreign.length, 1);
+    assert.equal(read.foreign[0].text, "Qwixel 17.25 kN");
+    // ...printed inside its box passes; printed below it fails
+    const base = [2, 0, 0, -2, 0, 300];
+    const box = read.foreign[0].box.map(([x, y]: number[]) => [2 * x, 300 - 2 * y]);
+    const printedAt = (dy: number) => ({
+      page: 1,
+      text: "Qwixel 17.25 kN",
+      x: box[0][0] + 2,
+      y: box[0][1] - 20 - dy,
+      width: 80,
+      size: 20,
+      dx: 1,
+      dy: 0,
+    });
+    const only = { ...read, shapes: [read.shapes[0]], images: [], filters: [], labels: [] };
+    const drawn = [
+      {
+        page: 1,
+        order: 0,
+        fill: read.shapes[0].fill,
+        stroke: null,
+        fillAlpha: 1,
+        strokeAlpha: 1,
+        lineWidth: 1,
+        lines: read.shapes[0].lines,
+        m: svgs.mul(read.shapes[0].e, base),
+      },
+    ];
+    assert.deepEqual(svgs.compareSvg(only, drawn, [printedAt(0)], new Set()).problems, []);
+    assert.ok(
+      svgs
+        .compareSvg(only, drawn, [printedAt(60)], new Set())
+        .problems.some((p: string) =>
+          /foreignObject text "Qwixel 17.25 kN" not printed inside its box/.test(p),
+        ),
+    );
+
+    // End to end: Chrome draws all of it, and the build PASSES.
+    const dir = join(work, "task18-8j");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8J}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
   },
 );
 
