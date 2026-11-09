@@ -1242,9 +1242,9 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
 - ✅ **8f — `<image>` in an SVG, DONE 2026-11-09 (known-issues #101):** placed (three corners),
   sized, faded and clipped as its source says; a `slice` as Chrome's whole-pixel crop; its pixels
   by 7a's comparison. Drawings now come before the `<img>` pairing.
-- **8g — `<pattern>`:** Chrome rasterises the pattern over the shape's whole box into ONE image
-  inside a tiling pattern (223×112 for a 60×40 rect): compare pixels against the pattern's own
-  shapes evaluated at each pixel centre, edges skipped.
+- ✅ **8g — `<pattern>`, DONE 2026-11-09 (known-issues #102):** Chrome rasterises it over the
+  drawing's whole VIEWPORT at a pixel a point into one image inside a tiling pattern; each pixel
+  on the painted area is held to the range of colours the source paints within a pixel of it.
 - **8h — `mask` and `filter`:** a mask is an alpha soft-mask group holding the mask as an IMAGE,
   the masked element still a vector path; a filter (blur) rasterises the element into one image
   of the filter region. Same pixel method; which filter primitives, to measure.

@@ -54,6 +54,9 @@ export type SvgShape = {
   join?: string;
   miter?: number;
   strokeFirst?: boolean;
+  /** Group 8g: a pattern the fill or stroke paints with, in place of `fill` / `stroke`. */
+  fillPattern?: SvgPattern;
+  strokePattern?: SvgPattern;
 };
 
 /** One region of a clip: polygons under a fill rule, itself clipped by `within` when set. */
@@ -79,6 +82,27 @@ export type Gradient = {
   spread: string;
   /** Offset 0-1, RGB 0-1; its `stop-opacity` (times its colour's own alpha), 1 when opaque. */
   stops: { offset: number; colour: number[]; opacity?: number }[];
+};
+
+/** An image's pixels, RGBA, row 0 at the top. */
+export type RasterPixels = { width: number; height: number; data: Uint8Array };
+
+/** A raster a PDF paints with: the unit square under `m` (row 0 at v = 1), its pixels. */
+export type PdfRaster = { m: Matrix; pixels: RasterPixels | null };
+
+/**
+ * An SVG `<pattern>`, resolved (its `href` chain followed): the tile in `units`, the transform,
+ * how its content is laid (a viewBox, or `contentUnits`), and its content as shapes in content
+ * coordinates (group 8g).
+ */
+export type SvgPattern = {
+  tile: number[];
+  units: string;
+  contentUnits: string;
+  transform: Matrix;
+  viewBox: number[] | null;
+  par: string;
+  content: SvgShape[];
 };
 
 /** A PDF shading as pdf.js gives it (`["RadialAxial", kind, bbox, stops, p0, p1, r0, r1]`), with its matrix. */
@@ -140,6 +164,9 @@ export type PdfVector = {
   /** Group 8e: a gradient's alpha as its own (grey) shading, read from a luminosity soft mask. */
   fillAlphaShading?: PdfShading;
   strokeAlphaShading?: PdfShading;
+  /** Group 8g: a pattern as Chrome writes it, one raster image under `m` (unit square to page). */
+  fillRaster?: PdfRaster;
+  strokeRaster?: PdfRaster;
   /** Group 8d: every clip in force (page space), the fill rule, line cap / join (PDF codes), miter limit. */
   clips?: PdfClip[];
   evenOdd?: boolean;
@@ -556,6 +583,189 @@ export function shadingColour(s: PdfShading, x: number, y: number): number[] | n
   } else t = radialT(u, v, p0, r0 ?? 0, p1, r1 ?? 0);
   // Chrome extends both ends (pad), as SVG's default does.
   return stopColour(parsed, Math.max(0, Math.min(1, t)));
+}
+
+/** `src` at alpha `a` over `dst` (straight RGBA, 0-1). */
+function over(c: number[], a: number, dst: number[]): number[] {
+  const out = a + dst[3] * (1 - a);
+  if (out <= 0) return [0, 0, 0, 0];
+  return [0, 1, 2].map((k) => (c[k] * a + dst[k] * dst[3] * (1 - a)) / out).concat(out);
+}
+
+/**
+ * A source pattern's colour (straight RGBA, 0-1) at a point of the shape it paints, in the
+ * shape's own coordinates (`box`: the shape's bounding box, for objectBoundingBox units); `null`
+ * where the point stands within `tol` of an edge -- a tile's seam, a content shape's outline, a
+ * stroke's side, end or corner -- where a raster's antialiasing mixes the two (group 8g).
+ */
+export function patternColour(
+  p: SvgPattern,
+  x: number,
+  y: number,
+  box: number[],
+  tol: number,
+): number[] | null {
+  const [bw, bh] = [box[2] - box[0] || 1, box[3] - box[1] || 1];
+  let [tx, ty, tw, th] = p.tile;
+  if (p.units !== "userSpaceOnUse")
+    [tx, ty, tw, th] = [box[0] + tx * bw, box[1] + ty * bh, tw * bw, th * bh];
+  const back = invert(p.transform);
+  const [qx, qy] = apply(back, x, y);
+  const tq = tol * scaleOf(back);
+  const lx = qx - tx - Math.floor((qx - tx) / tw) * tw;
+  const ly = qy - ty - Math.floor((qy - ty) / th) * th;
+  if (lx < tq || lx > tw - tq || ly < tq || ly > th - tq) return null;
+  const toContent: Matrix = p.viewBox
+    ? invert(viewBoxMatrix(p.viewBox, tw, th, p.par))
+    : p.contentUnits === "objectBoundingBox"
+      ? [1 / bw, 0, 0, 1 / bh, 0, 0]
+      : IDENTITY;
+  const [cx, cy] = apply(toContent, lx, ly);
+  const tc = tq * scaleOf(toContent);
+  let rgba = [0, 0, 0, 0];
+  for (const s of p.content) {
+    const toOwn = invert(s.e);
+    const [ox, oy] = apply(toOwn, cx, cy);
+    const t = tc * scaleOf(toOwn);
+    const sbox = bounds(s.lines);
+    if (s.fill || s.fillGradient) {
+      const polys = s.lines.map((l) => l.points);
+      if (edgeDistance(polys, ox, oy) < t) return null;
+      if (polygonsContain(polys, s.evenOdd ?? false, ox, oy)) {
+        const g = s.fillGradient;
+        const colour = g ? gradientColour(g, ox, oy, sbox) : (s.fill as number[]);
+        rgba = over(colour, s.fillAlpha * (g ? gradientAlpha(g, ox, oy, sbox) : 1), rgba);
+      }
+    }
+    if ((s.stroke || s.strokeGradient) && s.strokeWidth > 0) {
+      const half = s.strokeWidth / 2;
+      const d = reach([[ox, oy]], s.dashed);
+      if (Math.abs(d - half) < t) return null;
+      // A dash's end (its cap) and a corner (its join, a miter reaching out) are edges too.
+      for (const l of s.dashed) {
+        const pts = l.points;
+        if (!l.closed) {
+          for (const e of [pts[0], pts[pts.length - 1]])
+            if (Math.hypot(ox - e[0], oy - e[1]) < half * Math.SQRT2 + t) return null;
+        }
+        for (let k = 1; k < pts.length - 1; k++) {
+          const [a, b, c] = [pts[k - 1], pts[k], pts[k + 1]];
+          const turn = Math.abs(
+            Math.atan2(c[1] - b[1], c[0] - b[0]) - Math.atan2(b[1] - a[1], b[0] - a[0]),
+          );
+          if (
+            Math.min(turn, 2 * Math.PI - turn) > 0.15 &&
+            Math.hypot(ox - b[0], oy - b[1]) < half * (s.miter ?? 4) + t
+          )
+            return null;
+        }
+      }
+      if (d < half) {
+        const g = s.strokeGradient;
+        const colour = g ? gradientColour(g, ox, oy, sbox) : (s.stroke as number[]);
+        rgba = over(colour, s.strokeAlpha * (g ? gradientAlpha(g, ox, oy, sbox) : 1), rgba);
+      }
+    }
+  }
+  return rgba;
+}
+
+/**
+ * How a pattern raster differs from the source pattern (group 8g): every pixel whose centre lies
+ * on the painted area -- inside the fill, or within the stroke -- its colour over the white page
+ * against the pattern's own: BETWEEN the least and the most of each channel the source paints
+ * within a pixel of it (9 by 9 points over the pixel widened by a pixel all round), within
+ * 16/255 -- 8/255 where the source is one colour all that way. Chrome rasterises a pattern at a
+ * pixel a point over the whole viewport and blurs an edge by resampling its tile (measured
+ * 2026-11-09: an edge pixel 80% red where its exact coverage is 56%; faintly up to a pixel away,
+ * 18 and 25 levels at 0.8 and 0.9 of a pixel), and any such blur mixes only colours within that
+ * reach; a shape moved by more than a pixel flips whole pixels, far past that -- a pixel a point
+ * is the raster's own precision. (Skipping edge pixels instead
+ * hid any shift under 1.4 units, found by the test.) A stroke's caps and corners, whose shape
+ * this does not model, are still skipped.
+ */
+export function rasterDifference(
+  p: SvgPattern,
+  r: PdfRaster,
+  shape: SvgShape,
+  kind: "fill" | "stroke",
+  m: Matrix,
+): string | null {
+  if (!r.pixels) return "a pattern whose image does not decode";
+  const { width: W, height: H, data } = r.pixels;
+  const unitToShape = mul(r.m, invert(m));
+  const box = bounds(shape.lines);
+  const polys = shape.lines.map((l) => l.points);
+  const half = kind === "stroke" ? shape.strokeWidth / 2 : 0;
+  // Only the pixels over the shape's box (and its stroke), found through the inverse.
+  const shapeToUnit = invert(unitToShape);
+  const corners = [
+    [box[0] - half, box[1] - half],
+    [box[2] + half, box[1] - half],
+    [box[2] + half, box[3] + half],
+    [box[0] - half, box[3] + half],
+  ].map(([cx, cy]) => apply(shapeToUnit, cx, cy));
+  const us = corners.map((c) => c[0]);
+  const vs = corners.map((c) => c[1]);
+  const i0 = Math.max(0, Math.floor(Math.min(...us) * W));
+  const i1 = Math.min(W - 1, Math.ceil(Math.max(...us) * W));
+  const j0 = Math.max(0, Math.floor((1 - Math.max(...vs)) * H));
+  const j1 = Math.min(H - 1, Math.ceil((1 - Math.min(...vs)) * H));
+  let compared = 0;
+  let differ = 0;
+  let first = "";
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const [x, y] = apply(unitToShape, (i + 0.5) / W, 1 - (j + 0.5) / H);
+      // The raster is the pattern over the whole viewport, uncut: a pixel on the shape is judged
+      // whole (the path's own fill cuts it on the page).
+      if (
+        kind === "fill"
+          ? !polygonsContain(polys, shape.evenOdd ?? false, x, y)
+          : reach([[x, y]], shape.dashed) > half
+      )
+        continue;
+      // The range of each channel over the white page the source paints within half a pixel.
+      const lo = [1, 1, 1];
+      const hi = [0, 0, 0];
+      let skip = false;
+      for (let a = 0; a < 9 && !skip; a++) {
+        for (let b = 0; b < 9 && !skip; b++) {
+          const [sx, sy] = apply(
+            unitToShape,
+            (i - 1 + (3 * (a + 0.5)) / 9) / W,
+            1 - (j - 1 + (3 * (b + 0.5)) / 9) / H,
+          );
+          const c = patternColour(p, sx, sy, box, 0);
+          if (c === null) skip = true;
+          else
+            for (let k = 0; k < 3; k++) {
+              const v = c[3] * c[k] + (1 - c[3]);
+              lo[k] = Math.min(lo[k], v);
+              hi[k] = Math.max(hi[k], v);
+            }
+        }
+      }
+      if (skip) continue;
+      const k = 4 * (j * W + i);
+      const a = data[k + 3] / 255;
+      const got = [0, 1, 2].map((c) => (a * data[k + c] + (1 - a) * 255) / 255);
+      compared++;
+      // Where the source is one colour all that way, the pixel is that colour (8 levels); beside
+      // an edge, anything the blur can mix (16 levels outside its range).
+      const uniform = [0, 1, 2].every((c) => hi[c] - lo[c] < 1 / 255);
+      const slack = (uniform ? 8 : 16) / 255;
+      if (got.some((g, c) => g < lo[c] - slack || g > hi[c] + slack)) {
+        // the nearest the source allows there
+        const wanted = [0, 1, 2].map((c) => (got[c] < lo[c] ? lo[c] : hi[c]));
+        differ++;
+        if (!first)
+          first = ` (first at (${x.toFixed(1)}, ${y.toFixed(1)}): ${hex(got)}, ${hex(wanted)} at most in its source)`;
+      }
+    }
+  }
+  if (compared === 0) return "a pattern with no pixel clear of an edge to compare";
+  return differ === 0 ? null : `pattern: ${differ} of ${compared} pixels differ${first}`;
 }
 
 /** A path's `d` as polylines, every command (arcs as their curve), curves in 16 segments. */
@@ -1435,11 +1645,81 @@ export function readSvg(
       },
     };
   };
+  /** The patterns being read, so one that holds itself is named, not followed forever. */
+  const resolving = new Set<Node>();
+  /**
+   * A `<pattern>` as an {@link SvgPattern} (group 8g): its `href` chain followed for what it does
+   * not say itself (attributes, and content from the first with any); its content read as the
+   * drawing's shapes are. A tile with no area paints nothing.
+   */
+  const readPattern = (node: Node): { pattern: SvgPattern } | { unread: string } | null => {
+    const chain: Node[] = [];
+    for (let at: Node | undefined = node; at && chain.length < 10 && !chain.includes(at);) {
+      chain.push(at);
+      const ref: string = (at.attrs.get("href") ?? at.attrs.get("xlink:href") ?? "").replace(
+        /^#/,
+        "",
+      );
+      at = ref ? ids.get(ref) : undefined;
+    }
+    const attr = (a: string) => chain.find((c) => c.attrs.has(a))?.attrs.get(a);
+    const units = (attr("patternunits") ?? "objectBoundingBox").trim();
+    const contentUnits = (attr("patterncontentunits") ?? "userSpaceOnUse").trim();
+    const length = (a: string): number => {
+      const v = attr(a);
+      if (v === undefined) return 0;
+      const n = Number.parseFloat(v);
+      if (!Number.isFinite(n)) return 0;
+      if (v.trim().endsWith("%")) return units === "userSpaceOnUse" ? Number.NaN : n / 100;
+      return n;
+    };
+    const tile = ["x", "y", "width", "height"].map(length);
+    if (tile.some(Number.isNaN)) return { unread: "a pattern in percentages of its viewport" };
+    if (tile[2] <= 0 || tile[3] <= 0) return null;
+    const vb = (attr("viewbox") ?? "").split(/[\s,]+/).map(Number);
+    const viewBox = vb.length === 4 && vb[2] > 0 && vb[3] > 0 ? vb : null;
+    const holder = chain.find((c) => c.children.some((k) => k.tag !== "#text"));
+    if (!holder) return null;
+    if (resolving.has(holder)) return { unread: "a pattern that holds itself" };
+    if (/^(visible|auto)$/.test((own(holder, "overflow", []) ?? "hidden").trim()))
+      return { unread: "a pattern whose overflow shows" };
+    resolving.add(holder);
+    const [s, l, im] = [shapes.length, labels.length, images.length];
+    walk(
+      { tag: "g", attrs: new Map(), children: holder.children, text: "" },
+      IDENTITY,
+      start,
+      1,
+      [],
+    );
+    resolving.delete(holder);
+    const content = shapes.splice(s);
+    if (labels.splice(l).length + images.splice(im).length > 0)
+      return { unread: "a pattern holding text or an image" };
+    if (content.some((c) => c.fillPattern || c.strokePattern))
+      return { unread: "a pattern inside a pattern" };
+    return {
+      pattern: {
+        tile,
+        units,
+        contentUnits,
+        transform: transformOf(attr("patterntransform")),
+        viewBox,
+        par: attr("preserveaspectratio") ?? "xMidYMid meet",
+        content,
+      },
+    };
+  };
   /** A fill or stroke value: a colour, a gradient, nothing, or what this reader cannot evaluate. */
   const resolvePaint = (
     value: string,
     current: number[],
-  ): { rgb: number[] } | { gradient: Gradient } | { unread: string } | null => {
+  ):
+    | { rgb: number[] }
+    | { gradient: Gradient }
+    | { pattern: SvgPattern }
+    | { unread: string }
+    | null => {
     const v = value.trim();
     const url = /^url\(\s*['"]?#([^'")]+)['"]?\s*\)\s*(.*)$/i.exec(v);
     if (url) {
@@ -1448,6 +1728,7 @@ export function readSvg(
       if (!target) return url[2].trim() ? resolvePaint(url[2], current) : null;
       if (target.tag === "lineargradient" || target.tag === "radialgradient")
         return readGradient(target);
+      if (target.tag === "pattern") return readPattern(target);
       return { unread: `"${v}" (a <${target.tag}>)` };
     }
     const p = paintOf(v, current);
@@ -1738,6 +2019,10 @@ export function readSvg(
         fillPaint !== null && "gradient" in fillPaint ? fillPaint.gradient : undefined;
       const strokeGradient =
         strokePaint !== null && "gradient" in strokePaint ? strokePaint.gradient : undefined;
+      const fillPattern =
+        fillPaint !== null && "pattern" in fillPaint ? fillPaint.pattern : undefined;
+      const strokePattern =
+        strokePaint !== null && "pattern" in strokePaint ? strokePaint.pattern : undefined;
       const width = Number.parseFloat(here.width);
       const pattern =
         here.dasharray === "none" ? [] : (here.dasharray.match(/[\d.]+/g) ?? []).map(Number);
@@ -1752,7 +2037,7 @@ export function readSvg(
       // A shape whose box misses a clip around it is not drawn at all: Chrome leaves it out
       // (measured, group 8d: a rect outside its clip path was no path), so there is nothing to find.
       const box = polygonBox(polygonsOf(lines, m));
-      const reach = (stroke || strokeGradient ? sw / 2 : 0) * scaleOf(m);
+      const reach = (stroke || strokeGradient || strokePattern ? sw / 2 : 0) * scaleOf(m);
       const shown = clips.every((c) => {
         const cb = polygonBox(clipPolygons(c));
         return (
@@ -1786,6 +2071,8 @@ export function readSvg(
         cap: here.cap.trim().toLowerCase(),
         ...(fillGradient && enclosed(lines) > 1e-9 ? { fillGradient } : {}),
         ...(strokeGradient ? { strokeGradient } : {}),
+        ...(fillPattern && enclosed(lines) > 1e-9 ? { fillPattern } : {}),
+        ...(strokePattern ? { strokePattern } : {}),
         clips,
         evenOdd: here.fillRule.trim().toLowerCase() === "evenodd",
         join,
@@ -2161,8 +2448,12 @@ export function compareSvg(
   const draws = (shape: SvgShape) =>
     length(shape.dashed) > 1e-9 || (shape.cap !== "butt" && shape.lines.length > 0);
   const duties: Duty[] = svg.shapes.flatMap((shape) => [
-    ...(shape.fill !== null || shape.fillGradient ? [{ shape, kind: "fill" as const }] : []),
-    ...((shape.stroke !== null || shape.strokeGradient) && shape.strokeWidth > 0 && draws(shape)
+    ...(shape.fill !== null || shape.fillGradient || shape.fillPattern
+      ? [{ shape, kind: "fill" as const }]
+      : []),
+    ...((shape.stroke !== null || shape.strokeGradient || shape.strokePattern) &&
+    shape.strokeWidth > 0 &&
+    draws(shape)
       ? [{ shape, kind: "stroke" as const }]
       : []),
   ]);
@@ -2191,9 +2482,12 @@ export function compareSvg(
   // a shading (a gradient), or something else (a tiling pattern); a duty takes a path of its kind.
   const gradientOf = (d: Duty) =>
     d.kind === "fill" ? d.shape.fillGradient : d.shape.strokeGradient;
+  const patternOf = (d: Duty) => (d.kind === "fill" ? d.shape.fillPattern : d.shape.strokePattern);
   const paints = (v: PdfVector, as: "fill" | "stroke", d: Duty) => {
     const solid = as === "fill" ? v.fill : v.stroke;
     const shading = as === "fill" ? v.fillShading : v.strokeShading;
+    const raster = as === "fill" ? v.fillRaster : v.strokeRaster;
+    if (patternOf(d)) return raster !== undefined;
     return gradientOf(d) ? shading !== undefined : solid !== null;
   };
   type Candidate = { v: PdfVector; base: Matrix; as: "fill" | "stroke" };
@@ -2296,6 +2590,12 @@ export function compareSvg(
   };
   /** How a candidate's paint differs from the duty's, or null when it is the same. */
   const paintDifference = (c: Candidate, d: Duty): string | null => {
+    const pattern = patternOf(d);
+    if (pattern) {
+      const raster = c.as === "fill" ? c.v.fillRaster : c.v.strokeRaster;
+      if (!raster) return "drawn without its pattern";
+      return rasterDifference(pattern, raster, d.shape, d.kind, c.v.m);
+    }
     const g = gradientOf(d);
     if (!g) {
       const got = c.as === "fill" ? c.v.fill : c.v.stroke;
@@ -2600,7 +2900,7 @@ export function compareSvg(
   const extra = new Set<string>();
   // Where the source has a stroked element that draws nothing (no length, butt caps): its point.
   const silent = svg.shapes
-    .filter((s) => (s.stroke !== null || s.strokeGradient) && !draws(s))
+    .filter((s) => (s.stroke !== null || s.strokeGradient || s.strokePattern) && !draws(s))
     .flatMap((s) => s.lines.flatMap((l) => l.points.map(([x, y]) => apply(s.e, x, y))));
   // Group 8d: and before the first and after the last, while what is painted lies on the drawing
   // (its viewport placed on the page, or its shapes' box): a hidden shape drawn last passed.
@@ -2687,8 +2987,8 @@ export function compareSvg(
       for (const kind of ["fill", "stroke"] as const) {
         const painted =
           kind === "fill"
-            ? v.fill !== null || v.fillShading || v.fillOther
-            : v.stroke !== null || v.strokeShading || v.strokeOther;
+            ? v.fill !== null || v.fillShading || v.fillOther || v.fillRaster
+            : v.stroke !== null || v.strokeShading || v.strokeOther || v.strokeRaster;
         if (painted && !used.has(key(v, kind))) extra.add(key(v, kind));
       }
     }

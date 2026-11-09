@@ -1268,6 +1268,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       // Group 8e: a gradient's alpha, as its own shading (a gradient with stop-opacity).
       fillAlphaShading?: PdfShading;
       strokeAlphaShading?: PdfShading;
+      // Group 8g: a pattern's raster, by image id and its matrix to the page.
+      fillRaster?: { id: string; m: number[] };
+      strokeRaster?: { id: string; m: number[] };
       // Group 8d: every clip in force, as polygons on the page; the line cap, join, miter limit.
       clips: PdfClip[];
       cap: number;
@@ -1292,6 +1295,10 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     };
     let clipPending = false;
     let clipEvenOdd = false;
+    /** A pattern's raster found while reading its paint (group 8g), handed to the graphics state. */
+    let rasterPending: { id: string; m: number[] } | null = null;
+    /** The paths painted with a pattern's raster, whose pixels are fetched after the walk. */
+    const rastersToFetch: { at: number; as: "fill" | "stroke"; id: string; m: number[] }[] = [];
     /** A fill colour as RGB 0-1: pdf.js gives "#rrggbb", or numbers 0-255 or 0-1, or one grey. */
     const rgb = (args: unknown[]): number[] => {
       if (typeof args[0] === "string") {
@@ -1535,6 +1542,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           fillShading: undefined,
           fillAlphaShading: undefined,
           fillOther: undefined,
+          fillRaster: undefined,
         };
       } else if (fn === pdfjs.OPS.setStrokeRGBColor || fn === pdfjs.OPS.setStrokeGray) {
         gs = {
@@ -1543,6 +1551,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           strokeShading: undefined,
           strokeAlphaShading: undefined,
           strokeOther: undefined,
+          strokeRaster: undefined,
         };
       } else if (fn === pdfjs.OPS.setFillColorN || fn === pdfjs.OPS.setStrokeColorN) {
         // A pattern paint (task 18 group 8b): Chrome paints an SVG gradient as a shading pattern,
@@ -1619,15 +1628,67 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
             alphaShading = shadingOf(mask[0].id, mul(mask[0].matrix, pm));
             shading = shadingOf(colour[0].id, mul(colour[0].matrix, pm));
           }
-          if (!shading || !alphaShading) {
+          // Group 8g: an SVG <pattern>, as Chrome writes it (measured 2026-11-09): the tiling
+          // pattern holds only image paints -- the pattern rasterised over the drawing's whole
+          // viewport at a pixel a point, and one of no height that paints nothing. Kept as that one
+          // image under its matrix to the page; its pixels are fetched after the walk.
+          let rasterAt: { id: string; m: number[] } | null = null;
+          if (!shading && ir) {
+            const inner: number[][] = [];
+            let cm = [1, 0, 0, 1, 0, 0];
+            const images: { id: string; m: number[] }[] = [];
+            let odd = false;
+            ir.fnArray.forEach((f, k) => {
+              const a = ir.argsArray[k] ?? [];
+              if (f === pdfjs.OPS.save) inner.push(cm);
+              else if (f === pdfjs.OPS.restore) cm = inner.pop() ?? cm;
+              else if (f === pdfjs.OPS.transform) cm = mul(a as number[], cm);
+              else if (f === pdfjs.OPS.paintImageXObject)
+                images.push({ id: String(a[0]), m: mul(cm, pm) });
+              else if (f === pdfjs.OPS.setGState) {
+                for (const [key, value] of (a[0] as [string, unknown][]) ?? []) {
+                  if (!["ca", "CA", "BM"].includes(key) && !(key === "SMask" && value === false))
+                    odd = true;
+                }
+              } else if (
+                f !== pdfjs.OPS.setFillRGBColor &&
+                f !== pdfjs.OPS.setStrokeRGBColor &&
+                f !== pdfjs.OPS.dependency
+              ) {
+                odd = true;
+              }
+            });
+            // The companion "of no height" is not exactly none (its height rounds to 0.000): it
+            // paints under a square point, where the raster covers thousands.
+            const seen = images.filter((x) => Math.abs(x.m[0] * x.m[3] - x.m[1] * x.m[2]) >= 1);
+            if (!odd && seen.length === 1) rasterAt = seen[0];
+          }
+          if (rasterAt) {
+            other = undefined;
+            rasterPending = rasterAt;
+          } else if (!shading || !alphaShading) {
             shading = undefined;
             alphaShading = undefined;
             other = "a TilingPattern paint";
           }
         } else other = `a ${String(args[0])} paint`;
+        const raster = rasterPending ?? undefined;
+        rasterPending = null;
         gs = stroke
-          ? { ...gs, strokeShading: shading, strokeAlphaShading: alphaShading, strokeOther: other }
-          : { ...gs, fillShading: shading, fillAlphaShading: alphaShading, fillOther: other };
+          ? {
+              ...gs,
+              strokeShading: shading,
+              strokeAlphaShading: alphaShading,
+              strokeOther: other,
+              strokeRaster: raster,
+            }
+          : {
+              ...gs,
+              fillShading: shading,
+              fillAlphaShading: alphaShading,
+              fillOther: other,
+              fillRaster: raster,
+            };
       } else if (fn === pdfjs.OPS.setLineWidth) {
         gs = { ...gs, lw: Number(args[0]) };
       } else if (fn === pdfjs.OPS.setGState) {
@@ -1745,8 +1806,18 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         const strokes = STROKES.has(op);
         if (!clipPending && (fills || strokes)) {
           // A pattern paint stands in place of the colour (the colour last set is stale under it).
-          const fillPattern = gs.fillShading !== undefined || gs.fillOther !== undefined;
-          const strokePattern = gs.strokeShading !== undefined || gs.strokeOther !== undefined;
+          const fillPattern =
+            gs.fillShading !== undefined ||
+            gs.fillOther !== undefined ||
+            gs.fillRaster !== undefined;
+          const strokePattern =
+            gs.strokeShading !== undefined ||
+            gs.strokeOther !== undefined ||
+            gs.strokeRaster !== undefined;
+          if (fills && gs.fillRaster)
+            rastersToFetch.push({ at: obs.vectors.length, as: "fill", ...gs.fillRaster });
+          if (strokes && gs.strokeRaster)
+            rastersToFetch.push({ at: obs.vectors.length, as: "stroke", ...gs.strokeRaster });
           obs.vectors.push({
             page: p,
             order: i,
@@ -1779,6 +1850,14 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       }
     });
     obs.imagesPerPage.push(imagesHere);
+    // Each pattern's raster, its pixels now (group 8g): the walk above could not wait for them.
+    for (const r of rastersToFetch) {
+      const pixels = await pdfImage(page, r.id);
+      const v = obs.vectors[r.at];
+      const raster = { m: r.m, pixels };
+      if (r.as === "fill") v.fillRaster = raster;
+      else v.strokeRaster = raster;
+    }
     // Each painted image's pixels, in paint order, for the pixel check (task 18 item 5).
     for (const q of paints) {
       if (q.image !== undefined)

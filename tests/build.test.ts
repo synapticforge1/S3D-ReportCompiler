@@ -3515,9 +3515,10 @@ test(
     );
     assert.ok(read.shapes[6].dashed.length > 20, "a dashed line cut into its dashes");
     //    What it does not read is named, never passed.
-    // (A marker or a gradient is read since 8b; a filter and a <pattern> fill are not, yet.)
+    // (A marker or a gradient is read since 8b, a <pattern> since 8g; a filter and a mask are
+    // not, yet.)
     const odd = svgs.readSvg(
-      `<svg><path d="M0 0L9 9" filter="url(#f)"/><pattern id="p"/><rect width="9" height="9" fill="url(#p)"/></svg>`,
+      `<svg><path d="M0 0L9 9" filter="url(#f)"/><mask id="k"/><rect width="9" height="9" fill="#000" mask="url(#k)"/></svg>`,
     );
     assert.equal(odd.unread.length, 2, JSON.stringify(odd.unread));
 
@@ -4326,6 +4327,139 @@ test(
     const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
     assert.equal(r.code, 0, tail(r.out));
     has(r.out, /images: {3}6 of 6 identical to their sources, pixel for pixel/);
+  },
+);
+
+// Group 8g: <pattern> paints -- turned, through a viewBox, in bounding-box content units, on a
+// stroke.
+const PROBE_8G = `<svg viewBox="0 0 200 100" width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+<defs><pattern id="g8-t" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(30)"><rect width="5" height="5" fill="#cc0000"/></pattern>
+<pattern id="g8-v" width="0.25" height="0.5" viewBox="0 0 20 10"><circle cx="10" cy="5" r="4" fill="#0000cc" stroke="#00aa00" stroke-width="2"/></pattern>
+<pattern id="g8-b" width="0.5" height="0.5" patternContentUnits="objectBoundingBox"><rect width="0.25" height="0.25" fill="#008800"/></pattern></defs>
+<rect x="10" y="10" width="60" height="40" fill="url(#g8-t)"/>
+<rect x="80" y="10" width="80" height="40" fill="url(#g8-v)"/>
+<circle cx="40" cy="75" r="20" fill="url(#g8-b)"/>
+<rect x="100" y="60" width="90" height="35" fill="none" stroke="url(#g8-t)" stroke-width="6"/>
+</svg>`;
+
+test(
+  "class B, task 18 group 8g: a <pattern>, pixel by pixel against its own content",
+  { timeout: TIMEOUT },
+  async () => {
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const read = svgs.readSvg(PROBE_8G);
+    assert.deepEqual(read.unread, []);
+    const [turned, viewed, units, stroked] = read.shapes;
+    assert.ok(
+      turned.fillPattern && viewed.fillPattern && units.fillPattern && stroked.strokePattern,
+    );
+    // 1. The pattern's own colour at a point: its tile, units, transform, viewBox, content.
+    const at = (
+      s: { fillPattern?: unknown; strokePattern?: unknown; lines: { points: number[][] }[] },
+      x: number,
+      y: number,
+    ) => {
+      const xs = s.lines.flatMap((l) => l.points.map((p) => p[0]));
+      const ys = s.lines.flatMap((l) => l.points.map((p) => p[1]));
+      const c = svgs.patternColour(
+        s.fillPattern ?? s.strokePattern,
+        x,
+        y,
+        [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+        0.2,
+      );
+      return c === null ? null : c.map((v: number) => Math.round(v * 255));
+    };
+    // turned 30 degrees: (2.5, 2.5) of the pattern's space, turned onto the shape, is red
+    const r = (Math.PI / 6) as number;
+    const [px, py] = [2.5 * Math.cos(r) - 2.5 * Math.sin(r), 2.5 * Math.sin(r) + 2.5 * Math.cos(r)];
+    assert.deepEqual(at(turned, px, py), [0xcc, 0, 0, 255], "inside the turned square");
+    // (4.5, 0.5) is inside the square unturned; turned back 30 degrees it is (4.1, 8.2) of the tile
+    assert.deepEqual(at(turned, 4.5, 0.5), [0, 0, 0, 0], "a spot only the unturned square holds");
+    // viewBox 20x10 into a 20x20 tile (a quarter of 80 by half of 40), meet: the circle centred
+    assert.deepEqual(at(viewed, 90, 20), [0, 0, 0xcc, 255], "the circle's middle");
+    assert.deepEqual(at(viewed, 90 + 4.5, 20), [0, 0xaa, 0, 255], "on its stroke");
+    assert.equal(at(viewed, 90 + 4, 20), null, "on the stroke's edge: skipped");
+    // objectBoundingBox content: a quarter of the circle's 40 box, from the tile's corner
+    assert.deepEqual(at(units, 20 + 5, 55 + 5), [0, 0x88, 0, 255]);
+    assert.deepEqual(at(units, 20 + 15, 55 + 5), [0, 0, 0, 0]);
+    assert.equal(at(units, 20 + 10, 55 + 5), null, "the content's edge: skipped");
+
+    // 2. Against a raster: one made from the source matches; a recoloured or shifted one does not.
+    const base = [1.1, 0, 0, -1.1, 30, 600];
+    const W = 223;
+    const H = 112;
+    // Chrome's: the whole viewport (200 by 100 units, 220 by 110 on the page), row 0 at the top --
+    // v = 1 is the drawing's y 0 (page y 600), v = 0 its y 100 (page y 490)
+    const unit = [220, 0, 0, 110, 30, 490];
+    const makeRaster = (s: Record<string, unknown>, kind: string, shift = 0, recolour = false) => {
+      const m = svgs.mul(s.e as number[], base);
+      const toShape = svgs.mul(unit, [1 / m[0], 0, 0, 1 / m[3], -m[4] / m[0], -m[5] / m[3]]);
+      const data = new Uint8Array(W * H * 4);
+      const lines = s.lines as { points: number[][] }[];
+      const xs = lines.flatMap((l) => l.points.map((p) => p[0]));
+      const ys = lines.flatMap((l) => l.points.map((p) => p[1]));
+      const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+      for (let j = 0; j < H; j++)
+        for (let i = 0; i < W; i++) {
+          const u = (i + 0.5) / W;
+          const v = 1 - (j + 0.5) / H;
+          const x = toShape[0] * u + toShape[2] * v + toShape[4] + shift;
+          const y = toShape[1] * u + toShape[3] * v + toShape[5];
+          const c = svgs.patternColour(
+            kind === "fill" ? s.fillPattern : s.strokePattern,
+            x,
+            y,
+            box,
+            0,
+          ) ?? [1, 1, 1, 0];
+          // 12 levels: past the 8 a solid pixel is allowed, inside the 16 an edge pixel is
+          const rgb = recolour ? [c[0], Math.min(1, c[1] + 12 / 255), c[2]] : c;
+          data.set(
+            [...rgb.slice(0, 3).map((t: number) => Math.round(t * 255)), Math.round(c[3] * 255)],
+            4 * (j * W + i),
+          );
+        }
+      return { m: unit, pixels: { width: W, height: H, data } };
+    };
+    const differs = (s: Record<string, unknown>, kind: string, raster: unknown) =>
+      svgs.rasterDifference(
+        kind === "fill" ? s.fillPattern : s.strokePattern,
+        raster,
+        s,
+        kind,
+        svgs.mul(s.e as number[], base),
+      );
+    for (const [s, kind] of [
+      [turned, "fill"],
+      [viewed, "fill"],
+      [units, "fill"],
+      [stroked, "stroke"],
+    ] as const) {
+      assert.equal(differs(s, kind, makeRaster(s, kind)), null, `${kind} as its source`);
+      const label = `${s.what} ${kind}`;
+      assert.match(
+        String(differs(s, kind, makeRaster(s, kind, 0, true))),
+        /pattern: \d+ of \d+ pixels differ/,
+        `${label} recoloured`,
+      );
+      assert.match(
+        String(differs(s, kind, makeRaster(s, kind, 1.5))),
+        /pattern: \d+ of \d+ pixels differ/,
+        `${label} shifted`,
+      );
+    }
+
+    // 3. End to end: Chrome rasterises them, and the build PASSES.
+    const dir = join(work, "task18-8g");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8G}</body>`),
+    );
+    const built = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(built.code, 0, tail(built.out));
   },
 );
 
