@@ -5320,6 +5320,108 @@ test("compat: a tagged version is refused unless the release says it is unpublis
   has(r.out, new RegExp(`${tag.replace(/\./g, "\\.")} already exists`));
 });
 
+test("H30 / H32: the GitHub API script makes the Release page by the recipe, without gh", async () => {
+  const api = await import(pathToFileURL(join(ROOT, "scripts", "github-api.ts")).href);
+  const SHA = "a".repeat(40);
+  const OTHER = "b".repeat(40);
+  const TAGOBJ = "c".repeat(40);
+  /** A stand-in GitHub: a tag (annotated or not), maybe a Release; every call recorded. */
+  const github = (opts: {
+    tag?: "light" | "annotated" | "none";
+    peels?: string;
+    release?: boolean;
+    moveAfterPost?: boolean;
+  }) => {
+    const calls: string[] = [];
+    let released = opts.release ?? false;
+    let peels = opts.peels ?? SHA;
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+    // It answers at once; `fetch`'s shape is a promise of that answer.
+    const answer = (url: string | URL, init?: RequestInit): Response => {
+      const path = String(url).replace("https://api.test/repos/o/r/", "");
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${path}`);
+      if (path === "git/ref/tags/v9.9.9") {
+        if ((opts.tag ?? "light") === "none") return json(404, { message: "Not Found" });
+        return opts.tag === "annotated"
+          ? json(200, { object: { type: "tag", sha: TAGOBJ } })
+          : json(200, { object: { type: "commit", sha: peels } });
+      }
+      if (path === `git/tags/${TAGOBJ}`)
+        return json(200, { object: { type: "commit", sha: peels } });
+      if (path === "releases/tags/v9.9.9") {
+        return released
+          ? json(200, { tag_name: "v9.9.9", draft: false, html_url: "u" })
+          : json(404, {});
+      }
+      if (path === "releases" && method === "POST") {
+        released = true;
+        if (opts.moveAfterPost) peels = OTHER;
+        return json(201, {});
+      }
+      if (path.startsWith("commits/"))
+        return path === "commits/v9.9.9" ? json(200, { sha: SHA }) : json(404, {});
+      if (path.startsWith("actions/workflows/ci.yml/runs")) return json(200, { workflow_runs: [] });
+      return json(500, {});
+    };
+    const fetchImpl = (url: string | URL, init?: RequestInit) => Promise.resolve(answer(url, init));
+    const env = {
+      repo: "o/r",
+      token: "t",
+      api: "https://api.test",
+      fetch: fetchImpl,
+      log: () => {},
+    };
+    return { env, calls };
+  };
+  const posts = (calls: string[]) => calls.filter((c) => c.startsWith("POST")).length;
+
+  // 1. A new tag gets its page: the tag checked FIRST, created once, read back, the tag re-checked.
+  const fresh = github({});
+  assert.equal(await api.release(fresh.env, "v9.9.9", SHA, "9.9.9"), "created");
+  assert.equal(fresh.calls[0], "GET git/ref/tags/v9.9.9", "the tag was not checked first");
+  assert.equal(posts(fresh.calls), 1);
+  assert.deepEqual(
+    fresh.calls.slice(-2),
+    ["GET releases/tags/v9.9.9", "GET git/ref/tags/v9.9.9"],
+    "not read back",
+  );
+  //    An annotated tag is followed to its commit.
+  assert.equal(
+    await api.release(github({ tag: "annotated" }).env, "v9.9.9", SHA, "9.9.9"),
+    "created",
+  );
+  // 2. A page already there is done, with no write (a re-run is safe).
+  const again = github({ release: true });
+  assert.equal(await api.release(again.env, "v9.9.9", SHA, "9.9.9"), "exists");
+  assert.equal(posts(again.calls), 0, "an existing page was written again");
+  // 3. Refused, with nothing written: no tag (POST would CREATE it), a tag on another commit, and
+  //    a tag that moved while the page was made.
+  for (const [what, opts, why] of [
+    ["no tag", { tag: "none" as const }, /no tag v9\.9\.9/],
+    ["a tag on another commit", { peels: OTHER }, /peels to b{40}, not the released/],
+    [
+      "an annotated tag on another commit",
+      { tag: "annotated" as const, peels: OTHER },
+      /peels to b{40}/,
+    ],
+  ] as const) {
+    const g = github(opts);
+    await assert.rejects(api.release(g.env, "v9.9.9", SHA, "9.9.9"), why, what);
+    assert.equal(posts(g.calls), 0, `${what}: something was written`);
+  }
+  await assert.rejects(
+    api.release(github({ moveAfterPost: true }).env, "v9.9.9", SHA, "9.9.9"),
+    /moved/,
+  );
+  // 4. The reads the release gate makes: a commit (none is null, not an error), CI's push runs.
+  assert.equal(await api.commitOf(github({}).env, "v9.9.9"), SHA);
+  assert.equal(await api.commitOf(github({}).env, "release/v9.9.9"), null);
+  const runs = github({});
+  assert.equal(await api.ciRun(runs.env, SHA), "");
+  assert.match(runs.calls[0], /head_sha=a{40}&event=push/);
+});
+
 test("review 2, group D: the release path checks what it publishes", () => {
   // The compat gate reads a type tsc wrote WITHOUT `export` because an export uses it: a field
   // removed from it went through as "patch". A throwaway package, the real compat.ts.
@@ -5421,9 +5523,13 @@ test("review 2, group D: the release path checks what it publishes", () => {
     /workflow_dispatch" \] && \[ "\$GITHUB_REF" != "refs\/heads\/main" \]/,
     "a manual run from any branch",
   );
-  assert.match(ciGreen, /head_sha=\$\{SHA\}&event=push/, "CI read from a run of any event");
+  // GitHub's REST API from the Bun script, never `gh` (owner, H30); the CI run asked for is a
+  // PUSH run of the commit.
+  assert.match(ciGreen, /github-api\.ts ci-run "\$\{SHA\}"/, "CI not read through the script");
+  const api = readFileSync(join(ROOT, "scripts", "github-api.ts"), "utf8");
+  assert.match(api, /runs\?head_sha=\$\{sha\}&event=push/, "CI read from a run of any event");
   assert.match(publish, /contents: read/, "the publish job (bun install) may write");
-  assert.doesNotMatch(publish, /git push|gh release create/, "the publish job writes");
+  assert.doesNotMatch(publish, /git push|github-api\.ts release/, "the publish job writes");
   // The SemVer gate and the upload check run before JSR -- in `checks`, which publish needs.
   assert.match(checks, /compat\.ts release/, "no SemVer gate before JSR");
   assert.match(checks, /jsr-upload-check/, "no upload check before JSR");
@@ -5505,7 +5611,11 @@ test("review 2, group D: the release path checks what it publishes", () => {
     npm.indexOf("npm only ever publishes") < npm.indexOf('if [ "$EVENT" = "workflow_dispatch" ]'),
     "npm requires JSR's version on dispatch only",
   );
-  assert.match(ciGreen, /commits\/release\/\$\{TAG\}/, "dispatch does not check JSR's commit");
+  assert.match(
+    ciGreen,
+    /github-api\.ts commit "release\/\$\{TAG\}"/,
+    "dispatch does not check JSR's commit",
+  );
   assert.match(finalize, /github\.event_name == 'workflow_dispatch'/, "no release after npm-only");
   assert.match(
     npm,
@@ -5513,8 +5623,21 @@ test("review 2, group D: the release path checks what it publishes", () => {
     "npm-only publishes any commit",
   );
   assert.match(npm, /gitHead/, '"already on npm" passes any commit');
-  assert.match(finalize, /needs: \[ci-green, record, npm\][\s\S]*gh release create/);
+  assert.match(
+    finalize,
+    /needs: \[ci-green, record, npm\][\s\S]*github-api\.ts release "\$\{TAG\}" "\$\{SHA\}"/,
+  );
+  // The script alone, no credential kept, nothing installed beside the write token (C30).
+  assert.match(finalize, /sparse-checkout: scripts\/github-api\.ts/);
+  assert.match(finalize, /persist-credentials: false/);
+  assert.doesNotMatch(finalize, /bun install|npm (ci|install)/, "the write-token job installs");
   const ci = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+  for (const [name, text] of [
+    ["publish.yml", yml],
+    ["ci.yml", code(ci)],
+  ] as const) {
+    assert.doesNotMatch(text, /(^|[\s$(|;&])gh\s/m, `${name} calls the GitHub CLI`);
+  }
   assert.doesNotMatch(ci, /\|\s*bash/, "an install script piped to bash");
   assert.match(ci, /sha256sum -c/);
 });

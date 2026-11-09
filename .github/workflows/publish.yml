@@ -44,13 +44,28 @@ jobs:
       sha: ${{ steps.target.outputs.sha }}
       tag: ${{ steps.target.outputs.tag }}
     steps:
+      # GitHub's REST API from a Bun step, never the GitHub CLI (owner, 2026-11-08: workspace
+      # letter H30). Only that one script is checked out -- nothing installed, no credential kept.
+      - name: The GitHub API script
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/github-api.ts
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
       # The one commit every later job checks out and publishes. A tag push: the pushed commit, and
       # the tag must still point at it (a moved tag means a newer run owns this release). "Run
       # workflow": whatever the named tag points at now.
       - name: The commit to release
         id: target
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           PUSHED: ${{ github.sha }}
@@ -66,8 +81,10 @@ jobs:
             exit 1
           fi
           case "$TAG" in v[0-9]*) ;; *) echo "::error::'${TAG}' is not a v* release tag."; exit 1 ;; esac
-          NOW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha)
-          if [ -z "$NOW" ]; then echo "::error::No commit for tag ${TAG}."; exit 1; fi
+          if ! NOW=$(bun scripts/github-api.ts commit "${TAG}") || [ -z "$NOW" ]; then
+            echo "::error::No commit for tag ${TAG} (or GitHub did not answer)."
+            exit 1
+          fi
           if [ "$EVENT" = "push" ] && [ "$NOW" != "$PUSHED" ]; then
             echo "::error::${TAG} now points at ${NOW}, not the pushed ${PUSHED} — a newer run owns it; refusing."
             exit 1
@@ -76,8 +93,8 @@ jobs:
           # moved since then is refused here, by name -- it used to be resolved and built, and only
           # the npm job's last check refused it (review 4).
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            REL=$(gh api "repos/${GITHUB_REPOSITORY}/commits/release/${TAG}" --jq .sha 2>/dev/null || true)
-            [[ "$REL" =~ ^[0-9a-f]{40}$ ]] || REL="" # a 404 answers with a body, not a SHA
+            REL=$(bun scripts/github-api.ts commit "release/${TAG}" 2>/dev/null || true)
+            [[ "$REL" =~ ^[0-9a-f]{40}$ ]] || REL="" # no branch (exit 2) and no answer both print no SHA
             # Either cause, said as either: a GitHub 5xx or rate limit reads the same as no branch
             # here, and was reported as "never recorded" (review 5). Refused both ways.
             if [ -z "$REL" ]; then echo "::error::No release/${TAG} branch could be read — JSR's commit was never recorded, or GitHub did not answer (re-run to tell); refusing."; exit 1; fi
@@ -96,10 +113,10 @@ jobs:
       # commit is main's head: "identical" (or "behind", once main has moved on).
       - name: The tagged commit is on main
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           SHA: ${{ steps.target.outputs.sha }}
         run: |
-          STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${SHA}" --jq .status)
+          STATUS=$(bun scripts/github-api.ts compare main "${SHA}")
           if [ "$STATUS" != "identical" ] && [ "$STATUS" != "behind" ]; then
             echo "::error::${SHA} is not on main (compare status '${STATUS}') — refusing to publish."
             exit 1
@@ -108,14 +125,14 @@ jobs:
 
       - name: Wait for ci.yml on this commit, and require success
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           SHA: ${{ steps.target.outputs.sha }}
         run: |
           for i in $(seq 1 80); do
-            # A PUSH run of this commit: a pull_request run tests a merge commit, not this one, and
-            # the newest run of any kind could be that (2026-11-06 review).
-            RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&event=push&per_page=1" \
-              --jq '.workflow_runs[0] | "\(.status) \(.conclusion) \(.html_url)"' || true)
+            # A PUSH run of this commit (the script asks for event=push): a pull_request run tests
+            # a merge commit, not this one, and the newest run of any kind could be that
+            # (2026-11-06 review).
+            RUN=$(bun scripts/github-api.ts ci-run "${SHA}" || true)
             set -- $RUN
             if [ "${1:-}" = "completed" ]; then
               if [ "${2:-}" = "success" ]; then
@@ -652,14 +669,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The Release page by the recipe every project follows (owner, 2026-11-09: workspace letter
+      # H32): REST API, `contents: write` only, the tag checked to exist and peel to the released
+      # commit FIRST (POST /releases would create a missing tag), an existing page done with no
+      # write, the new one read back. Only the script is checked out; nothing is installed.
+      - name: The GitHub API script
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/github-api.ts
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
       - name: Create the GitHub release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           TAG: ${{ needs.ci-green.outputs.tag }}
-        run: |
-          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "::notice::the GitHub release ${TAG} already exists"
-            exit 0
-          fi
-          gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" \
-            --title "${TAG}" --target "release/${TAG}" --generate-notes
+          SHA: ${{ needs.ci-green.outputs.sha }}
+        run: bun scripts/github-api.ts release "${TAG}" "${SHA}"

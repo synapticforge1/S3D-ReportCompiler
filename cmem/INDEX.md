@@ -50,6 +50,19 @@ the common floor; this folder governs inside the repo. Nothing is written into a
 here. The triggers "update the project memory" (audit for stale live claims, not just edit) and
 "look for code issues" (silent fall-throughs first) are the workspace's, `../cmem/INDEX.md`.
 
+Workspace rules recorded here (2026-11-09; full text `../cmem/working-rules.md`):
+- 🔒 **No `gh`, in CI too (H30, Tooling rule 9).** Check the repo instead (`git ls-remote`, the
+  repo's files, registry APIs); the release workflow calls GitHub's REST API through
+  `scripts/github-api.ts` (Bun, `GITHUB_TOKEN`); a GitHub web-UI task is an owner item.
+- 🔒 **Every Bun-version notation is the latest installed Bun (H31, Tooling rule 10)** — 1.4.4 on
+  Windows and in WSL (measured 2026-11-09): every `bun-version:` pin in `ci.yml` / `publish.yml`.
+  When the owner installs a newer Bun, move them at the next session, gate run first; dated test
+  results stay until re-run.
+- 🔒 **The release CI makes the GitHub Release page (H32)**, by the recipe: `finalize` runs
+  `github-api.ts release` after both registries, `contents: write` only, nothing installed; the tag
+  must exist and peel to the released commit first, an existing page is done, the new one is read
+  back. Only new tags get pages (no backfill).
+
 ## Files
 
 | file | what it holds |
