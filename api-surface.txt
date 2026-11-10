@@ -44,6 +44,7 @@ symbol	.	decodeEntities	function	export declare function decodeEntities(s: strin
 symbol	.	decodeReport	function	export declare function decodeReport(bytes: Uint8Array, name: string): string
 symbol	.	delimSignatures	variable	export declare const delimSignatures: Set<string>
 symbol	.	drawnImages	function	export declare function drawnImages(source: string): string[]
+symbol	.	drawnSvgAncestors	function	export declare function drawnSvgAncestors(source: string): string[][]
 symbol	.	drawnSvgs	function	export declare function drawnSvgs(source: string): string[]
 symbol	.	extractSourceTokens	function	export declare function extractSourceTokens(sources: string[]): SourceTokens
 symbol	.	findBrokenReferences	function	export declare function findBrokenReferences(reports: BakedReport[]): ReferenceCheck
