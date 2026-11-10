@@ -5131,7 +5131,7 @@ const PROBE_8K3 = [
 test(
   "class B, task 18 group 8k part 3: turbulence and displacement, as Chrome draws them",
   { timeout: TIMEOUT },
-  () => {
+  async () => {
     const dir = join(work, "task18-8k3");
     mkdirSync(dir, { recursive: true });
     const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
@@ -5144,10 +5144,29 @@ test(
     // the sample's own image and the eight filtered elements
     has(r.out, /graphics: 9 image paint\(s\), 9 expected/, /PASS/);
 
-    // An edge a hair inside a pixel: a spot's specular light brightens the row beyond it. Where
-    // an edge falls on Chrome's pixels depends on the drawing's place on the page, so this is the
-    // very document measured -- the sample with this one drawing after it -- whose rectangle's
-    // top falls at lattice row 19.98, a 2 % strip (77 pixels off before).
+    // An edge a hair inside a pixel: its thin strip must be in the source the filter runs on.
+    // Placed exactly, without Chrome or a page: a pass-through filter (an offset of nothing) on a
+    // rectangle whose top falls at lattice row 19.98 -- a pixel a 300 dpi device pixel, so the
+    // lattice is the image's own. Row 19 holds a 2 % strip: one of 64 sample rows (four levels of
+    // alpha); 16 by 16 points (the deepest at row 19.969) find nothing. This holds whatever the
+    // sample report's layout; the build below only shows Chrome agrees.
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const u = 72 / 300; // user units a lattice pixel, at a point a unit
+    const read = svgs.readSvg(
+      `<svg width="24" height="24"><defs><filter id="p" filterUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><feOffset dx="0" dy="0"/></filter></defs><rect x="2" y="${(19.98 * u).toFixed(6)}" width="20" height="10" fill="#000000" filter="url(#p)"/></svg>`,
+    );
+    const use = read.filters[0];
+    const toPage = [1, 0, 0, -1, 0, 1000];
+    const n = Math.round(24 / u);
+    const laid = svgs.filterExpected(use, [24, 0, 0, 24, 0, 1000 - 24], n, n, toPage);
+    const alphaAt = (row: number) =>
+      Math.round(laid.expected.data[4 * ((row - laid.gj0) * laid.GW + (50 - laid.gi0)) + 3] * 255);
+    assert.equal(alphaAt(18), 0, "row 18 is clear");
+    assert.ok(alphaAt(19) >= 3 && alphaAt(19) <= 6, `row 19 holds the strip: ${alphaAt(19)}`);
+    assert.equal(alphaAt(20), 255, "row 20 is covered");
+
+    // The very document measured -- the sample with this one drawing after it -- whose
+    // rectangle's top falls at lattice row 19.98 on Chrome's pixels (77 pixels off before).
     const strip = join(work, "task18-8k3-strip");
     mkdirSync(strip, { recursive: true });
     writeFileSync(

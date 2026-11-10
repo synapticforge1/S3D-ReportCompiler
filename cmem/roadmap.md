@@ -1279,10 +1279,10 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
   stage (`perlin_noise`); the noise's point derived (half a user unit from the device pixel's
   corner), replacing part 3's measured offset. **Every filter primitive the check runs now
   matches Chrome -- none is refused.** ✅ **Group 7b DONE 2026-11-10 (known-issues #113):** WebP
-  by the check's own decoder, bit for bit libwebp's on its 129 conformance vectors. Next: the
-  review of the spot-specular test's caveat (owner, 2026-11-10: "when done lets review the
-  caveat" -- known-issues #110), group 9 (text styling), the fresh class-B re-check; then the
-  browser review (below).
+  by the check's own decoder, bit for bit libwebp's on its 129 conformance vectors. ✅ The
+  spot-specular test's caveat reviewed and closed 2026-11-10 (owner: "yes"; known-issues #110):
+  a layout-independent unit check now pins the thin-strip sampling. Next: group 9 (text
+  styling), the fresh class-B re-check; then the browser review (below).
   Not covered: a CSS `url()` background image (none in any real report; the CSP blocks it, the
   external-ref warning names an http one) -- class B's re-check takes it.
 - 🔴 **Other browsers, after the Chromium work (owner, 2026-11-09: "firefox and firefox-esr is
