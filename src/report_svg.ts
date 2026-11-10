@@ -629,6 +629,8 @@ export type PdfRun = {
    * bold), its size in points. Empty where a piece could not be paired with its show.
    */
   styles?: PdfRunStyle[];
+  /** Group 9b: where in `text` each piece starts, with its style (null: not paired with a show). */
+  pieces?: { at: number; style: PdfRunStyle | null }[];
 };
 
 /** How one piece of a run of text is drawn (task 18 group 9). */
@@ -786,7 +788,8 @@ function rectPolygon(x: number, y: number, w: number, h: number, m: Matrix): num
  * mask's content is walked as a `g`, but a selector sees the `<marker>` (task 18 8k: a
  * `g:has(path)` rule restyled a marker's arrow, which Chrome does not).
  */
-type Node = {
+/** One element (or `#text`) of a parsed SVG, or of HTML as group 9b reads it. */
+export type Node = {
   tag: string;
   attrs: Map<string, string>;
   children: Node[];
@@ -895,7 +898,7 @@ const NAMED: Record<string, string> = Object.fromEntries(
  * `#rrggbbaa`: group 8d -- the alpha was dropped); `null` for none; `undefined` when it cannot be
  * read (a gradient, a pattern).
  */
-function paintOf(value: string, current: number[]): number[] | null | undefined {
+export function paintOf(value: string, current: number[]): number[] | null | undefined {
   const v = value.trim().toLowerCase();
   if (v === "none" || v === "transparent") return null;
   if (v === "currentcolor") return current;
@@ -2409,7 +2412,8 @@ type Compound = {
 type Combinator = " " | ">" | "+" | "~";
 /** A selector: its compounds left to right, each with the combinator BEFORE it (null for the first). */
 type Selector = { parts: { c: Compound; before: Combinator | null }[]; spec: number };
-type Rule = {
+/** One stylesheet rule as this reader keeps it: a selector, its declarations, its order. */
+export type Rule = {
   sel: Selector;
   decls: Map<string, { value: string; important: boolean }>;
   order: number;
@@ -2420,7 +2424,13 @@ type Rule = {
  * at-rules skipped. A selector this reader cannot match that could restyle an SVG element is named
  * in `unread`; an HTML rule it cannot match is passed over (it cannot restyle a drawing).
  */
-function cssRules(css: string, unread: Set<string>, startOrder: number): Rule[] {
+export function cssRules(
+  css: string,
+  unread: Set<string>,
+  startOrder: number,
+  /** Group 9b: name every selector it cannot match, an HTML one too (text is styled by them). */
+  everyUnread = false,
+): Rule[] {
   const rules: Rule[] = [];
   let order = startOrder;
   const body = (text: string) => {
@@ -2459,7 +2469,7 @@ function cssRules(css: string, unread: Set<string>, startOrder: number): Rule[] 
             .filter((t) => !/^[>+~]$/.test(t))
             .pop();
           const tag = /^[a-zA-Z][\w-]*/.exec(last ?? "")?.[0]?.toLowerCase();
-          if (!tag || SVG_TAGS.has(tag) || /\bsvg\b/i.test(s))
+          if (everyUnread || !tag || SVG_TAGS.has(tag) || /\bsvg\b/i.test(s))
             unread.add(`the style rule "${s.trim()}"`);
         }
       }
@@ -2769,7 +2779,7 @@ function matchesCompound(n: Node, c: Compound, anc: Node[]): boolean {
 }
 
 /** Whether a node, with its ancestors (nearest last), matches a selector: right to left, backtracking. */
-function matches(sel: Selector, n: Node, ancestors: Node[]): boolean {
+export function matches(sel: Selector, n: Node, ancestors: Node[]): boolean {
   const at = (k: number, node: Node, anc: Node[]): boolean => {
     if (!matchesCompound(node, sel.parts[k].c, anc)) return false;
     if (k === 0) return true;
@@ -4043,7 +4053,7 @@ export function readSvg(
  * The browser's own style for an HTML element (the HTML Standard's rendering section, as Chrome's
  * user-agent sheet has it): only what a drawing's text inherits -- weight, style, size, colour.
  */
-function htmlDefaults(n: Node): Record<string, string> {
+export function htmlDefaults(n: Node): Record<string, string> {
   const t = n.tag;
   const ua: Record<string, string> = {};
   if (t === "b" || t === "strong") ua["font-weight"] = "bolder";

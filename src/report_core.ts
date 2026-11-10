@@ -3770,7 +3770,17 @@ function openElementsAt(html: string, upTo: number): string[] {
   for (let m = re.exec(html); m && m.index < upTo; m = re.exec(html)) {
     const name = m[2].toLowerCase();
     if (m[1]) {
-      closeTo([name]);
+      // HTML's scopes: a cell's, a row's or a section's end never leaves its table, `</table>`
+      // closes the nearest table, any other end tag never crosses a table, cell or caption (as
+      // report_style.ts's endScope; a stray `</td>` closed the table around it, group 9b).
+      closeTo(
+        [name],
+        /^(td|th|tr|tbody|thead|tfoot|caption)$/.test(name)
+          ? ["table", "html", "template"]
+          : name === "table"
+            ? ["html", "template"]
+            : ["table", "td", "th", "caption", "html", "template", "object", "applet", "marquee"],
+      );
       continue;
     }
     if (/^(script|style|textarea|title|svg|math)$/.test(name)) {
@@ -3794,6 +3804,9 @@ function openElementsAt(html: string, upTo: number): string[] {
     if (name === "tbody" || name === "thead" || name === "tfoot")
       closeTo(["tbody", "thead", "tfoot"], ["table"]);
     if (HTML_VOID.has(name)) continue;
+    // a row straight inside a table is in the <tbody> the parser makes for it (group 9b)
+    if (name === "tr" && open[open.length - 1]?.name === "table")
+      open.push({ name: "tbody", tag: "<tbody>" });
     open.push({ name, tag: m[0] });
   }
   return open.map((o) => o.tag);
@@ -3854,9 +3867,12 @@ function sourceTally(raw: string): {
   svgSources: string[];
   /** Each drawing's HTML ancestors' opening tags, outermost first ({@link drawnSvgAncestors}). */
   svgAncestors: string[][];
+  /** The body as a reader sees it ({@link readerBody}). */
+  body: string;
 } {
   const svgSources: string[] = [];
   const svgAncestors: string[][] = [];
+  let body = "";
   const words = new Map<string, number>();
   const numbers = new Map<string, number>();
   let pairs = new Map<string, number>();
@@ -3961,6 +3977,8 @@ function sourceTally(raw: string): {
     // number 0.95, `<b>Ax</b>ial` the word "Axial"; replaced by a space, each split into tokens
     // the PDF does not hold (class B, iteration 2). Every other tag -- a cell, a line break, a
     // `<sub>`/`<sup>`, which prints apart -- still separates.
+    // ...in the document's own <html> and <body>, every start tag as the report's script leaves it.
+    body = `${outerTags[0]}${outerTags[1]}${html.replace(startTagRe(), (t: string) => revealedTag(t, revealed))}</body></html>`;
     const text = dropNonPrintingTex(
       decodeEntities(html.replace(SOURCE_TAG, (tag) => (INLINE_TAG.test(tag) ? "" : " "))),
     );
@@ -4018,7 +4036,7 @@ function sourceTally(raw: string): {
     );
   }
 
-  return { words, numbers, pairs, expectedImages, imageSources, svgSources, svgAncestors };
+  return { words, numbers, pairs, expectedImages, imageSources, svgSources, svgAncestors, body };
 }
 
 /**
@@ -4055,6 +4073,26 @@ export function drawnSvgs(source: string): string[] {
  */
 export function drawnSvgAncestors(source: string): string[][] {
   return sourceTally(source).svgAncestors;
+}
+
+/**
+ * A report's body as a reader of the page sees it -- the markup the verification counts its
+ * words in: what the page hides and the loading spinner taken out, the head's text left out, the
+ * whole of it as the parser places it (text before `<body>` or past `</body>` moved in), a
+ * drawing's `<title>` and `<desc>` removed -- inside the document's own `<html>` and `<body>`
+ * start tags, every start tag as the report's script leaves it (what it reveals carries
+ * `visibility: visible`). For reading how its text is styled (roadmap task 18 group 9b).
+ *
+ * @param source one raw source report
+ * @example
+ * ```ts
+ * import { readerBody } from "@jrmarcum/s3d-reportcompiler";
+ * console.log(readerBody("<html><head><title>T</title></head><body><b>Hi</b></body></html>"));
+ * // <html><body> <b>Hi</b> </body></html>
+ * ```
+ */
+export function readerBody(source: string): string {
+  return sourceTally(source).body;
 }
 
 /**

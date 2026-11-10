@@ -244,8 +244,9 @@ Since #112 stitched noise: every filter primitive the check runs is judged, none
 ⚠️ Not yet verified, and named as such: a CSS filter function (`filter="blur(2px)"`). Since #115 (group 9a) each SVG label is drawn in its source's weight, style, colour and size (the
 PDF font's PostScript name, its fill, its size across the baseline, a slant by its skew); since
 #116 with the `font` shorthand, sizes in any unit, and what it inherits from the HTML it stands
-in; and a drawing that draws but reads as nothing visible fails. ⚠️ Not
-yet checked (group 9b, owner 2026-11-09): the STYLING of HTML text — weight, colour, size, style.
+in; and a drawing that draws but reads as nothing visible fails. Since #117 (group 9b) the
+report's own text too: per report, every word in its source's weight, slant, colour, alpha and
+size (the print's scale measured from the document; a uniform scale is the layout's).
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in
 its run of text, or in the next cell of its row). (A number broken across two lines failed until #93; it is

@@ -102,6 +102,7 @@ import {
   audit,
   bakeBody,
   bakeStyle,
+  buildMathRegex,
   compareAgainstPdf,
   compareEachReport,
   decodeReport,
@@ -118,6 +119,8 @@ import {
   mathStats,
   mathStyleSheet,
   type PdfObservations,
+  parseDelimiters,
+  readerBody,
   skippedDelims,
   sniffImageType,
   sortReportNames,
@@ -132,6 +135,7 @@ import {
 } from "./src/report_core.ts";
 
 import * as rt from "./src/report_runtime.ts";
+import { compareStyles, printedWords, styledWords } from "./src/report_style.ts";
 import { decodeWebp } from "./src/report_webp.ts";
 import {
   compareSvg,
@@ -1508,6 +1512,8 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       alpha: number;
       /** Group 9: where its first glyph stands on the page, its font's id, its render mode. */
       origin: number[];
+      /** Where its advance ends on the page: a text item pdf.js cut out of it starts in between. */
+      end: number[];
       font: string;
       mode: number;
     }[] = [];
@@ -1903,12 +1909,14 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
             // Its box: the advance across, from a fifth below the baseline to four fifths above.
             const box = place([0, -0.2 * fontSize, width, 0.8 * fontSize], mul(tm, gs.m));
             const om = mul(tm, gs.m);
+            const em = mul([1, 0, 0, 1, width, 0], om);
             shows.push({
               order: i,
               box,
               fill: gs.fill,
               alpha,
               origin: [om[4], om[5]],
+              end: [em[4], em[5]],
               font: fontId,
               mode: gs.mode,
             });
@@ -2215,11 +2223,20 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       // Its size across the baseline (a slant lengthens the up axis), and how far it leans.
       const size = Math.abs(a * d - b * c) / len;
       const skew = (a * c + b * d) / (len * (Math.hypot(c, d) || 1));
+      // The show of its font on whose baseline, between its start and its end, the item starts:
+      // pdf.js cuts a show into items at a wide space, and trims a leading one, so an item need
+      // not start where its show does ("(Library)", measured 2026-11-10).
       let best: (typeof shows)[number] | null = null;
       let near = 0.05 * size;
       for (const s of shows) {
-        const d = Math.hypot(s.origin[0] - x, s.origin[1] - y);
-        if (s.font === font && d <= near) {
+        if (s.font !== font) continue;
+        const [ax, ay] = s.origin;
+        const [bx, by] = s.end;
+        const len2 = (bx - ax) ** 2 + (by - ay) ** 2;
+        const t = len2 > 0 ? ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / len2 : 0;
+        if (t < -0.001 || t > 1.001) continue;
+        const d = Math.hypot(ax + t * (bx - ax) - x, ay + t * (by - ay) - y);
+        if (d <= near) {
           best = s;
           near = d;
         }
@@ -2248,9 +2265,12 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       const last = obs.runs[obs.runs.length - 1];
       const along = last ? (x - last.x) * last.dx + (y - last.y) * last.dy : 0;
       const across = last ? (y - last.y) * last.dx - (x - last.x) * last.dy : 0;
-      // A space joins a run only as a word space does (half its size or less): Chrome writes the
-      // gaps between separate labels as whitespace items too, 57 units wide (measured).
-      const wordSpace = inked || (it.width ?? 0) <= 0.5 * size;
+      // A space joins a run only as a word space does (three quarters of its size or less): Chrome
+      // writes the gaps between separate labels as whitespace items too, 57 units wide (measured).
+      // Half its size was the limit until group 9b: pdf.js gives the space between two inline
+      // spans as an item 0.502 of the size wide (measured 2026-11-10), so the words either side
+      // were glued into one ("BoldwordSlantword").
+      const wordSpace = inked || (it.width ?? 0) <= 0.75 * size;
       if (
         last &&
         last.page === p &&
@@ -2260,6 +2280,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         along >= -0.1 * size &&
         along - last.width < 0.33 * size + (last.spaces ?? 0)
       ) {
+        last.pieces = [...(last.pieces ?? []), { at: last.text.length, style }];
         last.text += it.str;
         if (style) last.styles = [...(last.styles ?? []), style];
         if (inked) {
@@ -2278,6 +2299,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           dy,
           spaces: 0,
           styles: style ? [style] : [],
+          pieces: [{ at: 0, style }],
         });
       }
     }
@@ -3260,6 +3282,8 @@ try {
     /** Every drawn image of every report, raster or SVG (the pixel and drawing checks' total). */
     let imagesDrawn = 0;
     let drawingsCompared = 0;
+    let stylesCompared = 0;
+    let stylesInSources = 0;
     if (observed.headingPages.length === entries.length) {
       const starts = observed.headingPages;
       for (let i = 0; i < sources.length; i++) {
@@ -3408,6 +3432,23 @@ try {
           drawingsCompared += result.compared;
           for (const problem of result.problems) check.failures.push(`${label} -- ${problem}`);
         }
+        // Its text in the weight, style, colour and size its source gives it (task 18 group 9b):
+        // each word and style, at least as often on its own pages as in its source.
+        const styled = styledWords(
+          readerBody(source),
+          outerCss,
+          buildMathRegex(parseDelimiters(source)),
+        );
+        for (const u of styled.unread)
+          check.failures.push(`${entries[i]}: its text's styling is not verified -- ${u}`);
+        const compared = compareStyles(styled.words, runs.flatMap(printedWords));
+        const misstyled = compared.problems;
+        if (misstyled.length > 0)
+          check.failures.push(
+            `${entries[i]}: text not printed as its source styles it -- ${misstyled.slice(0, 4).join("; ")}${misstyled.length > 4 ? `; and ${misstyled.length - 4} more` : ""}`,
+          );
+        stylesCompared += compared.judged;
+        stylesInSources += styled.words.length;
         // And what each <img> shows (task 18 item 5): the report's drawn images, in order, against
         // the images painted on its own pages that no drawing claimed, pixel for pixel.
         const free = painted.filter((q) => !used.has(`${q.page}:${q.order}:image`));
@@ -3483,6 +3524,9 @@ try {
     );
     console.log(
       `  drawings: ${drawingsCompared} shape paint(s) and label(s) as their sources draw them`,
+    );
+    console.log(
+      `  styling:  ${stylesCompared} of ${stylesInSources} word(s) judged in the weight, style, colour and size their sources give (the rest are the word check's: wrapped, or not printed)`,
     );
     console.log(
       `  graphics: ${observed.imagePaints} image paint(s), ${expected.expectedImages} expected; ` +

@@ -1141,7 +1141,11 @@ drawn before the first or after the last match; colour names, `hsl()`, colour al
    in (inheritance with the browser's defaults; the report's selectors through it; the `#report`
    reveal gate as the script leaves it); a drawing that draws but reads as nothing visible now
    fails. API: `drawnSvgAncestors` added (surface re-baselined; the next release is a minor).
-   **Next: 9b, HTML text** — `cascadeOf` and `htmlDefaults` are its starting point.
+   ✅ **9b DONE 2026-11-10 (known-issues #117; owner: "list the remaining open items then proceed
+   with 9b"):** the report's own text, every word per report in the weight, slant, colour (with
+   its alpha) and size its source gives it, at the print's measured scale (`src/report_style.ts`;
+   API: `readerBody` added). **Group 9 is DONE. Next: the fresh class-B re-check**, then the
+   browser review.
 
 **Next step, in order (owner: fixes not limits):** the items still named "not verified", each
 measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-measured):

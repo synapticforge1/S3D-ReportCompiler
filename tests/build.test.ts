@@ -5370,6 +5370,195 @@ test(
   },
 );
 
+// Group 9b (owner, 2026-11-10: "proceed with 9b"): the report's own text in the weight, style,
+// colour and size its source gives it -- by element, by inline style, by a rule through the
+// table's implicit <tbody>, by the shorthand, by opacity.
+const PROBE_9B = `<style>#probe9b>table>tbody>tr>td.cellish{font-weight:bold}</style>
+<div id="probe9b"><p><b>Boldword</b> <i>Slantword</i> <span style="color:#c00000">Redword</span> <span style="font-size:20px">Bigword</span> <span style="font: italic bold 15px Arial">Shortword</span> <span style="opacity:0.5">Fadedword</span></p>
+<h4>Headword</h4><table><tr><td class="cellish">Cellword</td><td>Plainword</td></tr></table></div>`;
+
+test(
+  "class B, task 18 group 9b: HTML text printed in the weight, style, colour and size its source gives",
+  { timeout: TIMEOUT },
+  async () => {
+    // Chrome agrees: the sample with the probe after it PASSES, every word of it compared.
+    const dir = join(work, "task18-9b");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_9B}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /PASS/);
+    // ...every word JUDGED: one the reading lost (glued to its neighbour, unpaired) would be left
+    // to the word check, and pass here unseen.
+    const styled = /styling: +(\d+) of (\d+) word\(s\) judged/.exec(r.out);
+    assert.ok(styled && Number(styled[2]) > 700, `words styled: ${styled?.[0]}`);
+    assert.equal(styled[1], styled[2], "a source word not judged");
+
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    const st = await import(pathToFileURL(join(ROOT, "src", "report_style.ts")).href);
+    // The reading, without Chrome: each probe word's style.
+    const doc = `<html><body>${PROBE_9B}<script>jQuery('#report').css('visibility','visible')</script></body></html>`;
+    const css = /<style>([\s\S]*?)<\/style>/.exec(PROBE_9B)?.[1] ?? "";
+    const { words, unread } = st.styledWords(core.readerBody(doc), css, null);
+    assert.deepEqual(unread, []);
+    const of = (w: string) => words.find((x: { word: string }) => x.word === w)?.style;
+    const want: Array<[string, boolean, boolean, string, number, number]> = [
+      ["boldword", true, false, "0,0,0", 1, 16],
+      ["slantword", false, true, "0,0,0", 1, 16],
+      ["redword", false, false, "0.75,0,0", 1, 16],
+      ["bigword", false, false, "0,0,0", 1, 20],
+      ["shortword", true, true, "0,0,0", 1, 15],
+      ["fadedword", false, false, "0,0,0", 0.5, 16],
+      ["headword", true, false, "0,0,0", 1, 16],
+      ["cellword", true, false, "0,0,0", 1, 16],
+      ["plainword", false, false, "0,0,0", 1, 16],
+    ];
+    for (const [w, bold, italic, colour, alpha, size] of want) {
+      const s = of(w);
+      assert.ok(s, `no ${w}`);
+      assert.deepEqual(
+        [
+          s.bold,
+          s.italic,
+          s.colour.map((v: number) => Number(v.toFixed(2))).join(","),
+          s.alpha,
+          s.size,
+        ],
+        [bold, italic, colour, alpha, size],
+        w,
+      );
+    }
+    //    Maths, drawings and scripts are not text here.
+    const maths = core.buildMathRegex(core.parseDelimiters("<p>$$x$$</p>"));
+    const m = st.styledWords(
+      core.readerBody(
+        "<body><p>Before $$\\text{Hidden}$$ after</p><svg><text>Labelled</text></svg></body>",
+      ),
+      "",
+      maths,
+    );
+    assert.deepEqual(
+      m.words.map((x: { word: string }) => x.word),
+      ["before", "after"],
+    );
+    //    An inline element joins what is either side of it: one word, in its first letter's style.
+    const joined = st.styledWords(
+      core.readerBody("<body><p>Sum<b>mary</b> line</p></body>"),
+      "",
+      null,
+    );
+    assert.deepEqual(
+      joined.words.map((x: { word: string; style: { bold: boolean } }) => [x.word, x.style.bold]),
+      [
+        ["summary", false],
+        ["line", false],
+      ],
+    );
+
+    // The judgement, without Chrome: printed at the print's scale (measured from the words).
+    const style = (o: object) => ({
+      bold: false,
+      italic: false,
+      colour: [0, 0, 0],
+      alpha: 1,
+      size: 13,
+      ...o,
+    });
+    const words2 = (list: Array<[string, object]>) =>
+      list.map(([word, o]) => ({ word, style: style(o) }));
+    const source = words2([
+      ["alpha", {}],
+      ["alpha", {}],
+      ["beta", { bold: true }],
+      ["gamma", { italic: true }],
+      ["delta", { colour: [0, 0, 1] }],
+      ["eps", { size: 20 }],
+      ["zeta", { alpha: 0.5 }],
+    ]);
+    const half = (o: object) => style({ ...o, size: (style(o).size as number) * 0.55 });
+    const printed = (edit: Record<string, object> = {}) =>
+      source.map((w: { word: string; style: object }) => ({
+        word: w.word,
+        style: half({ ...w.style, ...(edit[w.word] ?? {}) }),
+      }));
+    const ok = st.compareStyles(source, printed());
+    assert.deepEqual(ok.problems, []);
+    assert.equal(Number(ok.scale.toFixed(2)), 0.55, "the print's scale, measured");
+    const refused: Array<[string, Record<string, object>, RegExp]> = [
+      [
+        "bold lost",
+        { beta: { bold: false } },
+        /"beta": 1 of its 1 printed otherwise than its source -- wanted bold upright #000000 alpha 1\.00 at 13 px; printed regular upright #000000 alpha 1\.00 at 13 px/,
+      ],
+      ["italic lost", { gamma: { italic: false } }, /"gamma": .*wanted regular italic/],
+      [
+        "colour changed",
+        { delta: { colour: [0, 0, 0] } },
+        /"delta": .*wanted regular upright #0000ff/,
+      ],
+      ["size changed", { eps: { size: 13 } }, /"eps": .*wanted .* at 20 px; printed .* at 13 px/],
+      [
+        "alpha changed",
+        { zeta: { alpha: 1 } },
+        /"zeta": .*wanted regular upright #000000 alpha 0\.50/,
+      ],
+    ];
+    for (const [what, edit, why] of refused) {
+      const got = st.compareStyles(source, printed(edit)).problems.join("; ");
+      assert.match(got, why, what);
+    }
+    //    One occurrence of two printed otherwise: counted, not passed.
+    const once = printed();
+    once[1] = { ...once[1], style: half({ bold: true }) };
+    assert.match(
+      st.compareStyles(source, once).problems.join(),
+      /"alpha": 1 of its 2 printed otherwise/,
+    );
+    //    A word the PDF does not print at all (cut by a wrap, or lost) is the word check's to name.
+    const wrapped = printed().filter((w: { word: string }) => w.word !== "beta");
+    const leftOut = st.compareStyles(source, wrapped);
+    assert.deepEqual(leftOut.problems, []);
+    assert.equal(leftOut.judged, source.length - 1, "a word not printed counted as judged");
+    //    A maths symbol set straight after a word stays apart from it on the printed side.
+    const run2 = {
+      page: 1,
+      text: "Bending MomentM",
+      x: 0,
+      y: 0,
+      width: 1,
+      size: 1,
+      dx: 1,
+      dy: 0,
+      pieces: [
+        { at: 0, style: { font: "AAAAAA+ArialMT", fill: [0, 0, 0], alpha: 1, mode: 0, size: 7 } },
+        {
+          at: 14,
+          style: {
+            font: "BAAAAA+MathJax_Math-Italic",
+            fill: [0, 0, 0],
+            alpha: 1,
+            mode: 0,
+            size: 7,
+          },
+        },
+      ],
+    };
+    assert.deepEqual(
+      st.printedWords(run2).map((x: { word: string }) => x.word),
+      ["bending", "moment"],
+    );
+    //    The tree: a stray end tag never leaves its table.
+    const tree = st.parseHtml("<div><table><tr><td>x</div><td>y</td></tr></table></div>");
+    const tbody = tree.children[0].children[0].children[0];
+    assert.equal(tbody.tag, "tbody");
+    assert.equal(tbody.children[0].children.length, 2, "both cells in the one row");
+  },
+);
+
 // Group 9a, what it left (owner, 2026-11-10: "scope the part that is not covered yet and provide
 // the fix"): the `font` shorthand; sizes with units; and the HTML a drawing stands in -- its text
 // inherits weight, style, size and colour from it, and the report's selectors reach through it.
@@ -5437,10 +5626,12 @@ test(
     // The HTML around each drawing, by HTML's nesting; what the report's script reveals.
     const chain = (html: string) =>
       core.drawnSvgAncestors(html)[0].map((t: string) => /^<([a-z0-9]+)/i.exec(t)?.[1]);
+    // (a row straight inside a table is in the <tbody> the parser makes, group 9b)
     assert.deepEqual(chain("<body><table><tr><th><svg><rect/></svg>"), [
       "html",
       "body",
       "table",
+      "tbody",
       "tr",
       "th",
     ]);
@@ -5453,6 +5644,7 @@ test(
       "html",
       "body",
       "table",
+      "tbody",
       "tr",
       "td",
     ]);
@@ -5460,6 +5652,17 @@ test(
       "html",
       "body",
       "table",
+      "tbody",
+      "tr",
+      "td",
+    ]);
+    // ...and a stray end tag never leaves its table (group 9b: it closed the table around it).
+    assert.deepEqual(chain("<body><div><table><tr><td>x</div><td><svg><rect/></svg>"), [
+      "html",
+      "body",
+      "div",
+      "table",
+      "tbody",
       "tr",
       "td",
     ]);
