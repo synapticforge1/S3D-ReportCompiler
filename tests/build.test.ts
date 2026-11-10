@@ -5020,9 +5020,8 @@ test(
       ["a stitched <feTurbulence>"],
     );
     assert.deepEqual(refused("<feTile/>"), ["an <fetile>"]);
-    assert.deepEqual(refused("<feSpecularLighting><feSpotLight/></feSpecularLighting>"), [
-      "an <fespecularlighting> of a spot light",
-    ]);
+    // (specular light from a spot matches since part 3: an edge's thin strip, by 64)
+    assert.deepEqual(refused("<feSpecularLighting><feSpotLight/></feSpecularLighting>"), []);
     // The primitives against values worked by hand.
     //   a flat surface lit straight down: N.L = 1, so diffuse gives kd times the light
     const flat = fx.blank(5, 5);
@@ -5097,6 +5096,14 @@ const PROBE_8K3 = [
     '<feTurbulence type="fractalNoise" baseFrequency="0.06" seed="2" result="t"/><feDisplacementMap in="SourceGraphic" in2="t" scale="10" xChannelSelector="G" yChannelSelector="R"/>',
     'x="41.3" y="29.7"',
   ).replace('<filter id="k83-ds">', '<filter id="k83-ds" color-interpolation-filters="sRGB">'),
+  K83(
+    "k83-s",
+    '<feSpecularLighting surfaceScale="2" specularConstant="1" specularExponent="10" lighting-color="#ff3300"><feSpotLight x="60" y="20" z="40" pointsAtX="70" pointsAtY="50" pointsAtZ="0" specularExponent="2" limitingConeAngle="40"/></feSpecularLighting>',
+  ),
+  K83(
+    "k83-s2",
+    '<feSpecularLighting surfaceScale="3" specularConstant="1.3" specularExponent="20" lighting-color="#0044ff"><feSpotLight x="110" y="60" z="30" pointsAtX="70" pointsAtY="50" pointsAtZ="0" specularExponent="1" limitingConeAngle="30"/></feSpecularLighting>',
+  ),
 ].join("\n");
 
 test(
@@ -5112,8 +5119,28 @@ test(
     );
     const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
     assert.equal(r.code, 0, tail(r.out));
-    // the sample's own image and the six filtered elements
-    has(r.out, /graphics: 7 image paint\(s\), 7 expected/, /PASS/);
+    // the sample's own image and the eight filtered elements
+    has(r.out, /graphics: 9 image paint\(s\), 9 expected/, /PASS/);
+
+    // An edge a hair inside a pixel: a spot's specular light brightens the row beyond it. Where
+    // an edge falls on Chrome's pixels depends on the drawing's place on the page, so this is the
+    // very document measured -- the sample with this one drawing after it -- whose rectangle's
+    // top falls at lattice row 19.98, a 2 % strip (77 pixels off before).
+    const strip = join(work, "task18-8k3-strip");
+    mkdirSync(strip, { recursive: true });
+    writeFileSync(
+      join(strip, "member_0_report.html"),
+      sample.replace(
+        /<\/body>/i,
+        () =>
+          `${K83(
+            "f",
+            '<feSpecularLighting surfaceScale="2" specularConstant="1" specularExponent="10" lighting-color="#ff3300"><feSpotLight x="60" y="20" z="40" pointsAtX="70" pointsAtY="50" pointsAtZ="0" specularExponent="2" limitingConeAngle="40"/></feSpecularLighting>',
+          )}</body>`,
+      ),
+    );
+    const s = run([MAIN, strip, join(strip, "out", "c.pdf")]);
+    assert.equal(s.code, 0, tail(s.out));
   },
 );
 

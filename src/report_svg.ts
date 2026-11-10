@@ -1351,9 +1351,32 @@ export function filterExpected(
       )
         edge[k] = 1;
     }
+  /** Whether a pixel's outer 32nd, all round, is one colour with its centre. */
+  const borderAgrees = (gi: number, gj: number) => {
+    const at = (fx: number, fy: number) => {
+      const [dx, dy] = apply(use.e, ox + (gi0 + gi + fx) * ux, oy + (gj0 + gj + fy) * uy);
+      return contentColour(use.content, dx, dy, 0);
+    };
+    const mid = at(0.5, 0.5);
+    for (const f of [0.25 / 32, 0.75 / 32, 1 - 0.75 / 32, 1 - 0.25 / 32])
+      for (let s = 0; s < 16; s++) {
+        const t = (s + 0.5) / 16;
+        for (const c of [at(f, t), at(t, f)])
+          if (c === null || mid === null || c.some((v, q) => v !== mid[q])) return false;
+      }
+    return true;
+  };
   const refined = new Map<number, number[]>();
   for (let k = 0; k < GW * GH; k++)
-    if (edge[k]) refined.set(k, sample(k % GW, Math.floor(k / GW), 16).acc);
+    if (edge[k]) {
+      const [gi, gj] = [k % GW, Math.floor(k / GW)];
+      const at16 = sample(gi, gj, 16);
+      // its points all agreeing at 16 too, but its colour not its neighbour's: a strip thinner
+      // than a 32nd may lie in it (measured: an edge at row 19.98 -- 2 % of row 19, five levels
+      // of alpha, which a specular light's power turned into eleven levels of colour) -- by 64
+      // -- looked for first along its borders only (the outer 32nd, 2 rows of 16 points each)
+      refined.set(k, at16.mixed || borderAgrees(gi, gj) ? at16.acc : sample(gi, gj, 64).acc);
+    }
   for (const [k, acc] of refined) source.data.set(acc, 4 * k);
   const region = [...toGrid(rx0, ry0), ...toGrid(rx1, ry1)];
   let expected: ReturnType<typeof runFilter>;
@@ -3104,10 +3127,6 @@ export function readSvg(
       if (p.tag === "feturbulence" && p.attrs.get("stitchtiles") === "stitch")
         return "a stitched <feTurbulence>";
       if (p.tag === "fetile") return `an <${p.tag}>`;
-      // specular from a spot light: 77 pixels at a shape's edge still differ (diffuse spot and
-      // specular distant match)
-      if (p.tag === "fespecularlighting" && p.children.some((c) => c.tag === "fespotlight"))
-        return "an <fespecularlighting> of a spot light";
       spaces.add(
         (
           own(p, "color-interpolation-filters", [target]) ??
