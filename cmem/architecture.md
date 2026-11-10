@@ -163,10 +163,12 @@ trusted publisher is now set on the package (`npm trust`, 2026-10-28) and `publi
 token path: OIDC only (roadmap task 15). **Proven by 1.1.4** (npm provenance
 `https://slsa.dev/provenance/v1`). ⚠️ The root `package.json` keeps `"private": true` — a
 `npm publish` typed in the repository root was stopped only by it (task 15).
-`publish.yml`'s `npm` job (2026-10-28) runs after the JSR job on a tag, or alone on "Run workflow"
-with a tag; it checks the built version equals the tag, refuses any manifest `npm publish` would
-auto-correct, skips a version already on npm, then `npm publish` with the run's OIDC token (no npm
-token anywhere). Run on every tag since 1.1.4 (1.1.4–1.1.7 published by it). JSR links the package to the GitHub repository **by repository id**: its API reads
+`publish.yml`'s `npm` job (2026-10-28) runs after the JSR job (since 2026-11-10 in the run a push
+of `main` starts, after CI made the tag — [release.md](release.md); "Run workflow" is gone); it
+checks the built version equals the tag, refuses any manifest `npm publish` would auto-correct,
+skips a version npm already has from this commit, then `npm publish` with the run's OIDC token (no
+npm token anywhere), then reads the provenance back, fatally. Run on every tag since 1.1.4
+(1.1.4–1.3.0 published by it). JSR links the package to the GitHub repository **by repository id**: its API reads
 `githubRepository` = `synapticforge1/S3D-ReportCompiler`, id `1328030455` — GitHub's id for that
 repository (owner `synapticforge1`, id `342141589`, Organization). ⚠️ **JSR does not follow a
 transfer or a rename on its own** (binaryang measured it, its `cmem/publishing.md`): the link here

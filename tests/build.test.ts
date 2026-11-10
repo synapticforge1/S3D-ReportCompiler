@@ -6677,7 +6677,8 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
       dist: { attestations: { provenance: { predicateType: "x" } } },
     });
   // A fake GitHub by path: the release, the tag's commit, release/<tag>'s commit (review 4: the
-  // release must be of the commit JSR got).
+  // release must be of the commit JSR got). Up to 1.3.0 a release/<tag> branch recorded that
+  // commit; from the D1 order on (H33, 2026-11-10) CI's own tag does, and no branch is written.
   const A = "a".repeat(40);
   const B = "b".repeat(40);
   const github =
@@ -6691,7 +6692,9 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
             ? [200, { sha: branchSha }]
             : [404, {}]
           : /\/commits\//.test(url)
-            ? [200, { sha: tagSha }]
+            ? tagSha
+              ? [200, { sha: tagSha }]
+              : [404, {}]
             : [404, {}];
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
@@ -6705,7 +6708,15 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
       A,
     ],
     ["another commit", github(200, A, B), 5, /the release is of another commit/, A],
-    ["no branch", github(200, A, ""), 5, /no release\/v9\.9\.9 branch/, A],
+    [
+      "CI's tag, no branch",
+      github(200, A, ""),
+      0,
+      /the GitHub release v9\.9\.9 exists, at the commit JSR got \(a{12}\), and npm's copy is of it/,
+      A,
+    ],
+    ["no branch, npm from another", github(200, A, ""), 5, /JSR got a+ \(v9\.9\.9\)/, B],
+    ["no tag", github(200, "", ""), 5, /the tag v9\.9\.9 names no commit/, A],
     ["npm from another", github(200, A, A), 5, /npm's 9\.9\.9 is from b+, but JSR got a+/, B],
     ["npm records none", github(200, A, A), 5, /npm records no commit for 9\.9\.9/],
     ["missing", json({}, 404), 5, /NO GitHub release v9\.9\.9/, A],
@@ -6750,200 +6761,367 @@ test("verify-release: arguments, the provenance grace, and npm", { timeout: TIME
   has(ghAway.out, /S3D_GITHUB_API=https:\/\/github-api\.example\.invalid is not a loopback/);
 });
 
-test(
-  "release: an unknown argument is refused before anything is done",
-  { timeout: TIMEOUT },
-  async () => {
-    const dir = releaseClone("release-unknown-arg");
-    const before = headOf(dir);
-    const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wiat"], { cwd: dir });
-    assert.equal(r.code, 64, r.out);
-    has(r.out, /Unknown argument\(s\): --no-wiat/);
-    assert.equal(headOf(dir), before, "something was committed");
-  },
-);
-
 /**
- * A throwaway clone set up so `bun run release` makes its bump commit: package.json one version
- * behind jsr.json. Pushing is impossible (the push URL is not a remote). Returns the clone.
+ * A throwaway release set-up (workspace letter H33, 2026-11-10): a bare `origin` cloned from this
+ * repository, a working clone of it on `main` tracking `origin/main`, this tree's scripts committed
+ * and pushed as the setup, then the bump commit `bun run bump` would make (`bump to v9.9.9`, the
+ * three version files). `bun run release` refuses or pushes against that scratch origin only.
+ * `edit` changes the clone before the bump commit is made (and may make it itself).
  */
-function releaseClone(name: string): string {
+function releaseClone(
+  name: string,
+  opts: { version?: string; bump?: (dir: string) => void } = {},
+): { dir: string; origin: string; setup: string } {
   const dir = join(work, name);
+  const origin = join(work, `${name}-origin.git`);
   const git = (...a: string[]) => {
     const g = spawnSync("git", ["-C", dir, ...a], { encoding: "utf8" });
     assert.equal(g.status, 0, `git ${a.join(" ")}:\n${g.stderr}`);
     return g.stdout.trim();
   };
-  assert.equal(spawnSync("git", ["clone", "-q", ROOT, dir]).status, 0, "clone failed");
+  assert.equal(spawnSync("git", ["clone", "-q", "--bare", ROOT, origin]).status, 0, "bare clone");
+  assert.equal(spawnSync("git", ["clone", "-q", origin, dir]).status, 0, "clone failed");
   git("config", "user.name", "test");
   git("config", "user.email", "test@example.invalid");
-  // A release runs only on main tracking origin/main (publish.ts step 0b) -- whatever branch, or
-  // detached PR head, this checkout is on. The clone fetches from ITSELF, so the release's
-  // `git fetch origin` makes origin/main this clone's main: never behind, whatever ROOT holds.
+  git("config", "commit.gpgsign", "false");
+  // Whatever branch, or detached PR head, this checkout is on: the clone's main is ROOT's HEAD.
   git("checkout", "-q", "-B", "main");
-  git("remote", "set-url", "origin", dir);
-  git("remote", "set-url", "--push", "origin", "NO-PUSH-FROM-TESTS");
   // The release under test is the working tree's, not the last commit's: every script, since
   // they import one another (publish.ts → jsr-api.ts, compat.ts).
   for (const f of readdirSync(join(ROOT, "scripts")).filter((n) => n.endsWith(".ts"))) {
     writeFileSync(join(dir, "scripts", f), readFileSync(join(ROOT, "scripts", f)));
   }
-  const version = JSON.parse(readFileSync(join(dir, "jsr.json"), "utf8")).version as string;
-  const pkg = readFileSync(join(dir, "package.json"), "utf8");
-  const behind = pkg.replace(`"version": "${version}"`, '"version": "0.0.1"');
-  assert.notEqual(behind, pkg, "could not set package.json behind");
-  writeFileSync(join(dir, "package.json"), behind);
-  git("commit", "-qam", "release test setup");
-  git("fetch", "-q", "origin");
+  git("add", "-A");
+  git("commit", "-q", "--allow-empty", "-m", "release test setup");
+  git("push", "-q", "--force", "origin", "main");
   git("branch", "-q", "-u", "origin/main");
-  return dir;
+  const setup = git("rev-parse", "HEAD");
+  if (opts.bump) opts.bump(dir);
+  else bumpTo(dir, opts.version ?? "9.9.9");
+  return { dir, origin, setup };
+}
+
+/** What `bun run bump` commits: the three version lines, under `bump to v<version>`. */
+function bumpTo(
+  dir: string,
+  version: string,
+  files = ["jsr.json", "package.json", "src/report_core.ts"],
+) {
+  const edit = (f: string, re: RegExp, to: string) => {
+    const p = join(dir, f);
+    const text = readFileSync(p, "utf8");
+    const next = text.replace(re, to);
+    assert.notEqual(next, text, `could not set ${f} to ${version}`);
+    writeFileSync(p, next);
+  };
+  if (files.includes("jsr.json")) edit("jsr.json", /"version": "[^"]*"/, `"version": "${version}"`);
+  if (files.includes("package.json"))
+    edit("package.json", /"version": "[^"]*"/, `"version": "${version}"`);
+  if (files.includes("src/report_core.ts"))
+    edit(
+      "src/report_core.ts",
+      /export const VERSION = "[^"]*";/,
+      `export const VERSION = "${version}";`,
+    );
+  const c = spawnSync(
+    "git",
+    ["-C", dir, "commit", "-q", "-m", `bump to v${version}`, "--", ...files],
+    {
+      encoding: "utf8",
+    },
+  );
+  assert.equal(c.status, 0, c.stderr);
 }
 
 const headOf = (dir: string) =>
   spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
 
+/** origin's main, read as the release reads it back. */
+const originMain = (origin: string) =>
+  spawnSync("git", ["--git-dir", origin, "rev-parse", "refs/heads/main"], {
+    encoding: "utf8",
+  }).stdout.trim();
+
+const originTags = (origin: string) =>
+  spawnSync("git", ["--git-dir", origin, "tag", "--list"], { encoding: "utf8" }).stdout;
+
 test(
-  "release: a JSR that cannot answer refuses, and undoes the bump",
+  "release: an unknown argument is refused before anything is done",
   { timeout: TIMEOUT },
   async () => {
-    const dir = releaseClone("release-503");
-    const before = headOf(dir);
-    const r = await withFakeJsr(json({}, 503), (base) =>
-      runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
-        cwd: dir,
-        env: { ...process.env, S3D_JSR_API: base, S3D_JSR_TIMEOUT_MS: "2000" },
-      }),
-    );
-    assert.equal(r.code, 1, r.out);
-    has(
-      r.out,
-      /Could not ask JSR whether .* is already published \(HTTP 503\)/,
-      /undid the local "bump version to v/,
-    );
-    assert.equal(headOf(dir), before, "the bump commit is still there");
-    hasNot(r.out, /tagging /);
+    const { dir, origin, setup } = releaseClone("release-unknown-arg");
+    const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wiat"], { cwd: dir });
+    assert.equal(r.code, 64, r.out);
+    has(r.out, /Unknown argument\(s\): --no-wiat/);
+    assert.equal(originMain(origin), setup, "something was pushed");
   },
 );
 
-test("release: an undo that cannot run says so", { timeout: TIMEOUT }, async () => {
-  /** A release in a fresh clone, with `lock` (a path under .git) created while JSR is asked. */
-  const lockedRelease = async (name: string, lock: string) => {
-    const dir = releaseClone(name);
-    const before = headOf(dir);
-    const r = await withFakeJsr(
-      (req, res) => {
-        writeFileSync(join(dir, ".git", lock), "");
-        json({}, 503)(req, res);
-      },
-      (base) =>
-        runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
-          cwd: dir,
-          env: { ...process.env, S3D_JSR_API: base, S3D_JSR_TIMEOUT_MS: "2000" },
-        }),
-    );
-    rmSync(join(dir, ".git", lock), { force: true });
-    return { r, before, after: headOf(dir) };
-  };
-
-  // The reset itself fails (the branch ref is locked): told, not claimed; the commit remains.
-  // The clone's branch is always main (releaseClone).
-  const refLocked = await lockedRelease("release-ref-locked", "refs/heads/main.lock");
-  assert.equal(refLocked.r.code, 1, refLocked.r.out);
-  has(refLocked.r.out, /could NOT undo the local "bump version to v/, /do not push it/);
-  hasNot(refLocked.r.out, /undid the local/);
-  assert.notEqual(refLocked.after, refLocked.before, "expected the bump commit to remain");
-
-  // The commit is undone but the index is locked: said exactly that, with the command to finish.
-  const idxLocked = await lockedRelease("release-index-locked", "index.lock");
-  assert.equal(idxLocked.r.code, 1, idxLocked.r.out);
-  has(
-    idxLocked.r.out,
-    /undid the local "bump version to v.*" commit, but could not unstage/,
-    /git reset -q HEAD --/,
-  );
-  assert.equal(idxLocked.after, idxLocked.before, "the bump commit should be undone");
-
-  // HEAD moves while JSR is being asked: left alone, and said.
-  const moved = releaseClone("release-moved");
-  const r2 = await withFakeJsr(
-    (req, res) => {
-      spawnSync("git", ["-C", moved, "commit", "-q", "--allow-empty", "-m", "someone else"]);
-      json({}, 503)(req, res);
-    },
-    (base) =>
-      runAsync([join(moved, "scripts", "publish.ts"), "--no-wait"], {
-        cwd: moved,
-        env: { ...process.env, S3D_JSR_API: base, S3D_JSR_TIMEOUT_MS: "2000" },
-      }),
-  );
-  assert.equal(r2.code, 1, r2.out);
-  has(r2.out, /HEAD is not the bump commit any more; left as is/);
-  assert.equal(
-    spawnSync("git", ["-C", moved, "log", "-1", "--pretty=%s"], { encoding: "utf8" }).stdout.trim(),
-    "someone else",
-  );
-});
-
 test(
-  "release: a file staged beforehand is not swept into the bump",
+  "H33: the release pushes main only, and only the one bump commit -- every guard refuses",
   { timeout: TIMEOUT },
   async () => {
-    const dir = releaseClone("release-staged");
-    const before = headOf(dir);
-    writeFileSync(
-      join(dir, "README.md"),
-      `${readFileSync(join(dir, "README.md"), "utf8")}\nstaged\n`,
-    );
-    assert.equal(spawnSync("git", ["-C", dir, "add", "README.md"]).status, 0);
-    // No JSR is needed: the dirty check refuses before the lookup.
+    // Each case: a fresh set-up, a change, the refusal; origin's main never moves and no tag is
+    // ever made, local or remote. No registry is needed: every one refuses before the lookups.
+    const cases: Array<
+      [
+        string,
+        (dir: string, origin: string) => void,
+        RegExp,
+        Partial<Parameters<typeof releaseClone>[1]>?,
+      ]
+    > = [
+      [
+        "an untracked file",
+        (dir) => writeFileSync(join(dir, "stray.txt"), "x"),
+        /The tree is not clean — these would NOT be in v9\.9\.9:[\s\S]*stray\.txt/,
+      ],
+      [
+        "a staged change",
+        (dir) => {
+          writeFileSync(
+            join(dir, "README.md"),
+            `${readFileSync(join(dir, "README.md"), "utf8")}\nx\n`,
+          );
+          spawnSync("git", ["-C", dir, "add", "README.md"]);
+        },
+        /The tree is not clean[\s\S]*README\.md/,
+      ],
+      [
+        "another branch",
+        (dir) => {
+          spawnSync("git", ["-C", dir, "checkout", "-q", "-b", "feature"]);
+          spawnSync("git", ["-C", dir, "branch", "-q", "-u", "origin/main"]);
+        },
+        /Only main is released; HEAD is on "feature"/,
+      ],
+      [
+        "a detached HEAD",
+        (dir) => spawnSync("git", ["-C", dir, "checkout", "-q", "--detach"]),
+        /HEAD is detached/,
+      ],
+      [
+        "no upstream",
+        (dir) => spawnSync("git", ["-C", dir, "branch", "-q", "--unset-upstream"]),
+        /main must track origin\/main to be released; it tracks nothing/,
+      ],
+      [
+        "no bump commit",
+        (dir) => spawnSync("git", ["-C", dir, "reset", "-q", "--hard", "origin/main"]),
+        /main is already origin\/main: there is no bump commit to push/,
+      ],
+      [
+        "a second commit on top",
+        (dir) => spawnSync("git", ["-C", dir, "commit", "-q", "--allow-empty", "-m", "more"]),
+        /main must be origin\/main plus ONE commit, the bump; it is 2 ahead and 0 behind/,
+      ],
+      [
+        "behind origin",
+        (dir, origin) => {
+          // Someone else pushed meanwhile: origin has a commit the bump does not sit on.
+          const other = `${dir}-other`;
+          spawnSync("git", ["clone", "-q", origin, other]);
+          spawnSync("git", [
+            "-C",
+            other,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "elsewhere",
+          ]);
+          spawnSync("git", ["-C", other, "push", "-q", "origin", "HEAD:main"]);
+        },
+        /it is 1 ahead and 1 behind/,
+      ],
+      [
+        "another subject",
+        (dir) =>
+          spawnSync("git", ["-C", dir, "commit", "-q", "--amend", "-m", "bump version to v9.9.9"]),
+        /HEAD is "bump version to v9\.9\.9", not "bump to v9\.9\.9"/,
+      ],
+      [
+        "another file in the bump",
+        (dir) => {
+          writeFileSync(
+            join(dir, "README.md"),
+            `${readFileSync(join(dir, "README.md"), "utf8")}\nx\n`,
+          );
+          spawnSync("git", [
+            "-C",
+            dir,
+            "commit",
+            "-q",
+            "--amend",
+            "--no-edit",
+            "--",
+            "README.md",
+            "jsr.json",
+          ]);
+        },
+        /"bump to v9\.9\.9" changes more than the version files:\s+README\.md/,
+      ],
+      [
+        "another line in a version file",
+        (dir) => {
+          const p = join(dir, "jsr.json");
+          writeFileSync(p, readFileSync(p, "utf8").replace('"license": "MIT"', '"license": "ISC"'));
+          spawnSync("git", ["-C", dir, "commit", "-q", "--amend", "--no-edit", "--", "jsr.json"]);
+        },
+        /jsr\.json changes besides its version line[\s\S]*"license": "ISC"/,
+      ],
+      [
+        "a local tag",
+        (dir) => spawnSync("git", ["-C", dir, "tag", "v9.9.9"]),
+        /A local tag v9\.9\.9 exists\. Tags are made by CI/,
+      ],
+      [
+        "the tag on origin",
+        (dir, origin) => {
+          spawnSync("git", ["-C", dir, "push", "-q", origin, "HEAD:refs/tags/v9.9.9"]);
+        },
+        /origin already has v9\.9\.9/,
+      ],
+    ];
+    for (const [what, change, why] of cases) {
+      const slug = what.replace(/\W+/g, "-");
+      const { dir, origin, setup } = releaseClone(`release-guard-${slug}`);
+      change(dir, origin);
+      const tagsBefore = originTags(origin);
+      const mainBefore = originMain(origin);
+      const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
+      assert.equal(r.code, 1, `${what}:\n${r.out}`);
+      has(r.out, why, /Nothing was pushed\./);
+      hasNot(r.out, /pushing main|main pushed/);
+      assert.equal(originMain(origin), mainBefore, `${what}: origin's main moved`);
+      assert.equal(originTags(origin), tagsBefore, `${what}: a tag was pushed`);
+      assert.ok(mainBefore === setup || what === "behind origin", `${what}: set-up`);
+    }
+    // The three version files must agree: a bump that left package.json behind.
+    const { dir, origin, setup } = releaseClone("release-guard-disagree", {
+      bump: (d) => bumpTo(d, "9.9.9", ["jsr.json", "src/report_core.ts"]),
+    });
     const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
     assert.equal(r.code, 1, r.out);
-    has(
-      r.out,
-      /Uncommitted changes — these would NOT be in v/,
-      /README\.md/,
-      /undid the local "bump/,
-    );
-    assert.equal(headOf(dir), before, "the bump commit remains");
-    const staged = spawnSync("git", ["-C", dir, "diff", "--cached", "--name-only"], {
-      encoding: "utf8",
-    });
-    assert.match(staged.stdout, /README\.md/, "README.md is no longer staged");
+    has(r.out, /The version files disagree: jsr\.json 9\.9\.9, package\.json 1\.\d+\.\d+/);
+    assert.equal(originMain(origin), setup);
   },
 );
 
-test("release: only main, tracking origin/main, is released", { timeout: TIMEOUT }, async () => {
-  // A feature branch with an upstream used to push itself and its tag: ci.yml runs on every
-  // branch, so publish.yml's CI gate passed, and unmerged code reached both registries.
-  const dir = releaseClone("release-branch");
-  const before = headOf(dir);
-  const git = (...a: string[]) => spawnSync("git", ["-C", dir, ...a], { encoding: "utf8" });
-  git("checkout", "-q", "-b", "feature");
-  git("branch", "-q", "-u", "origin/main");
-  const tags = () => git("tag", "--list").stdout;
-  const tagsBefore = tags();
-  // No JSR is needed: the branch is refused before anything is committed or asked.
-  const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
-  assert.equal(r.code, 1, r.out);
-  has(r.out, /Only main is released; HEAD is on "feature"/);
-  hasNot(r.out, /bump version|undid|tagging /);
-  assert.equal(headOf(dir), before, "something was committed");
-  assert.equal(tags(), tagsBefore, "a tag was made");
-
-  // Detached, as a PR checkout is.
-  git("checkout", "-q", "--detach");
-  const d = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
-  assert.equal(d.code, 1, d.out);
-  has(d.out, /HEAD is detached/);
-
-  // main without an upstream: the behind-check used to be skipped in silence.
-  git("checkout", "-q", "main");
-  git("branch", "-q", "--unset-upstream");
-  const u = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
-  assert.equal(u.code, 1, u.out);
-  has(u.out, /main must track origin\/main to be released; it tracks nothing/);
-  assert.equal(headOf(dir), before, "something was committed");
+test("H33: a registry that cannot say yes refuses the release", { timeout: TIMEOUT }, async () => {
+  const fast = { S3D_JSR_TIMEOUT_MS: "2000" };
+  const cases: Array<[string, Handler, Handler, RegExp]> = [
+    [
+      "JSR 503",
+      json({}, 503),
+      json({}, 404),
+      /Could not ask JSR whether 9\.9\.9 is already published \(HTTP 503\)/,
+    ],
+    [
+      "JSR has it",
+      json({ version: "9.9.9", rekorLogId: "1" }),
+      json({}, 404),
+      /is ALREADY published on JSR/,
+    ],
+    [
+      "npm had it",
+      json({}, 404),
+      json({ time: { "9.9.9": "2026-01-01" } }),
+      /npm never takes a number twice/,
+    ],
+    [
+      "npm 503",
+      json({}, 404),
+      json({}, 503),
+      /Could not ask npm whether 9\.9\.9 can still be published/,
+    ],
+    // Both "free" -- from fakes. A test hook never lets a release push (only a dry run).
+    [
+      "both free, but fakes",
+      json({}, 404),
+      json({}, 404),
+      /S3D_JSR_API, S3D_NPM_API\b.* is set — a release never runs against a test registry/,
+    ],
+  ];
+  for (const [what, jsr, npm, why] of cases) {
+    const { dir, origin, setup } = releaseClone(`release-registry-${what.replace(/\W+/g, "-")}`);
+    const r = await withFakeJsr(jsr, (j) =>
+      withFakeJsr(npm, (n) =>
+        runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
+          cwd: dir,
+          env: { ...process.env, ...fast, S3D_JSR_API: j, S3D_NPM_API: n },
+        }),
+      ),
+    );
+    assert.equal(r.code, 1, `${what}:\n${r.out}`);
+    has(r.out, why, /Nothing was pushed\./);
+    assert.equal(originMain(origin), setup, `${what}: pushed`);
+    assert.equal(originTags(origin).includes("v9.9.9"), false, `${what}: tagged`);
+  }
+  // A non-loopback hook is refused outright, by both scripts.
+  const { dir } = releaseClone("release-registry-away");
+  const away = { ...process.env, S3D_JSR_API: "https://jsr.example.invalid" };
+  const r2 = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
+    cwd: dir,
+    env: away,
+  });
+  assert.equal(r2.code, 1, r2.out);
+  has(r2.out, /is not a loopback address/);
+  const r3 = await runAsync([join(ROOT, "scripts", "verify-release.ts"), "9.9.9"], { env: away });
+  assert.notEqual(r3.code, 0, r3.out);
+  has(r3.out, /is not a loopback address/);
+  // A typo in a timing hook is an error, not a zero-length (or NaN) wait.
+  const r4 = await runAsync([join(ROOT, "scripts", "verify-release.ts"), "9.9.9"], {
+    env: { ...process.env, S3D_JSR_RETRY_MS: "abc" },
+  });
+  assert.notEqual(r4.code, 0, r4.out);
+  has(r4.out, /S3D_JSR_RETRY_MS="abc" is not a positive number/);
 });
+
+test(
+  "H33: bump takes a level, refuses a dirty tree, and commits the bump alone",
+  { timeout: TIMEOUT },
+  async () => {
+    const { dir, setup } = releaseClone("bump-level", { bump: () => {} });
+    const bump = (...a: string[]) =>
+      runAsync([join(dir, "scripts", "bump.ts"), ...a], { cwd: dir });
+    // No default level (U1): a bare `bun run bump` used to mean patch.
+    for (const args of [[], ["pacth"], ["patch", "minor"]]) {
+      const r = await bump(...args);
+      assert.equal(r.code, 64, `${args.join(" ")}:\n${r.out}`);
+      has(r.out, /bump: (name the level|one level)/);
+    }
+    // A dirty tree, an untracked file included, refuses before anything is written or gated.
+    writeFileSync(join(dir, "stray.txt"), "x");
+    const d = await bump("major");
+    assert.equal(d.code, 1, d.out);
+    has(d.out, /the tree is not clean \(untracked files count\)[\s\S]*stray\.txt/);
+    hasNot(d.out, /compatibility gate|jsr\.json +→/);
+    rmSync(join(dir, "stray.txt"));
+    assert.equal(headOf(dir), setup);
+    // A major (the gate checks the surface floor only, no renders): the three files, one commit,
+    // `bump to v<next major>`, and a clean tree after it. node_modules is git-ignored.
+    symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "junction");
+    const before = JSON.parse(readFileSync(join(dir, "jsr.json"), "utf8")).version as string;
+    const next = `${Number(before.split(".")[0]) + 1}.0.0`;
+    const ok = await bump("major");
+    assert.equal(ok.code, 0, ok.out);
+    has(ok.out, new RegExp(`committed +bump to v${next.replace(/\./g, "\\.")}`));
+    const git = (...a: string[]) =>
+      spawnSync("git", ["-C", dir, ...a], { encoding: "utf8" }).stdout.trim();
+    assert.equal(git("log", "-1", "--pretty=%s"), `bump to v${next}`);
+    assert.equal(git("rev-parse", "HEAD^"), setup);
+    assert.deepEqual(
+      git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n").sort(),
+      ["jsr.json", "package.json", "src/report_core.ts"],
+    );
+    assert.equal(git("status", "--porcelain", "--untracked-files=all"), "");
+  },
+);
 
 test("review 5, group D: npm's numbers, and the timing hooks, before a release", async () => {
   const api = await import(pathToFileURL(join(ROOT, "scripts", "jsr-api.ts")).href);
@@ -6981,45 +7159,6 @@ test("review 5, group D: npm's numbers, and the timing hooks, before a release",
   }
 });
 
-test("release: the JSR test hook can never let a release tag", { timeout: TIMEOUT }, async () => {
-  // A fake JSR answering "not published" (404): the release still refuses, because it is fake.
-  const dir = releaseClone("release-hook-404");
-  const before = headOf(dir);
-  // Every hook is named, npm's and GitHub's too (review 4): their verdicts follow the tag.
-  const r = await withFakeJsr(json({}, 404), (base) =>
-    runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
-      cwd: dir,
-      env: { ...process.env, S3D_JSR_API: base, S3D_NPM_API: base, S3D_GITHUB_API: base },
-    }),
-  );
-  assert.equal(r.code, 1, r.out);
-  has(
-    r.out,
-    /S3D_JSR_API, S3D_NPM_API, S3D_GITHUB_API is set — a release never runs against a test registry/,
-    /undid the local/,
-  );
-  hasNot(r.out, /tagging /);
-  assert.equal(headOf(dir), before);
-
-  // A non-loopback hook is refused outright, by both scripts.
-  const away = { ...process.env, S3D_JSR_API: "https://jsr.example.invalid" };
-  const r2 = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], {
-    cwd: dir,
-    env: away,
-  });
-  assert.equal(r2.code, 1, r2.out);
-  has(r2.out, /is not a loopback address/);
-  const r3 = await runAsync([join(ROOT, "scripts", "verify-release.ts"), "9.9.9"], { env: away });
-  assert.notEqual(r3.code, 0, r3.out);
-  has(r3.out, /is not a loopback address/);
-  // A typo in a timing hook is an error, not a zero-length (or NaN) wait.
-  const r4 = await runAsync([join(ROOT, "scripts", "verify-release.ts"), "9.9.9"], {
-    env: { ...process.env, S3D_JSR_RETRY_MS: "abc" },
-  });
-  assert.notEqual(r4.code, 0, r4.out);
-  has(r4.out, /S3D_JSR_RETRY_MS="abc" is not a positive number/);
-});
-
 test("compat: a tagged version is refused unless the release says it is unpublished", () => {
   // The newest tag in this checkout is a released version: a stand-alone gate run must not
   // compare it against the tag before it and call re-releasing it "allowed".
@@ -7044,21 +7183,36 @@ test("H30 / H32: the GitHub API script makes the Release page by the recipe, wit
     peels?: string;
     release?: boolean;
     moveAfterPost?: boolean;
+    /** POST git/refs: 422 = another run made the ref meanwhile, as `raceTo`. */
+    refStatus?: number;
+    raceTo?: string;
   }) => {
     const calls: string[] = [];
+    const bodies: unknown[] = [];
+    let unlimited = 0;
     let released = opts.release ?? false;
     let peels = opts.peels ?? SHA;
+    let tag = opts.tag ?? "light";
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
     // It answers at once; `fetch`'s shape is a promise of that answer.
     const answer = (url: string | URL, init?: RequestInit): Response => {
       const path = String(url).replace("https://api.test/repos/o/r/", "");
       const method = init?.method ?? "GET";
       calls.push(`${method} ${path}`);
+      if (!(init?.signal instanceof AbortSignal)) unlimited++;
+      if (init?.body) bodies.push(JSON.parse(String(init.body)));
       if (path === "git/ref/tags/v9.9.9") {
-        if ((opts.tag ?? "light") === "none") return json(404, { message: "Not Found" });
-        return opts.tag === "annotated"
+        if (tag === "none") return json(404, { message: "Not Found" });
+        return tag === "annotated"
           ? json(200, { object: { type: "tag", sha: TAGOBJ } })
           : json(200, { object: { type: "commit", sha: peels } });
+      }
+      if (path === "git/tags" && method === "POST") return json(201, { sha: TAGOBJ });
+      if (path === "git/refs" && method === "POST") {
+        const status = opts.refStatus ?? 201;
+        tag = "annotated";
+        if (status === 422) peels = opts.raceTo ?? peels;
+        return json(status, {});
       }
       if (path === `git/tags/${TAGOBJ}`)
         return json(200, { object: { type: "commit", sha: peels } });
@@ -7085,7 +7239,7 @@ test("H30 / H32: the GitHub API script makes the Release page by the recipe, wit
       fetch: fetchImpl,
       log: () => {},
     };
-    return { env, calls };
+    return { env, calls, bodies, unlimited: () => unlimited };
   };
   const posts = (calls: string[]) => calls.filter((c) => c.startsWith("POST")).length;
 
@@ -7133,6 +7287,53 @@ test("H30 / H32: the GitHub API script makes the Release page by the recipe, wit
   const runs = github({});
   assert.equal(await api.ciRun(runs.env, SHA), "");
   assert.match(runs.calls[0], /head_sha=a{40}&event=push/);
+
+  // 5. H33 (2026-11-10): CI makes the tag after its checks, by the REST API. A new tag: checked
+  //    absent, the annotated object on THIS commit, its ref, read back.
+  const made = github({ tag: "none" });
+  assert.equal(await api.createTag(made.env, "v9.9.9", SHA), "created");
+  assert.deepEqual(made.calls, [
+    "GET git/ref/tags/v9.9.9",
+    "POST git/tags",
+    "POST git/refs",
+    "GET git/ref/tags/v9.9.9",
+    `GET git/tags/${TAGOBJ}`,
+  ]);
+  assert.deepEqual(made.bodies, [
+    { tag: "v9.9.9", message: "v9.9.9", object: SHA, type: "commit" },
+    { ref: "refs/tags/v9.9.9", sha: TAGOBJ },
+  ]);
+  //    Already on this commit (a re-run): done, nothing written.
+  const rerun = github({ tag: "annotated" });
+  assert.equal(await api.createTag(rerun.env, "v9.9.9", SHA), "exists");
+  assert.equal(posts(rerun.calls), 0, "a re-run wrote the tag again");
+  //    On another commit: refused, nothing written -- a release tag never moves.
+  const moved = github({ peels: OTHER });
+  await assert.rejects(api.createTag(moved.env, "v9.9.9", SHA), /already names b{40}.*never moves/);
+  assert.equal(posts(moved.calls), 0);
+  //    Another run made the ref meanwhile (422): judged as an existing tag, both ways.
+  const raceSame = github({ tag: "none", refStatus: 422 });
+  assert.equal(await api.createTag(raceSame.env, "v9.9.9", SHA), "exists");
+  await assert.rejects(
+    api.createTag(github({ tag: "none", refStatus: 422, raceTo: OTHER }).env, "v9.9.9", SHA),
+    /never moves/,
+  );
+  //    Not a release tag, not a commit: refused before any request.
+  for (const [t, s] of [
+    ["9.9.9", SHA],
+    ["v9.9", SHA],
+    ["v9.9.9", "main"],
+  ]) {
+    const g = github({});
+    await assert.rejects(api.createTag(g.env, t, s), /not a vX\.Y\.Z release tag|is not a commit/);
+    assert.equal(g.calls.length, 0, `${t} ${s}: asked GitHub`);
+  }
+  // 6. Every request has a time limit (workspace best-practices 7.21): 30 s, as a signal.
+  assert.equal(api.REQUEST_TIMEOUT_MS, 30_000);
+  for (const g of [fresh, again, made, rerun, raceSame, runs]) {
+    assert.ok(g.calls.length > 0);
+    assert.equal(g.unlimited(), 0, "a request without a time limit");
+  }
 });
 
 test("review 2, group D: the release path checks what it publishes", () => {
@@ -7223,69 +7424,150 @@ test("review 2, group D: the release path checks what it publishes", () => {
     const next = jobsText.slice(at + 4).search(/\n {2}[A-Za-z0-9_-]+:\n/);
     return next < 0 ? jobsText.slice(at) : jobsText.slice(at, at + 4 + next);
   };
-  const [ciGreen, checks, publish, record, npm, finalize] = [
-    "ci-green",
-    "checks",
-    "publish",
-    "record",
-    "npm",
-    "finalize",
-  ].map(job);
+  // H33 (owner, 2026-11-10): "the CI to check first, then push the tag, and then create the
+  // release page from the tag, then publish the package to the registry". The job graph, in that
+  // order, on a push to main -- no tag trigger (no machine tags), no "Run workflow".
+  const head = yml.slice(0, yml.indexOf("\njobs:\n"));
   assert.match(
-    ciGreen,
-    /workflow_dispatch" \] && \[ "\$GITHUB_REF" != "refs\/heads\/main" \]/,
-    "a manual run from any branch",
+    head,
+    /\non:\n {2}push:\n {4}branches: \[main\]\n/,
+    "not triggered by a push to main",
   );
-  // GitHub's REST API from the Bun script, never the GitHub CLI (owner, H30); the CI run asked for is a
-  // PUSH run of the commit.
-  assert.match(ciGreen, /github-api\.ts ci-run "\$\{SHA\}"/, "CI not read through the script");
+  assert.doesNotMatch(head, /\btags:|workflow_dispatch|pull_request/, "another trigger");
+  assert.match(head, /\npermissions: \{\}\n/, "top-level permissions are not empty");
+  const [checks, tagJob, release, jsrJob, npmBuild, npm] = [
+    "checks",
+    "tag",
+    "release",
+    "jsr",
+    "npm-build",
+    "npm",
+  ].map(job);
+  const jobs = [...jobsText.matchAll(JOB_KEY)].map((m) => m[1]);
+  assert.deepEqual(jobs, ["checks", "tag", "release", "jsr", "npm-build", "npm"], "the jobs");
+  assert.match(tagJob, /\n {4}needs: checks\n {4}if: needs\.checks\.outputs\.release == 'true'\n/);
+  assert.match(release, /\n {4}needs: \[checks, tag\]\n/, "the page before the tag");
+  assert.match(jsrJob, /\n {4}needs: \[checks, release\]\n/, "JSR before the page");
+  assert.match(npmBuild, /\n {4}needs: \[checks, jsr\]\n/, "npm built before JSR has the version");
+  assert.match(npm, /\n {4}needs: \[checks, jsr, npm-build\]\n/, "npm before JSR");
+  //   U5: "is this a release" -- the version untagged, or tagged on THIS commit (a re-run); both
+  //   registries free for a new one; ci.yml green on the commit; the gates.
+  assert.match(
+    checks,
+    /STATE=new; elif \[ "\$AT" = "\$GITHUB_SHA" \]; then STATE=rerun; else STATE=released/,
+  );
+  assert.match(
+    checks,
+    /registry\.npmjs\.org[\s\S]*\.time \| has\(\$v\)[\s\S]*NPM" != "free"/,
+    "npm not asked",
+  );
+  assert.match(checks, /api\.jsr\.io[\s\S]*JSR" != "404"/, "JSR not asked");
+  assert.match(
+    checks,
+    /github-api\.ts ci-run "\$\{GITHUB_SHA\}"/,
+    "CI not read through the script",
+  );
   const api = readFileSync(join(ROOT, "scripts", "github-api.ts"), "utf8");
   assert.match(api, /runs\?head_sha=\$\{sha\}&event=push/, "CI read from a run of any event");
-  assert.match(publish, /contents: read/, "the publish job (bun install) may write");
-  assert.doesNotMatch(publish, /git push|github-api\.ts release/, "the publish job writes");
-  // The SemVer gate and the upload check run before JSR -- in `checks`, which publish needs.
-  assert.match(checks, /compat\.ts release/, "no SemVer gate before JSR");
-  assert.match(checks, /jsr-upload-check/, "no upload check before JSR");
-  assert.match(publish, /needs: \[ci-green, checks\]/, "JSR does not wait on the gates");
-  assert.match(record, /needs: \[ci-green, publish\][\s\S]*refs\/heads\/release\/\$\{TAG\}/);
-  assert.match(npm, /needs: \[ci-green, publish, npm-build\]/, "npm waits on the release branch");
-  // Review 3 (2026-11-07). The publishing credential (`id-token: write`) only where nothing
-  // installed runs: the gates and the npm build hold none.
-  //   Every job states its permissions; only publish and npm may mint a token, only record and
-  //   finalize may write (review 4: nothing asserted the blocks of the jobs that hold neither).
-  const jobs = [...jobsText.matchAll(JOB_KEY)].map((m) => m[1]);
-  assert.ok(jobs.length >= 8, `only ${jobs.length} jobs read`);
+  assert.match(checks, /compat\.ts release "\$\{TAG#v\}" --unpublished/, "no SemVer gate");
+  assert.match(checks, /jsr-upload-check/, "no upload check");
+  //   U6, U7: the tag and the page by the script alone, fetched at this commit; no clone, no
+  //   install beside the write token (C30).
+  assert.match(tagJob, /github-api\.ts" tag "\$\{TAG\}" "\$\{GITHUB_SHA\}"/);
+  assert.match(release, /github-api\.ts" release "\$\{TAG\}" "\$\{GITHUB_SHA\}"/);
+  for (const [name, text] of [
+    ["tag", tagJob],
+    ["release", release],
+  ] as const) {
+    assert.match(
+      text,
+      /raw\.githubusercontent\.com\/\$\{GITHUB_REPOSITORY\}\/\$\{GITHUB_SHA\}\/scripts\/github-api\.ts/,
+    );
+    assert.doesNotMatch(
+      text,
+      /git (clone|fetch|init)|actions\/checkout|\bbun\s+(i|install|add)\b|\bnpm\s+(ci|i|install)\b/,
+      `${name}: the write-token job clones or installs`,
+    );
+  }
+  //   Every job states its permissions; only jsr and npm may mint a token, only tag and release
+  //   may write.
   for (const name of jobs) {
     const text = job(name);
     assert.match(text, /\n {4}permissions:\n/, `${name} states no permissions`);
     // As YAML values: quoted, or with more spaces, they are the same permission (review 5).
     assert.equal(
       /id-token:\s*["']?write\b/.test(text),
-      ["publish", "npm"].includes(name),
+      ["jsr", "npm"].includes(name),
       `${name}: id-token`,
     );
     assert.equal(
       /contents:\s*["']?write\b/.test(text),
-      ["record", "finalize"].includes(name),
+      ["tag", "release"].includes(name),
       `${name}: contents: write`,
     );
   }
   for (const [name, text] of [
-    ["publish", publish],
+    ["jsr", jsrJob],
     ["npm", npm],
   ] as const) {
     // Every way to install or run a package, not `bun install` alone (`npm ci`, `bun i`, `bunx`),
-    // and any script run by path (review 5: `bun scripts/npm-prove.ts`, `node node_modules/…`):
-    // only `bun -p` / `bun -e`, `node -p`, `deno publish`, and npm's view/publish run here.
-    assert.doesNotMatch(
-      text,
-      /\bbun\s+(?:i|install|add)\b(?![^\n]*--ignore-scripts)|\bbunx\b|(?<![.\w-])bun\s+(?!-[pe]\b|install\b|i\b|add\b)[\w./]|(?<![.\w-])node\s+(?!-[pe]\b)[\w./]|node_modules\/|(?<![.\w-])deno\s+(?!publish\b)[a-z]|\bnpm\s+(?:ci|i|install|exec|x|run|rebuild)\b|\bnpx\b|\b(?:pnpm|yarn)\b|npm:build|compat\.ts|jsr-upload-check/,
-      `${name} runs dependency code beside its publishing token`,
+    // and any script run by path (review 5): only `node -p`, `deno publish`, and npm's own
+    // publish run here. The ONE install, jsr's for "nodeModulesDir": "manual", runs no scripts
+    // and is lockfile-exact (the recorded U8 exception, cmem/release.md).
+    const hit =
+      // Horizontal space only: a step named "… on npm" above a `run:` line is not `npm run`.
+      /\bbun[ \t]+(?:i|install|add)\b(?![^\n]*--frozen-lockfile --ignore-scripts)|\bbunx\b|(?<![.\w-])bun[ \t]+(?!install\b)[\w./"$]|(?<![.\w-])node[ \t]+(?!-p\b)[\w./]|node_modules\/|(?<![.\w-])deno[ \t]+(?!publish\b)[a-z]|\bnpm[ \t]+(?:ci|i|install|exec|x|run|rebuild)\b|\bnpx\b|\b(?:pnpm|yarn)\b|npm:build|compat\.ts|jsr-upload-check/.exec(
+        text,
+      );
+    assert.equal(
+      hit?.[0],
+      undefined,
+      `${name} runs dependency code beside its publishing token: ${text.slice((hit?.index ?? 0) - 60, (hit?.index ?? 0) + 30)}`,
     );
   }
-  //   A run for the same tag never cancels one in progress (it could stop between JSR and the
-  //   release branch); every action is pinned to a commit; npm-only recovery gets its release.
+  assert.doesNotMatch(npm, /\bbun\s+(?:i|install|add)\b/, "the npm job installs");
+  //   U8: each skips what its registry has (re-run safe), then reads the attestation back, FATAL.
+  assert.match(jsrJob, /200\) echo "JSR already has[\s\S]*404\) deno publish ;;/);
+  assert.match(
+    jsrJob,
+    /rekorLogId[\s\S]*has no provenance[^\n]*\n\s*exit 1/,
+    "JSR's read-back is not fatal",
+  );
+  assert.match(npm, /CODE" = "200"[\s\S]*gitHead[\s\S]*npm publish --access public/);
+  assert.match(
+    npm,
+    /dist\.attestations\.provenance[\s\S]*has no provenance attestation[^\n]*\n\s*exit 1/,
+    "npm's read-back is not fatal",
+  );
+  assert.match(npm, /npm only ever publishes a version JSR has/);
+  assert.doesNotMatch(yml, /continue-on-error/, "a step that cannot fail");
+  //   Both publish jobs publish only the commit the tag peels to.
+  for (const text of [jsrJob, npm]) {
+    assert.match(text, /if \[ "\$AT" != "\$GITHUB_SHA" \]; then echo "::error::tag/);
+  }
+  //   U9: every downloaded tool pinned by version and sha256; no setup actions; the network
+  //   requests limited in time (best-practices 7.21); a run never cancelled.
+  const downloads = (
+    yml.match(
+      /curl [^\n]*-o "?\$RUNNER_TEMP\/\w+\.(zip|tar\.xz)"?|curl [^\n]*-o \/tmp\/fnm\.zip/g,
+    ) ?? []
+  ).length;
+  const pins = (yml.match(/sha256sum -c -/g) ?? []).length;
+  assert.ok(downloads >= 10 && pins === downloads, `${downloads} downloads, ${pins} digest checks`);
+  assert.doesNotMatch(yml, /setup-(bun|deno|node)/, "a tool installed by an action, unpinned");
+  for (const line of yml.split("\n").filter((l) => /\bcurl\s/.test(l))) {
+    assert.match(line, /--max-time \d+/, `a request with no time limit: ${line.trim()}`);
+  }
   assert.match(yml, /cancel-in-progress: false/);
+  assert.match(head, /group: publish-\$\{\{ github\.sha \}\}/, "one group for every push of main");
+  //   No machine tags, and nothing writes release/<tag> any more.
+  assert.doesNotMatch(yml, /git push|refs\/heads\/release\//, "the workflow pushes");
+  const pub = readFileSync(join(ROOT, "scripts", "publish.ts"), "utf8");
+  assert.doesNotMatch(
+    code(pub.replace(/\/\*\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "")),
+    /"tag"|--force|"-f"/,
+    "the release script tags or forces",
+  );
   for (const file of ["publish.yml", "ci.yml"]) {
     const text = code(readFileSync(join(ROOT, ".github", "workflows", file), "utf8"));
     // Any spacing, and any form: `docker://` and a local `./action` are not commits either.
@@ -7295,55 +7577,7 @@ test("review 2, group D: the release path checks what it publishes", () => {
       `${file}: an action not pinned to a commit`,
     );
   }
-  //   The Deno the upload check ran is the one that publishes (review 4: each job floated v2.x),
-  //   and a version that cannot be read stops it, not an empty pin that floats (review 5).
-  assert.match(checks, /deno --version/);
-  assert.match(
-    checks,
-    /=~ \^\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$/,
-    "the Deno version is not checked",
-  );
-  assert.match(publish, /deno-version: \$\{\{ needs\.checks\.outputs\.deno \}\}/);
-  //   Review 5. An upload whose job then failed is followed through, never stranded: `record` and
-  //   `npm-build` run on `uploaded` too; `record` and `npm` require JSR to have the version, on
-  //   every event; JSR's step requires npm can still take the number; npm-build proves its package.
-  assert.match(publish, /uploaded: \$\{\{ steps\.jsr\.outputs\.uploaded \}\}/);
-  assert.match(publish, /echo "uploaded=true" >> "\$GITHUB_OUTPUT"\s+deno publish/);
-  assert.match(publish, /registry\.npmjs\.org[\s\S]*d\.time[\s\S]*TAKEN" != "no"/, "npm not asked");
-  assert.match(record, /needs\.publish\.outputs\.uploaded == 'true'/);
-  assert.match(record, /JSR has the version[\s\S]*CODE" = "200"[\s\S]*git push/);
-  assert.match(job("npm-build"), /needs\.publish\.outputs\.uploaded == 'true'/);
-  assert.match(
-    job("npm-build"),
-    /npm-prove\.ts[\s\S]*upload-artifact/,
-    "the shipped package unproven",
-  );
-  const npmJsr = /CODE" != "200"[\s\S]*npm only ever publishes a version JSR has/.exec(npm);
-  assert.ok(npmJsr, "npm does not require JSR's version");
-  assert.ok(
-    npm.indexOf("npm only ever publishes") < npm.indexOf('if [ "$EVENT" = "workflow_dispatch" ]'),
-    "npm requires JSR's version on dispatch only",
-  );
-  assert.match(
-    ciGreen,
-    /github-api\.ts commit "release\/\$\{TAG\}"/,
-    "dispatch does not check JSR's commit",
-  );
-  assert.match(finalize, /github\.event_name == 'workflow_dispatch'/, "no release after npm-only");
-  assert.match(
-    npm,
-    /REL=\$\(git ls-remote origin "refs\/heads\/release\/\$\{TAG\}"/,
-    "npm-only publishes any commit",
-  );
-  assert.match(npm, /gitHead/, '"already on npm" passes any commit');
-  assert.match(
-    finalize,
-    /needs: \[ci-green, record, npm\][\s\S]*github-api\.ts release "\$\{TAG\}" "\$\{SHA\}"/,
-  );
-  // The script alone, no credential kept, nothing installed beside the write token (C30).
-  assert.match(finalize, /sparse-checkout: scripts\/github-api\.ts/);
-  assert.match(finalize, /persist-credentials: false/);
-  assert.doesNotMatch(finalize, /bun install|npm (ci|install)/, "the write-token job installs");
+  assert.match(npmBuild, /npm-prove\.ts[\s\S]*upload-artifact/, "the shipped package unproven");
   const ci = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
   for (const [name, text] of [
     ["publish.yml", yml],

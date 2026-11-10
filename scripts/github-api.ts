@@ -14,13 +14,18 @@
  *   bun scripts/github-api.ts commit <ref>           the commit a ref names (exit 2: none)
  *   bun scripts/github-api.ts compare <base> <head>  the compare status ("identical", "behind", ...)
  *   bun scripts/github-api.ts ci-run <sha>           "status conclusion url" of ci.yml's push run, or nothing
+ *   bun scripts/github-api.ts tag <tag> <sha>        the annotated release tag, made by CI (U6)
  *   bun scripts/github-api.ts release <tag> <sha>    the Release page, by the recipe above
  *
  * No dependency: it runs in jobs that install nothing (a write token never sits beside package
- * code, workspace C30).
+ * code, workspace C30). Every request is limited to 30 s (workspace best-practices 7.21, letter
+ * H33): until 2026-11-10 a stalled GitHub held a release job until the runner's own limit.
  *
  * @module
  */
+
+/** The limit on every request (workspace best-practices 7.21). */
+export const REQUEST_TIMEOUT_MS = 30_000;
 
 /** What the calls need from their surroundings, so a test can give its own. */
 export type Env = {
@@ -48,6 +53,7 @@ async function call(
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const text = await res.text();
   let json: unknown = null;
@@ -124,6 +130,50 @@ export async function tagCommit(env: Env, tag: string): Promise<string | null> {
 }
 
 /**
+ * The release tag, made by CI after its checks (🔒 owner, 2026-11-10: "the CI to check first, then
+ * push the tag"; workspace release-process.md § 5 U6, letter H33). No machine tags any more.
+ *
+ * A tag already peeling to `sha` is done, with no write (a re-run). A tag on any other commit is
+ * refused: a published tag never moves. Else the annotated tag object, then its ref, then read
+ * back. A ref another run made meanwhile (422) is judged like an existing tag.
+ */
+export async function createTag(env: Env, tag: string, sha: string): Promise<"exists" | "created"> {
+  if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new ApiError(`'${tag}' is not a vX.Y.Z release tag`);
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new ApiError(`'${sha}' is not a commit`);
+  const judge = (at: string | null): "exists" => {
+    if (at !== sha) {
+      throw new ApiError(
+        `${tag} already names ${at ?? "nothing readable"}, not ${sha} -- a release tag never moves; refusing`,
+      );
+    }
+    env.log(`${tag} already peels to ${sha} -- nothing written`);
+    return "exists";
+  };
+  const at = await tagCommit(env, tag);
+  if (at !== null) return judge(at);
+  const obj = await call(env, "POST", `repos/${env.repo}/git/tags`, {
+    tag,
+    message: tag,
+    object: sha,
+    type: "commit",
+  });
+  const objSha = field(obj.json, "sha");
+  if (obj.status !== 201 || typeof objSha !== "string" || !/^[0-9a-f]{40}$/.test(objSha)) {
+    throw new ApiError(`POST git/tags (${tag}): HTTP ${obj.status}`);
+  }
+  const ref = await call(env, "POST", `repos/${env.repo}/git/refs`, {
+    ref: `refs/tags/${tag}`,
+    sha: objSha,
+  });
+  if (ref.status === 422) return judge(await tagCommit(env, tag));
+  if (ref.status !== 201) throw new ApiError(`POST git/refs (${tag}): HTTP ${ref.status}`);
+  const back = await tagCommit(env, tag);
+  if (back !== sha) throw new ApiError(`${tag} reads back as ${back}, not ${sha}`);
+  env.log(`created the annotated tag ${tag} at ${sha}`);
+  return "created";
+}
+
+/**
  * The Release page for `tag`, by the recipe every project follows (H32): the tag exists and peels
  * to `sha` (else refuse: creating the page would create or bless the wrong tag); a page already
  * there is done, with no write; else create it with generated notes and the registry links on
@@ -188,7 +238,7 @@ if (import.meta.main) {
   };
   const usage = () => {
     console.error(
-      "usage: bun scripts/github-api.ts commit <ref> | compare <base> <head> | ci-run <sha> | release <tag> <sha>",
+      "usage: bun scripts/github-api.ts commit <ref> | compare <base> <head> | ci-run <sha> | tag <tag> <sha> | release <tag> <sha>",
     );
     process.exit(64);
   };
@@ -204,6 +254,7 @@ if (import.meta.main) {
     } else if (command === "compare" && args.length === 2)
       console.log(await compareStatus(env, args[0], args[1]));
     else if (command === "ci-run" && args.length === 1) console.log(await ciRun(env, args[0]));
+    else if (command === "tag" && args.length === 2) await createTag(env, args[0], args[1]);
     else if (command === "release" && args.length === 2) {
       await release(env, args[0], args[1], args[0].replace(/^v/, ""));
     } else usage();

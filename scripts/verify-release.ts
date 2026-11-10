@@ -151,18 +151,25 @@ console.error(
 );
 console.error(`   No Sigstore/Rekor entry — JSR cannot show where this build came from.\n`);
 console.error(`   This is what a workstation \`deno publish\` produces. Releases must go`);
-console.error(`   through \`bun run release\`, which tags and lets GitHub Actions publish`);
-console.error(`   with an OIDC token; that token is the only source of provenance.\n`);
+console.error(`   through \`bun run release\`, which pushes main for GitHub Actions to tag and`);
+console.error(`   publish with an OIDC token; that token is the only source of provenance.\n`);
 console.error(`   JSR versions are IMMUTABLE, so ${version} cannot be fixed. Bump and`);
 console.error(`   release again:\n`);
-console.error(`     bun run bump`);
+console.error(`     bun run bump patch`);
 console.error(`     bun run release\n`);
 console.error(`   ⚠️  jsr.io may still show score 100 — provenance is not scored.`);
 process.exit(1);
 
 /**
- * `--github`: publish.yml's last job makes the GitHub release, after both registries. Returns 0
- * when it exists, else 5 -- waited for under `--wait`, like the registries.
+ * `--github`: publish.yml's `release` job makes the GitHub release from CI's tag, before the
+ * registries (owner's order, 2026-11-10). Returns 0 when it exists, at the commit JSR got, else
+ * 5 -- waited for under `--wait`, like the registries.
+ *
+ * The commit JSR got: up to 1.3.0, publish.yml's `record` job wrote it as the branch
+ * release/<tag>, because the tag was pushed from a machine and could be moved. From the D1 order
+ * on, CI makes the tag after its checks, never moves it, and publishes only the commit it peels
+ * to: the tag is the record, and no branch is written. A release/<tag> branch, where one exists,
+ * is still compared.
  */
 async function githubVerdict(): Promise<number> {
   const tag = `v${version}`;
@@ -174,15 +181,15 @@ async function githubVerdict(): Promise<number> {
     if (i < attempts) {
       console.log(
         "found" in g
-          ? `  no GitHub release yet (${i}/${attempts}) — it is made after npm`
+          ? `  no GitHub release yet (${i}/${attempts}) — the workflow may still be running`
           : `  could not ask GitHub (${i}/${attempts}): ${g.error} — retrying`,
       );
       await new Promise((r) => setTimeout(r, JSR_RETRY_MS));
     }
   }
   if ("found" in g && g.found) {
-    // ...and its tag names the commit JSR got (release/<tag>, which publish.yml's record job
-    // writes): "a release exists" passed whatever commit the tag had moved to (review 4).
+    // ...and its tag names the commit JSR got: "a release exists" passed whatever commit the tag
+    // had moved to (review 4). See above for where that commit is recorded.
     const [atTag, atBranch] = await Promise.all([
       lookupGithubCommit(tag),
       lookupGithubCommit(`release/${tag}`),
@@ -193,22 +200,26 @@ async function githubVerdict(): Promise<number> {
       console.error(`   This is not a verdict. Re-run: bun run verify-release ${version} --github`);
       return 5;
     }
-    if (atBranch.sha === "" || atTag.sha !== atBranch.sha) {
+    if (atTag.sha === "") {
+      console.error(`\n❌ The GitHub release ${tag} exists, but the tag ${tag} names no commit.`);
+      return 5;
+    }
+    if (atBranch.sha !== "" && atTag.sha !== atBranch.sha) {
       console.error(
-        atBranch.sha === ""
-          ? `\n❌ The GitHub release ${tag} exists, but there is no release/${tag} branch to say which commit JSR got.`
-          : `\n❌ ${tag} names ${atTag.sha || "nothing"}, but JSR got ${atBranch.sha} (release/${tag}): the release is of another commit.`,
+        `\n❌ ${tag} names ${atTag.sha}, but JSR got ${atBranch.sha} (release/${tag}): the release is of another commit.`,
       );
       return 5;
     }
+    const jsrGot = atTag.sha;
+    const where = atBranch.sha !== "" ? `release/${tag}` : tag;
     // With --npm: npm's copy is of the same commit -- the one npm recorded as `gitHead`. `--npm`
     // checked provenance alone, and the npm job accepts "already on npm" with no commit recorded
     // (review 5). None recorded is no verdict of sameness, so it fails too.
-    if (checkNpm && npmGitHead !== atBranch.sha) {
+    if (checkNpm && npmGitHead !== jsrGot) {
       console.error(
         npmGitHead === ""
-          ? `\n❌ npm records no commit for ${version}, so its copy cannot be shown to be JSR's (${atBranch.sha.slice(0, 12)}).`
-          : `\n❌ npm's ${version} is from ${npmGitHead}, but JSR got ${atBranch.sha} (release/${tag}): the registries differ.`,
+          ? `\n❌ npm records no commit for ${version}, so its copy cannot be shown to be JSR's (${jsrGot.slice(0, 12)}).`
+          : `\n❌ npm's ${version} is from ${npmGitHead}, but JSR got ${jsrGot} (${where}): the registries differ.`,
       );
       return 5;
     }
@@ -220,10 +231,8 @@ async function githubVerdict(): Promise<number> {
   }
   if ("found" in g) {
     console.error(`\n❌ ${version} is on both registries, but there is NO GitHub release ${tag}.`);
-    console.error(`   publish.yml's finalize job makes it; check that run, or run it again with`);
-    console.error(
-      `   "Run workflow" and the tag ${tag}: https://github.com/${GITHUB_REPO}/actions`,
-    );
+    console.error(`   publish.yml's release job makes it, before the registries; in that run,`);
+    console.error(`   "Re-run failed jobs": https://github.com/${GITHUB_REPO}/actions`);
   } else {
     console.error(`\n⚠️  Could not ask GitHub whether the release ${tag} exists: ${g.error}.`);
     console.error(`   This is not a verdict. Re-run: bun run verify-release ${version} --github`);

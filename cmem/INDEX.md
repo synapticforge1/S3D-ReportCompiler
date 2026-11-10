@@ -58,10 +58,15 @@ Workspace rules recorded here (2026-11-09; full text `../cmem/working-rules.md`)
   Windows and in WSL (measured 2026-11-09): every `bun-version:` pin in `ci.yml` / `publish.yml`.
   When the owner installs a newer Bun, move them at the next session, gate run first; dated test
   results stay until re-run.
-- 🔒 **The release CI makes the GitHub Release page (H32)**, by the recipe: `finalize` runs
-  `github-api.ts release` after both registries, `contents: write` only, nothing installed; the tag
-  must exist and peel to the released commit first, an existing page is done, the new one is read
-  back. Only new tags get pages (no backfill).
+- 🔒 **The release CI makes the GitHub Release page (H32)**, by the recipe: the `release` job runs
+  `github-api.ts release`, `contents: write` only, nothing installed; the tag must exist and peel to
+  the released commit first, an existing page is done, the new one is read back. Only new tags get
+  pages (no backfill).
+- 🔒 **The release order (owner, 2026-11-10; H33, workspace `release-process.md` §§ 5–8): CI checks
+  first, then CI pushes the tag, then the Release page from the tag, then the publish.** No machine
+  tags: `bun run bump <level>` commits `bump to vX.Y.Z`, `bun run release` pushes `main` only;
+  `publish.yml` runs on every push to main (checks → tag → release → jsr → npm-build → npm). The
+  process, its recorded exceptions and every release: [release.md](release.md).
 
 ## Files
 
@@ -75,6 +80,7 @@ Workspace rules recorded here (2026-11-09; full text `../cmem/working-rules.md`)
 | [testing.md](testing.md) | How to test, especially the **negative controls** |
 | [licensing.md](licensing.md) | Verified dependency licences (MIT project) |
 | [roadmap.md](roadmap.md) | **Current state** and open tasks, incl. the owner's workspace items (task 11) |
+| [release.md](release.md) | 🔒 **How a release is made** (CI checks → tag → page → publish) and the **Release History**, newest first — the one place for release records (D3) |
 | [bun-migration.md](bun-migration.md) | The move off Deno (JSR kept): what was measured, the seven steps, the owner's decisions |
 | [history-purge-2026-10-26.md](history-purge-2026-10-26.md) | The H19 path purge: how, how verified, and the **old → new commit-id map** — look old ids up here |
 | [practices.md](practices.md) | ⭐ The working rules this project paid for, each with its evidence |

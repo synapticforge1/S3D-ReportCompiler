@@ -675,7 +675,8 @@ current samples give **171 / 114** (measured by this suite).
 [`api-surface.txt`](../api-surface.txt) is current and the floor since the last tag; **`bun run
 surface`** re-baselines it (Rule 5: an intended surface change is its OWN commit, before any bump).
 `bun run bump <kind>` runs the gate before writing anything; `bun run release` runs it on the version
-it is about to tag.
+it is about to push, and `publish.yml`'s `checks` job again before CI tags it (since 2026-11-10,
+[release.md](release.md)).
 
 **The surface** (69 lines on 2026-10-28): the `exports` map; every exported symbol in the `.d.ts`
 that tsc (node_modules, `emitDeclarationOnly`) emits for each export, one line per symbol — comments
