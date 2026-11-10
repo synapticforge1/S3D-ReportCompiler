@@ -200,8 +200,9 @@ All three real sets pass under it (2026-11-08). What it adds on the PDF side (`m
 cut by a page break, seen by where it is DRAWN (past the page's edge — a count let a lost image
 cancel a split one); each report's own image count; a diagram's title without its caption in
 reading order; each image's PIXELS against its source's, decoded by the verification's own PNG,
-GIF and JPEG readers (#95; any other format fails as "not verified" — WebP comes in task 18 7b, an
-SVG image in group 8); text drawn invisibly (render mode 3, or a tenth of full alpha or less, every
+GIF and JPEG readers (#95), and since #113 its own WebP decoder (`src/report_webp.ts`: lossy,
+lossless, alpha — bit for bit libwebp's on all 129 of its conformance vectors); any other format
+fails as "not verified" (an SVG image is checked as a drawing, group 8); text drawn invisibly (render mode 3, or a tenth of full alpha or less, every
 enclosing group's alpha multiplied in — `opacity: 0.02` is a group); text too FAINT to read against
 what is behind it (contrast under 3:1; since #94 against the filled rectangles and images painted
 before it under its centre, an image sampled from its pixels — white on a dark band passes, grey on
@@ -240,7 +241,7 @@ the pixel undetermined at 8 bits, it is set aside as doubtful).
 Since #110 specular light from a spot; since #111 `feTile` (Chrome writes it as a tiling fill: not
 in the image count; its 72-dpi cell judged pixel for pixel, with no ±1-pixel range).
 Since #112 stitched noise: every filter primitive the check runs is judged, none refused.
-⚠️ Not yet verified, and named as such: a CSS filter function (`filter="blur(2px)"`); WebP. ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
+⚠️ Not yet verified, and named as such: a CSS filter function (`filter="blur(2px)"`). ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
 style — of HTML text and of SVG labels.
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in

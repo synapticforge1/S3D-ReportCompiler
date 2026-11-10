@@ -11,17 +11,58 @@ vulnerabilities (49 packages checked).** (First verified 2026-08-08 against `pac
 
 ## Does this package redistribute any of it?
 
-**No.** The JSR package contains seven first-party files — `LICENSE`, `THIRD-PARTY-NOTICES.md`,
-`README.md`, `jsr.json`, `main.ts`, `src/report_core.ts`, `src/report_runtime.ts` (`jsr.json`
-`publish.include`) — and the npm package that source compiled to JavaScript with its declarations;
-neither holds vendored or bundled third-party code. Dependencies are declared and resolved by the
-consumer's own runtime.
+**One file is derived from third-party code.** The JSR package contains `LICENSE`,
+`THIRD-PARTY-NOTICES.md`, `README.md`, `jsr.json`, `main.ts` and `src/*.ts` (`jsr.json`
+`publish.include`), and the npm package that source compiled to JavaScript with its declarations.
+Of those, **`src/report_webp.ts` is a port of parts of libwebp** (BSD-3-Clause; see
+[libwebp](#libwebp-src-report_webpts) below): its notice is kept in that file's header and reproduced
+here. Nothing else is vendored or bundled; dependencies are declared and resolved by the consumer's
+own runtime.
 
-That means no attribution obligation is triggered by installing or publishing this package. This file
-exists so a reviewer does not have to reconstruct the tree to establish that.
-
-Two places where third-party code **is** carried into an artifact are called out under
+Two more places where third-party code **is** carried into an artifact are called out under
 [Redistribution](#redistribution-when-it-does-apply) below.
+
+### libwebp (`src/report_webp.ts`)
+
+The verification's WebP decoder (roadmap task 18 group 7b) is ported from libwebp's decoder
+(`src/dec/`, `src/dsp/`, `src/utils/`, read 2026-11-10), its constant tables extracted from
+`src/dec/tree_dec.c`. libwebp is distributed under this licence:
+
+```
+Copyright (c) 2010, Google Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in
+    the documentation and/or other materials provided with the
+    distribution.
+
+  * Neither the name of Google nor the names of its contributors may
+    be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+libwebp also ships a separate `PATENTS` file: Google's additional grant of patent rights for its
+implementation of VP8, an extra permission rather than a restriction. The conformance test vectors
+used to prove the port (webm/libwebp-test-data) are not part of this repository or its packages.
 
 ## Licences in the dependency tree
 
@@ -120,10 +161,10 @@ employer's own terms.
 |---|---|
 | Any copyleft (GPL/LGPL/AGPL/MPL)? | **No** |
 | Any NOTICE files requiring propagation? | **No** — none of the Apache-2.0 runtime packages ships one; the development tool that does (`typescript`) is not redistributed |
-| Any licence incompatible with releasing this as MIT? | **No** — MIT, Apache-2.0, 0BSD and Zlib are all compatible with an MIT release |
-| Third-party code inside the published package? | **No** — seven first-party files on JSR; the same source compiled on npm |
+| Any licence incompatible with releasing this as MIT? | **No** — MIT, Apache-2.0, BSD-3-Clause, 0BSD and Zlib are all compatible with an MIT release |
+| Third-party code inside the published package? | **One file, derived:** `src/report_webp.ts`, ported from libwebp (BSD-3-Clause), its notice in the file and [above](#libwebp-src-report_webpts); the rest first-party, the same source compiled on npm |
 | Known vulnerabilities? | **None** in this repository's tree — `bun audit`, 2026-11-07. A consumer's install resolves `@xmldom/xmldom` afresh (README § Requirements: the `overrides` pins hold here only) |
-| Attribution required to publish? | **No**, given the above. This file is provided for transparency |
+| Attribution required to publish? | **Yes, for libwebp only** — its copyright notice, conditions and disclaimer must travel with the source (kept in `src/report_webp.ts`) and with any compiled copy (reproduced in this file, which both packages ship); otherwise no |
 
 Apache-2.0 carries an express patent grant that terminates on patent litigation. That is normally
 regarded as a feature, but it is the clause a legal reviewer will flag, so it is stated here.

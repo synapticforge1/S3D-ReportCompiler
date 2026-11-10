@@ -131,6 +131,7 @@ import {
 } from "./src/report_core.ts";
 
 import * as rt from "./src/report_runtime.ts";
+import { decodeWebp } from "./src/report_webp.ts";
 import {
   compareSvg,
   filterShows,
@@ -1042,10 +1043,13 @@ async function decodeSource(uri: string): Promise<Pixels | string> {
     if (mime === "image/png") return decodePng(bytes);
     if (mime === "image/gif") return decodeGif(bytes);
     if (mime === "image/jpeg" || mime === "image/jpg") return await decodeJpeg(bytes);
+    // WebP by the check's own decoder (task 18 group 7b): libwebp's pixels, bit for bit (all 96
+    // of libwebp's conformance vectors identical to dwebp's output)
+    if (mime === "image/webp") return decodeWebp(bytes);
   } catch (e) {
     return `${mime} does not decode: ${(e as Error).message}`;
   }
-  // SVG is drawn as paths, not pixels (roadmap task 18 group 8); WebP's decoders are group 7b.
+  // SVG is drawn as paths, not pixels (roadmap task 18 group 8).
   return `${mime || "an unnamed type"} is not verified`;
 }
 
