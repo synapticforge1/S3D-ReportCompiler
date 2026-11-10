@@ -56,6 +56,7 @@ symbol	.	mathStyleSheet	function	export declare function mathStyleSheet(): strin
 symbol	.	parseDelimiters	function	export declare function parseDelimiters(src: string): Delim[]
 symbol	.	portableSvg	function	export declare function portableSvg(html: string): string
 symbol	.	readZipReports	function	export declare function readZipReports(zip: Uint8Array, ownName: string): Promise<ZipReports>
+symbol	.	readerBody	function	export declare function readerBody(source: string): string
 symbol	.	resetBakeState	function	export declare function resetBakeState(): void
 symbol	.	scopeCss	function	export declare function scopeCss(css: string, scope: string, prefix: string): string
 symbol	.	seenOpeners	variable	export declare const seenOpeners: Set<string>
