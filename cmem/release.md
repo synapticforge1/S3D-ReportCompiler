@@ -68,12 +68,11 @@ for the same code, never a moved tag. If the version cannot be published at all,
 | U11 | this file. **No `CHANGELOG.md`**: the README's "Breaking Changes" table is the user-facing record, this file the release record |
 | U12 | as above |
 
-**Not measured yet (the first release under this order measures them):** that JSR accepts the
-OIDC publish from a run on `refs/heads/main` whose tag `github-actions[bot]` made (the workspace
-U6 ⚠️: binaryang once recorded a bot-pushed tag that could not publish to JSR); that npm's trusted
-publisher accepts the push-to-main trigger (it names `publish.yml` and the repository, no branch
-and no environment — 1.1.4's record — so it should). What could be rehearsed without a release
-was, 2026-11-10 (best-practices 7.22): § "Unreleased" below.
+**Measured by 1.4.0 (2026-11-10), the first release under this order:** JSR accepts the OIDC
+publish from a run on `refs/heads/main` whose tag `github-actions[bot]` made, attested (the
+workspace U6 ⚠️, from binaryang's bot-pushed tag, does not hold here); npm's trusted publisher
+(`publish.yml` and the repository, no branch, no environment) accepts the push-to-main trigger,
+with provenance. The rehearsal before it (best-practices 7.22): § 1.4.0 below.
 
 ### Reading a release back as a user: `verify-release`
 
@@ -108,24 +107,35 @@ takes those numbers; the stray `0.0.0-stage` was deprecated, then unpublished, b
 Newest first. Run ids are `publish.yml` runs unless named. "Attested" = JSR `rekorLogId` present;
 npm provenance = `dist.attestations.provenance`.
 
-### 1.4.0 — in progress, 2026-11-10 · minor
+### 1.4.0 — 2026-11-10 · minor · tag `v1.4.0` (annotated, made by CI) on `2138fa8`
 
-**Owner:** "push then release, then start group 9 items"; the level asked and given: minor (the
+**What changed:** 6 API additions — `linkedImages`, `inlineLinkedImages` (an image a report links
+to is fetched at build time and inlined, so it prints instead of drawing blank), `drawnImages`,
+`drawnSvgs`, `sniffImageType`, `./runtime` `fromFileUrl`; class B's stricter verification
+(known-issues #87–#114: whole tokens with units and operators, as often as the source has them,
+in their own report; legibility against what is drawn beneath; images pixel for pixel, WebP by the
+package's own decoder; diagrams shape by shape, every filter primitive judged); the output
+changes and new refusals of the README's 1.4.0 row. **The first release in the owner's order
+(H33): CI checked, then tagged, then made the page, then published.**
+**Read back:** publish run on `2138fa8`, all six jobs green — `checks`, `tag`, `release`, `jsr`
+(Rekor read-back fatal: passed), `npm-build`, `npm` (provenance read-back fatal: passed).
+⚠️ **Measured, U6's open question:** JSR accepted the OIDC publish from a run on
+`refs/heads/main` whose tag `github-actions[bot]` made — attested, Rekor `3794118812`.
+`verify-release 1.4.0 --npm --github` → exit 0: JSR attested, npm with provenance, the GitHub
+Release at the commit JSR got (`2138fa8`, CI's tag -- no `release/` branch any more) and npm's
+copy of it (its first `--github` try got HTTP 403: the anonymous API limit, spent by watching CI;
+re-run after the reset). Installed from npm into a
+scratch folder: `--version` → 1.4.0; `drawnImages`, `linkedImages`, `sniffImageType` exported.
+
+**How:** owner "push then release, then start group 9 items"; the level asked and given: minor (the
 gate's floor, 6 additions). Release notes merged first (README `4f656b8`); `bun run bump minor`
 (v1.3.0's samples PASS) committed `bump to v1.4.0` (`88e8fbe`); `bun run release` passed every
 guard and pushed `main`. **First attempt refused by CI, as designed:** ci.yml failed on Linux
 (known-issues #114: a displacement doubt searched short; JSR's docs lint), so publish run
 42898552697's `checks` failed and every later job was skipped — no tag, JSR 404, npm free. The
 local wait ended at exit 2 ("not on JSR yet", no verdict). The fix commit goes on top of the bump;
-jsr.json still says 1.4.0 with no tag, so its push re-arms the release from that commit.
-
-### Unreleased (on `main` after 1.3.0)
-
-Class B of the class-by-class review (task 18, groups 1–8k, known-issues #89–#113), the WebP
-decoder, linked images, and this release process (H33). The surface vs v1.3.0: 0 removed, 0
-changed, **6 added** (`drawnImages`, `drawnSvgs`, `inlineLinkedImages`, `linkedImages`,
-`sniffImageType`, `./runtime` `fromFileUrl`) → floor **minor** (measured 2026-11-10 by the
-rehearsal's gate). Not released.
+jsr.json still said 1.4.0 with no tag, so the fix's push (`2138fa8`) re-armed the release from
+that commit, and it went through.
 
 **H33 rehearsal, 2026-11-10** (best-practices 7.22; nothing reached GitHub or a registry): in a
 scratch clone whose `origin` was a scratch bare repository, `bump major` committed `bump to v2.0.0`
