@@ -5019,7 +5019,8 @@ test(
       refused('<feTurbulence type="fractalNoise" baseFrequency="0.1" stitchTiles="stitch"/>'),
       ["a stitched <feTurbulence>"],
     );
-    assert.deepEqual(refused("<feTile/>"), ["an <fetile>"]);
+    // (feTile matches since part 4: run at 72 dpi, its corner floored)
+    assert.deepEqual(refused("<feTile/>"), []);
     // (specular light from a spot matches since part 3: an edge's thin strip, by 64)
     assert.deepEqual(refused("<feSpecularLighting><feSpotLight/></feSpecularLighting>"), []);
     // The primitives against values worked by hand.
@@ -5141,6 +5142,84 @@ test(
     );
     const s = run([MAIN, strip, join(strip, "out", "c.pdf")]);
     assert.equal(s.code, 0, tail(s.out));
+  },
+);
+
+// Group 8k part 4: feTile. Chrome runs a filter holding one at the image's own pixels (72 dpi) and
+// writes the result as one tiling-pattern fill; the tile's corner is floored to a pixel, its size
+// rounded; the PDF's fill is read on its cell's own pixels. Four tiles: two at fractional corners,
+// one whose corner falls at x.517 of a pixel, one of another width.
+const TILE = (id: string, flood: string, offset: string) =>
+  K83(
+    id,
+    `<feFlood flood-color="#00aa00" ${flood} result="f"/><feOffset in="f" ${offset} result="o"/><feTile in="o"/>`,
+  );
+const PROBE_8K4 = [
+  TILE("k84-a", 'x="40" y="30" width="10" height="10"', 'dx="2" dy="2"'),
+  TILE("k84-b", 'x="40" y="30" width="13" height="10"', 'dx="2" dy="2"'),
+  TILE("k84-c", 'x="41.3" y="30.4" width="10" height="10"', 'dx="2" dy="2"'),
+  TILE("k84-d", 'x="40" y="30" width="10" height="10"', 'dx="3" dy="0"'),
+].join("\n");
+
+test(
+  "class B, task 18 group 8k part 4: feTile, as Chrome tiles it",
+  { timeout: TIMEOUT },
+  async () => {
+    const dir = join(work, "task18-8k4");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8K4}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    // a tiled filter is a FILL, not an image paint: only the sample's own image is one
+    has(r.out, /graphics: 1 image paint\(s\), 1 expected/, /PASS/);
+
+    // A coarse image (a pixel a point, at 2 points a unit: four times coarser than Chrome's device
+    // pixels) is point-sampled, so judged pixel by pixel: its own expected pixels match; the same
+    // moved one column do not (judged within each pixel's 3 by 3 range, they passed).
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const read = svgs.readSvg(
+      TILE("k84-u", 'x="41.3" y="30.4" width="10" height="10"', 'dx="2" dy="2"'),
+    );
+    const use = read.filters[0];
+    const toPage = svgs.mul(use.e, [2, 0, 0, -2, 0, 300]);
+    const [rx0, ry0, rx1, ry1] = use.region;
+    const [W, H] = [Math.round(2 * (rx1 - rx0)), Math.round(2 * (ry1 - ry0))];
+    const m = [W, 0, 0, H, 2 * rx0, 300 - 2 * ry1];
+    const laid = svgs.filterExpected(use, m, W, H, toPage);
+    assert.equal(laid.sampled, true, "a coarse image is point-sampled");
+    const image = (shift: number) => {
+      const data = new Uint8Array(W * H * 4);
+      for (let j = 0; j < H; j++)
+        for (let i = 0; i < W; i++) {
+          const from = Math.min(W - 1, Math.max(0, i - shift));
+          const k = 4 * ((j - laid.gj0) * laid.GW + (from - laid.gi0));
+          const a = laid.expected.data[k + 3];
+          const px = [0, 1, 2].map((c) => (a > 0 ? laid.expected.data[k + c] / a : 0));
+          data.set(
+            [...px.map((v: number) => Math.round(v * 255)), Math.round(a * 255)],
+            4 * (j * W + i),
+          );
+        }
+      return {
+        page: 1,
+        order: 0,
+        m,
+        width: W,
+        height: H,
+        alpha: 1,
+        clips: [],
+        pixels: { width: W, height: H, data },
+      };
+    };
+    assert.equal(svgs.filterDifference(use, image(0), toPage), null, "its own pixels");
+    assert.match(
+      String(svgs.filterDifference(use, image(1), toPage)),
+      /: \d+ of \d+ pixels differ/,
+    );
   },
 );
 

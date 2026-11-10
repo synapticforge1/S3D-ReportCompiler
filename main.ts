@@ -1004,7 +1004,11 @@ function svgImageText(uri: string): string | null {
  */
 function filteredElements(source: string): number {
   const css = reportCss(source);
-  const shown = (read: ReturnType<typeof readSvg>) => read.filters.filter(filterShows).length;
+  // one holding an feTile is written as a tiling-pattern FILL, not an image paint (measured, task
+  // 18 8k): not counted here, matched as a fill by the drawing check
+  const shown = (read: ReturnType<typeof readSvg>) =>
+    read.filters.filter((f) => filterShows(f) && !f.primitives.some((p) => p.tag === "fetile"))
+      .length;
   const inline = drawnSvgs(source).reduce((n, svg) => n + shown(readSvg(svg, css)), 0);
   const asImages = drawnImages(source)
     .filter((uri) => /^data:image\/svg\+xml/i.test(uri))

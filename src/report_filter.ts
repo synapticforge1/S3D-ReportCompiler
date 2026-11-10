@@ -43,8 +43,10 @@ export type FilterRun = {
   toUser?: (i: number, j: number) => number[];
   /** What an feImage paints, a raster of the run's size (premultiplied sRGB), or null. */
   image?: (p: Primitive) => Raster | null;
-  /** Chrome's device pixels a pixel of this raster spans (feTile snaps to them). */
+  /** Chrome's device pixels a pixel of this raster spans (the noise's offset is in them). */
   device?: number;
+  /** A pixel coordinate of this raster in Chrome's device pixels (feTile rounds to them). */
+  toDevice?: (i: number, j: number) => number[];
 };
 
 export function blank(width: number, height: number): Raster {
@@ -715,17 +717,29 @@ export function lighting(
 }
 
 /**
- * feTile: the input's subregion (pixels [x0, y0, x1, y1]) repeated over the raster -- its corner
- * and size rounded to whole DEVICE pixels (`device`: device pixels a raster pixel), as Chrome tiles
- * (task 18 8k, measured: a 10-unit tile repeats every 46 device pixels, 9.92 units).
+ * feTile: the input's subregion (pixels [x0, y0, x1, y1]) repeated over the raster -- as Skia
+ * does it (SkCropImageFilter.cpp: a crop to the source rect in kRepeat, inside a crop to the
+ * tile's own subregion in kDecal), its source rect ROUNDED IN to whole device pixels ("roundIn":
+ * only the pixels it wholly covers), the repeat anchored at that rect's corner, its period that
+ * rect's size. `toDevice` maps the raster's pixel coordinates to Chrome's device pixels (300 dpi,
+ * from the page's top-left), so the rounding falls where Chrome's does (task 18 8k, measured: a
+ * 10-unit tile, 46.37 device pixels, repeats every 45 or 46 by its place on the page).
  */
-export function tile(r: Raster, region: number[], device = 1): Raster {
-  const snap = (v: number) => Math.round(v * device) / device;
-  const [x0, y0] = [snap(region[0]), snap(region[1])];
-  const [w, h] = [
-    Math.max(1 / device, snap(region[2]) - x0),
-    Math.max(1 / device, snap(region[3]) - y0),
-  ];
+export function tile(
+  r: Raster,
+  region: number[],
+  toDevice: (i: number, j: number) => number[] = (i, j) => [i, j],
+): Raster {
+  const [ax, ay] = toDevice(0, 0);
+  const [bx, by] = toDevice(1, 1).map((v, k) => v - [ax, ay][k]);
+  // device rect, rounded in (a hair of tolerance: an edge exactly on a pixel's edge is on it)
+  const inX = [Math.ceil(ax + bx * region[0] - 1e-6), Math.floor(ax + bx * region[2] + 1e-6)];
+  const inY = [Math.ceil(ay + by * region[1] - 1e-6), Math.floor(ay + by * region[3] + 1e-6)];
+  // back to the raster's pixels; at least one device pixel
+  const x0 = (inX[0] - ax) / bx;
+  const y0 = (inY[0] - ay) / by;
+  const w = Math.max(1, inX[1] - inX[0]) / bx;
+  const h = Math.max(1, inY[1] - inY[0]) / by;
   const out = blank(r.width, r.height);
   for (let y = 0; y < r.height; y++) {
     for (let x = 0; x < r.width; x++) {
@@ -1017,7 +1031,7 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster & { doubt:
         break;
       }
       case "fetile":
-        out = tile(input(a.in), regionOf(a.in), run.device ?? 1);
+        out = tile(input(a.in), regionOf(a.in), run.toDevice);
         break;
       case "feimage": {
         const img = run.image?.(p) ?? null;

@@ -190,8 +190,21 @@ export function tiledPaint(v: PdfVector): PdfImagePaint | null {
   const [ps, qs] = [Math.abs(r.m[0]) / CW, Math.abs(r.m[3]) / CH];
   if (Math.abs(r.m[1]) > 1e-9 || Math.abs(r.m[2]) > 1e-9 || !(ps > 0 && qs > 0)) return null;
   const box = polygonBox(polygonsOf(v.lines, v.m));
-  const W = Math.round((box[2] - box[0]) / ps);
-  const H = Math.round((box[3] - box[1]) / qs);
+  // The lattice is the CELL's: its pixel edges on the page, extended over the path's box. Laid
+  // from the box's corner instead, each centre fell half a pixel off the cell's (measured: 0.45 of
+  // a unit), and the nearest cell pixel was either neighbour -- single columns differed (feTile).
+  const cellPage = [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+    [1, 1],
+  ].map(([u, w]) => apply(r.m, u, w));
+  const left = Math.min(...cellPage.map((c) => c[0]));
+  const top = Math.max(...cellPage.map((c) => c[1]));
+  const gx0 = left + Math.floor((box[0] - left) / ps + 1e-6) * ps;
+  const gTop = top - Math.floor((top - box[3]) / qs + 1e-6) * qs;
+  const W = Math.ceil((box[2] - gx0) / ps - 1e-6);
+  const H = Math.ceil((gTop - box[1]) / qs - 1e-6);
   if (W <= 0 || H <= 0 || W * H > 4e6) return null;
   const toPattern = invert(r.tile.pm);
   const unitToPattern = mul(r.m, toPattern);
@@ -210,7 +223,7 @@ export function tiledPaint(v: PdfVector): PdfImagePaint | null {
   const out = new Uint8Array(W * H * 4);
   for (let j = 0; j < H; j++) {
     for (let i = 0; i < W; i++) {
-      const [x, y] = [box[0] + (i + 0.5) * ps, box[3] - (j + 0.5) * qs];
+      const [x, y] = [gx0 + (i + 0.5) * ps, gTop - (j + 0.5) * qs];
       let [px, py] = apply(toPattern, x, y);
       // back into the first cell
       px = ox + ((((px - ox) % sx) + sx) % sx);
@@ -226,7 +239,7 @@ export function tiledPaint(v: PdfVector): PdfImagePaint | null {
   return {
     page: v.page,
     order: v.order,
-    m: [W * ps, 0, 0, H * qs, box[0], box[1]],
+    m: [W * ps, 0, 0, H * qs, gx0, gTop - H * qs],
     width: W,
     height: H,
     alpha: v.fillAlpha,
@@ -1065,6 +1078,10 @@ export function filterDifference(
   const run = filterExpected(use, p.m, W, H, toPage, pixelsOf);
   if (typeof run === "string") return run;
   const { expected, gi0, gj0, GW, GH, doubtful, ox, oy, ux, uy } = run;
+  // Each pixel against the range of its 3 by 3 neighbours, as an antialiased edge may fall a
+  // pixel either way; a point-sampled image has no such edge, so against its own pixel (a tile's
+  // offset changed by half a unit -- half a pixel -- passed within the range)
+  const reach = run.sampled ? 0 : 1;
   const overWhite = (r: typeof expected, k: number) =>
     [0, 1, 2].map((c) => r.data[4 * k + c] + (1 - r.data[4 * k + 3]));
   let compared = 0;
@@ -1078,8 +1095,8 @@ export function filterDifference(
       if (doubtful[gj * GW + gi]) continue;
       const lo = [1, 1, 1];
       const hi = [0, 0, 0];
-      for (let dj = -1; dj <= 1; dj++)
-        for (let di = -1; di <= 1; di++) {
+      for (let dj = -reach; dj <= reach; dj++)
+        for (let di = -reach; di <= reach; di++) {
           const [a, b] = [gi + di, gj + dj];
           if (a < 0 || b < 0 || a >= GW || b >= GH) continue;
           const v = overWhite(expected, b * GW + a);
@@ -1242,10 +1259,12 @@ export function filterExpected(
       oy: number;
       ux: number;
       uy: number;
+      /** Point-sampled from device pixels (a coarse image): no edge is antialiased in it. */
+      sampled?: boolean;
     } {
   // Chrome runs a filter at 300 dpi (measured: 4.64 pixels a unit at 1.11 points a unit) and
-  // resamples where it writes coarser -- feTile's cell is at a pixel a point (task 18 8k). A
-  // coarser lattice is run k times finer and averaged down, k = 300 dpi over its own.
+  // resamples where it writes coarser: a coarser lattice is run k times finer and averaged down,
+  // k = 300 dpi over its own (feTile's result is written so, a tiling-pattern cell at 72 dpi).
   const k =
     fine ||
     Math.max(
@@ -1253,27 +1272,50 @@ export function filterExpected(
       Math.round((scaleOf(toPage) * (300 / 72) * Math.abs(mul(m, invert(toPage))[0])) / W),
     );
   if (k > 1) {
-    const f = filterExpected(use, m, W * k, H * k, toPage, pixelsOf, 1);
+    // Chrome runs the filter on its own device pixels (300 dpi, counted from the page's top-left:
+    // Letter, 792 pt tall) and writes the coarser image by taking, for each of its pixels, the
+    // device pixel under its centre (task 18 8k, measured on feTile's 72-dpi cells: crisp
+    // two-pixel strips, where an average gives one and a part -- averaged on a lattice k times
+    // finer, 41 to 46 pixels off at some places on the page; so, none).
+    const D = 300 / 72;
+    const corners = [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+      [1, 1],
+    ].map(([u, v]) => apply(m, u, v));
+    const xs = corners.map((c) => c[0] * D);
+    const ys = corners.map((c) => (792 - c[1]) * D);
+    const [dx0, dx1] = [Math.floor(Math.min(...xs)), Math.ceil(Math.max(...xs))];
+    const [dy0, dy1] = [Math.floor(Math.min(...ys)), Math.ceil(Math.max(...ys))];
+    const [DW, DH] = [dx1 - dx0, dy1 - dy0];
+    // the device pixels' box as an image, its (0, 0) at its bottom-left on the page
+    const onDevice: Matrix = [DW / D, 0, 0, DH / D, dx0 / D, 792 - dy1 / D];
+    const f = filterExpected(use, onDevice, DW, DH, toPage, pixelsOf, 1);
     if (typeof f === "string") return f;
-    // the coarse pixels whose k by k fine ones the fine lattice holds
-    const ci0 = Math.ceil(f.gi0 / k);
-    const cj0 = Math.ceil(f.gj0 / k);
-    const CW = Math.floor((f.gi0 + f.GW) / k) - ci0;
-    const CH = Math.floor((f.gj0 + f.GH) / k) - cj0;
+    // The coarse lattice: the image's own pixels, over the filter region and two beyond (as the
+    // finer lattice below), each taken from the device pixel under its centre -- so what the
+    // filter paints beyond the image is still seen
+    const C = mul(m, invert(toPage));
+    const [cx, cy] = apply(C, 0, 1);
+    const [cux, cuy] = [C[0] / W, -C[3] / H];
+    const [rx0, ry0, rx1, ry1] = use.region;
+    const ci0 = Math.floor((rx0 - cx) / cux) - 2;
+    const cj0 = Math.floor((ry0 - cy) / cuy) - 2;
+    const CW = Math.ceil((rx1 - cx) / cux) + 2 - ci0;
+    const CH = Math.ceil((ry1 - cy) / cuy) + 2 - cj0;
+    if (CW <= 0 || CH <= 0 || CW * CH > 4e6) return "a filter region this check cannot lay out";
     const out = blank(CW, CH);
     const doubt = new Uint8Array(CW * CH);
     for (let J = 0; J < CH; J++)
       for (let I = 0; I < CW; I++) {
-        const acc = [0, 0, 0, 0];
-        for (let s = 0; s < k; s++)
-          for (let t = 0; t < k; t++) {
-            const fi = (ci0 + I) * k + s - f.gi0;
-            const fj = (cj0 + J) * k + t - f.gj0;
-            const at = fj * f.GW + fi;
-            for (let c = 0; c < 4; c++) acc[c] += f.expected.data[4 * at + c] / (k * k);
-            if (f.doubtful[at]) doubt[J * CW + I] = 1;
-          }
-        out.data.set(acc, 4 * (J * CW + I));
+        const [px, py] = apply(toPage, cx + (ci0 + I + 0.5) * cux, cy + (cj0 + J + 0.5) * cuy);
+        const di = Math.floor(px * D) - dx0 - f.gi0;
+        const dj = Math.floor((792 - py) * D) - dy0 - f.gj0;
+        if (di < 0 || dj < 0 || di >= f.GW || dj >= f.GH) continue;
+        const at = dj * f.GW + di;
+        out.data.set(f.expected.data.subarray(4 * at, 4 * at + 4), 4 * (J * CW + I));
+        if (f.doubtful[at]) doubt[J * CW + I] = 1;
       }
     return {
       expected: out,
@@ -1282,10 +1324,11 @@ export function filterExpected(
       GW: CW,
       GH: CH,
       doubtful: doubt,
-      ox: f.ox,
-      oy: f.oy,
-      ux: f.ux * k,
-      uy: f.uy * k,
+      ox: cx,
+      oy: cy,
+      ux: cux,
+      uy: cuy,
+      sampled: true,
     };
   }
   const U = mul(m, invert(toPage)); // the image's unit square in the element's user space
@@ -1397,6 +1440,12 @@ export function filterExpected(
         toUser: (i: number, j: number) => [ox + (gi0 + i) * ux, oy + (gj0 + j) * uy],
         // Chrome's device pixels (300 dpi) one of this lattice's spans
         device: scaleOf(toPage) * (300 / 72) * ux,
+        // and where a lattice point falls among them: the page's own pixels at 300 dpi, from its
+        // top-left (the document prints on Letter, 792 pt tall: 3300 whole pixels)
+        toDevice: (i: number, j: number) => {
+          const [x, y] = apply(toPage, ox + (gi0 + i) * ux, oy + (gj0 + j) * uy);
+          return [(x * 300) / 72, ((792 - y) * 300) / 72];
+        },
         image: (p) =>
           feImageRaster(
             p,
@@ -3122,11 +3171,11 @@ export function readSvg(
       if (!PRIMITIVES.has(p.tag)) return `the filter primitive <${p.tag}>`;
       // Run by report_filter.ts but not yet matching Chrome's output, so still named rather than
       // judged (task 18 8k, measured): stitched noise (Skia counts its tiles in a way still
-      // unknown), feTile (its period rounds differently). Turbulence of type "turbulence" and
-      // feDisplacementMap match since part 3 (the noise's offset, edge coverage, map doubt).
+      // unknown). Turbulence of type "turbulence" and feDisplacementMap match since part 3 (the
+      // noise's offset, edge coverage, map doubt); feTile since part 4 (run at 72 dpi, its corner
+      // floored, the PDF's fill read on its cell's own pixels).
       if (p.tag === "feturbulence" && p.attrs.get("stitchtiles") === "stitch")
         return "a stitched <feTurbulence>";
-      if (p.tag === "fetile") return `an <${p.tag}>`;
       spaces.add(
         (
           own(p, "color-interpolation-filters", [target]) ??

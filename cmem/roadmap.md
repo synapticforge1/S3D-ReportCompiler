@@ -1270,12 +1270,13 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
   `feDisplacementMap` judged (the noise 1.6 device pixels on, measured; edges sampled 16 by 16;
   a near-clear map's pixels doubtful).
   ✅ **Part 3b DONE 2026-11-10 (known-issues #110):** specular light from a spot judged (an
-  edge's 2 % strip, sampled 64 by 64 where a pixel's outer 32nd disagrees). **Next, feTile:** measured -- Chrome writes a filter holding an
-  feTile as ONE tiling-pattern fill whose cell is the whole filter result, rasterised at 72 dpi
-  (82 by 55 pixels for an 82 by 55 pt box, step 84 by 57, so it never repeats); the tiling is
-  inside that image, so the period (10 units = 11.1 pixels there) rounds at 72 dpi -- the check
-  runs at 300 dpi and averages down. Next: let the harness run the patched reader (scratch
-  `unrefuse.ts`) and compare at 72 dpi. Then stitched noise, then the browser review.
+  edge's 2 % strip, sampled 64 by 64 where a pixel's outer 32nd disagrees).
+  ✅ **Part 4 DONE 2026-11-10 (known-issues #111):** feTile judged, by Skia's own rule (read from
+  `SkCropImageFilter.cpp`: the source rect rounded IN on 300-dpi device pixels, the 72-dpi cell
+  point-sampled), pixel for pixel at every place on the page. **Next: stitched noise** -- its
+  rules are in Skia's raster-pipeline `perlin_noise` stage (not yet read; the shader file only
+  sets it up: the tile size rounded, the frequency moved to a whole number of cycles a tile,
+  the wrap width rounded), then the browser review.
   Not covered: a CSS `url()` background image (none in any real report; the CSP blocks it, the
   external-ref warning names an http one) -- class B's re-check takes it.
 - 🔴 **Other browsers, after the Chromium work (owner, 2026-11-09: "firefox and firefox-esr is
