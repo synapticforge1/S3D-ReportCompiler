@@ -1117,6 +1117,23 @@ drawn before the first or after the last match; colour names, `hsl()`, colour al
    colour and size against what the source's cascade gives it. Measure first what Chrome writes
    (the font each show uses, its fill colour, its size) and how pdf.js exposes it. After 8e–8h,
    before the fresh re-check.
+   🔁 **Started 2026-11-10 (owner: "push then release, then start group 9 items"). Measured on
+   the samples' PDF (scratch probe, pages 1–8):** every text show carries what is needed. The
+   font, through pdf.js's `commonObjs` with `fontExtraProperties: true`, has its PostScript `name`:
+   `ArialMT`, `Arial-BoldMT`, `Arial-ItalicMT`, `Arial-BoldItalicMT` for the report text (CSS
+   family Lato, Helvetica Neue, Arial → Arial on this host), `MathJax_Main-Regular`,
+   `MathJax_Math-Italic`, `MathJax_Size3/4-Regular` for maths; one fallback seen
+   (`TimesNewRomanPS-ItalicMT` for a Cyrillic `М`). Without `fontExtraProperties` the name is
+   absent (only `bold` / `italic` getters, unset here). The size is `Tf` × the text matrix's
+   scale (13.00, 15.21, 17.33, 13.33, 11.65, 9.19, 6.49 pt seen). The fill is `setFillRGBColor`
+   with ONE hex argument in pdf.js 6 (`#0000ff` for the samples' 454 `color:blue` spans, e.g.
+   "Section Name:", and blue maths). The sources' vocabulary: `<b>` 336, `<h3>` 412, `<th>` 195,
+   `<h2>` 39, `<h4>` 13, `font-weight: bold` 175, `font-style: italic` 13, sizes in pt / px / em,
+   one colour (`blue`). **The plan:** 9a SVG labels first — `report_svg.ts` already runs the
+   cascade for them (size known; fill, weight, style to add) and pairs each label with the PDF's
+   text at its position; 9b HTML text, which needs the source's cascade for HTML (UA defaults for
+   `b` / `strong` / `th` / `h1–h6` / `i` / `em`, inherited `color`, relative sizes) — the
+   selector matcher of `report_svg.ts` is the starting point.
 
 **Next step, in order (owner: fixes not limits):** the items still named "not verified", each
 measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-measured):

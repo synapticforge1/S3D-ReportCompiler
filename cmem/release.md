@@ -108,6 +108,17 @@ takes those numbers; the stray `0.0.0-stage` was deprecated, then unpublished, b
 Newest first. Run ids are `publish.yml` runs unless named. "Attested" = JSR `rekorLogId` present;
 npm provenance = `dist.attestations.provenance`.
 
+### 1.4.0 — in progress, 2026-11-10 · minor
+
+**Owner:** "push then release, then start group 9 items"; the level asked and given: minor (the
+gate's floor, 6 additions). Release notes merged first (README `4f656b8`); `bun run bump minor`
+(v1.3.0's samples PASS) committed `bump to v1.4.0` (`88e8fbe`); `bun run release` passed every
+guard and pushed `main`. **First attempt refused by CI, as designed:** ci.yml failed on Linux
+(known-issues #114: a displacement doubt searched short; JSR's docs lint), so publish run
+42898552697's `checks` failed and every later job was skipped — no tag, JSR 404, npm free. The
+local wait ended at exit 2 ("not on JSR yet", no verdict). The fix commit goes on top of the bump;
+jsr.json still says 1.4.0 with no tag, so its push re-arms the release from that commit.
+
 ### Unreleased (on `main` after 1.3.0)
 
 Class B of the class-by-class review (task 18, groups 1–8k, known-issues #89–#113), the WebP

@@ -49,6 +49,7 @@ export type FilterRun = {
   toDevice?: (i: number, j: number) => number[];
 };
 
+/** A raster of `width` by `height` pixels, every one transparent black. */
 export function blank(width: number, height: number): Raster {
   return { width, height, data: new Float64Array(width * height * 4) };
 }
@@ -375,8 +376,11 @@ function cut(r: Raster, region: number[]): Raster {
  * SVG 1.1 code): a lattice and gradients from its seeded generator, `noise2`, octaves summed.
  */
 export class Turbulence {
+  /** The permutation of the lattice's 256 points, doubled (and two more) so no index wraps. */
   private lattice = new Int32Array(0x200 + 2);
+  /** Per colour channel, each lattice point's unit gradient, doubled as the lattice is. */
   private gradient: Float64Array[][] = [];
+  /** The lattice and gradients the filter's `seed` makes, by the specification's generator. */
   constructor(seed: number) {
     const B = 0x100;
     const [m, a, q, r] = [2147483647, 16807, 127773, 2836];
@@ -416,6 +420,7 @@ export class Turbulence {
       }
     }
   }
+  /** One octave's noise for channel `ch` at (vx, vy); `st` the stitch period, or null. */
   private noise2(ch: number, vx: number, vy: number, st: number[] | null): number {
     // As Skia's raster stage (SkRasterPipeline_opts.h, perlin_noise, read 2026-11-10): the lattice
     // cell by floor; when stitching, a coordinate at or past the period has the period taken off
@@ -543,15 +548,23 @@ export function displacement(
       const [x0, y0] = [Math.floor(px), Math.floor(py)];
       for (let c = 0; c < 4; c++) out.data[k + c] = at(x0, y0, c);
       if (!doubt) continue;
-      // one level of the map, in pixels moved (at most the whole range, scale / 2 each way)
+      // One level of the map, in pixels moved. Chrome holds the map as 8-bit PREMULTIPLIED values
+      // and divides a colour channel by alpha: one level of the colour moves it 1 / (255 a), and
+      // one level of alpha c / (255 a²) more -- under a near-clear map either lands anywhere.
+      // (2026-11-10, found on CI's Linux Chrome: alpha at 1.7 levels read as G = 1.0, three pixels
+      // past what the rule allowed; alpha's own level was not counted.)
       const reach = (s: number, c: number) =>
-        Math.min(
-          Math.abs(s) / 2,
-          c === 3 ? Math.abs(s) / 255 : Math.abs(s) / (255 * Math.max(a, 1 / 255)),
-        );
-      const [ex, ey] = [reach(sx, xc), reach(sy, yc)];
-      const lo = [Math.floor(px - ex), Math.floor(py - ey)];
-      const hi = [Math.floor(px + ex), Math.floor(py + ey)];
+        c === 3 ? Math.abs(s) / 255 : (Math.abs(s) * (1 + ch(c))) / (255 * Math.max(a, 1 / 255));
+      // ...within what a map value can reach at all: this pixel's place, scale / 2 each way. The
+      // reach was capped at scale / 2 around the point READ, which is off-centre: a map read at
+      // G = 0.36 searched up to 0.14 of the scale beyond, where any G reaches 0.5 of it.
+      const span = (p: number, at: number, s: number, e: number) => [
+        Math.floor(Math.max(p - e, at - Math.abs(s) / 2)),
+        Math.floor(Math.min(p + e, at + Math.abs(s) / 2)),
+      ];
+      const [xs, ys] = [span(px, x, sx, reach(sx, xc)), span(py, y, sy, reach(sy, yc))];
+      const lo = [xs[0], ys[0]];
+      const hi = [xs[1], ys[1]];
       search: for (let v = lo[1]; v <= hi[1]; v++)
         for (let u = lo[0]; u <= hi[0]; u++)
           for (let c = 0; c < 4; c++)

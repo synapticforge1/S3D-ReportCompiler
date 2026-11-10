@@ -410,6 +410,7 @@ export type PdfRun = {
   dy: number;
 };
 
+/** The transform that moves nothing. */
 export const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
 /** `a` then `b`. */
@@ -441,7 +442,12 @@ function scaleOf(m: Matrix): number {
 }
 
 /** Whether polygons hold a point, by a fill rule (crossings for even-odd, winding for non-zero). */
-export function polygonsContain(polygons: number[][][], evenOdd: boolean, x: number, y: number) {
+export function polygonsContain(
+  polygons: number[][][],
+  evenOdd: boolean,
+  x: number,
+  y: number,
+): boolean {
   let winding = 0;
   let crossings = 0;
   for (const p of polygons) {

@@ -5165,6 +5165,26 @@ test(
     assert.ok(alphaAt(19) >= 3 && alphaAt(19) <= 6, `row 19 holds the strip: ${alphaAt(19)}`);
     assert.equal(alphaAt(20), 255, "row 20 is covered");
 
+    // A near-clear map lands anywhere within scale / 2 of the pixel -- not of the point it reads
+    // (2026-11-10: CI's Linux Chrome read alpha 1.7 levels as G = 1.0 and drew three pixels the
+    // rule had searched short of). Column 0, scale 12: the source is opaque from row 23 down;
+    // the map at row 17 reads G = 0.3565 (row 15.28), so only a search to row 17 + 6 finds it.
+    const filters = await import(pathToFileURL(join(ROOT, "src", "report_filter.ts")).href);
+    const column = (rows: number, fill: (j: number) => number[]) => {
+      const r = filters.blank(1, rows);
+      for (let j = 0; j < rows; j++) r.data.set(fill(j), 4 * j);
+      return r;
+    };
+    const src = column(40, (j) => (j >= 23 ? [0.8, 0.4, 0, 1] : [0, 0, 0, 0]));
+    const doubtWith = (alpha: number) => {
+      const map = column(40, () => [0.25 * alpha, 0.3565 * alpha, 0, alpha]);
+      const doubt = new Uint8Array(40);
+      filters.displacement(src, map, 0, 12, 0, 1, doubt);
+      return doubt[17];
+    };
+    assert.equal(doubtWith(1.7 / 255), 1, "a near-clear map's reach stops short of scale / 2");
+    assert.equal(doubtWith(1), 0, "a solid map is doubted -- one level moves it 0.05 pixel");
+
     // The very document measured -- the sample with this one drawing after it -- whose
     // rectangle's top falls at lattice row 19.98 on Chrome's pixels (77 pixels off before).
     const strip = join(work, "task18-8k3-strip");
