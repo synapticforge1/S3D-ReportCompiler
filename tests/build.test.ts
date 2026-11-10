@@ -3536,10 +3536,10 @@ test(
     assert.ok(read.shapes[6].dashed.length > 20, "a dashed line cut into its dashes");
     //    What it does not read is named, never passed.
     // (A marker or a gradient is read since 8b, a <pattern> since 8g, a mask since 8h, a filter
-    // since 8i, a switch and a foreignObject since 8j, turbulence since 8k; stitched noise and an
-    // outside image -- the build embeds one first, since #108 -- are not.)
+    // since 8i, a switch and a foreignObject since 8j, every filter primitive since 8k; a CSS
+    // filter function and an outside image -- the build embeds one first, since #108 -- are not.)
     const odd = svgs.readSvg(
-      `<svg><defs><filter id="t"><feTurbulence baseFrequency="0.1" stitchTiles="stitch"/></filter></defs><path d="M0 0L9 9" stroke="#000" filter="url(#t)"/><image width="9" height="9" href="x.png"/></svg>`,
+      `<svg><path d="M0 0L9 9" stroke="#000" filter="blur(2px)"/><image width="9" height="9" href="x.png"/></svg>`,
     );
     assert.equal(odd.unread.length, 2, JSON.stringify(odd.unread));
 
@@ -5015,11 +5015,12 @@ test(
     // (turbulence of type "turbulence" and feDisplacementMap now match: part 3, run below)
     assert.deepEqual(refused('<feTurbulence baseFrequency="0.1"/>'), []);
     assert.deepEqual(refused('<feDisplacementMap in2="SourceGraphic"/>'), []);
+    // (stitched noise matches since part 5, by Skia's raster stage)
     assert.deepEqual(
       refused('<feTurbulence type="fractalNoise" baseFrequency="0.1" stitchTiles="stitch"/>'),
-      ["a stitched <feTurbulence>"],
+      [],
     );
-    // (feTile matches since part 4: run at 72 dpi, its corner floored)
+    // (feTile matches since part 4: Skia's rounding in, on device pixels)
     assert.deepEqual(refused("<feTile/>"), []);
     // (specular light from a spot matches since part 3: an edge's thin strip, by 64)
     assert.deepEqual(refused("<feSpecularLighting><feSpotLight/></feSpecularLighting>"), []);
@@ -5068,7 +5069,8 @@ test(
 // clip does.
 // Group 8k part 3: turbulence of type "turbulence", and feDisplacementMap -- by fractal and by
 // turbulence noise, a negative scale and other channels, a flat map, sRGB, at a fractional place.
-// Measured: Chrome's noise lies about 1.6 device pixels on from the pixel's centre; an edge's
+// Measured: Chrome's noise lies half a user unit on from the device pixel's corner (part 5, from
+// Skia's source; first measured here as about 1.6 device pixels past the centre); an edge's
 // coverage is its area (a displacement reads one source pixel); where the map is near clear, one
 // level of it moves the point anywhere, and that is doubt, not a difference.
 const K83 = (id: string, filter: string, at = 'x="40" y="30"') =>
@@ -5220,6 +5222,68 @@ test(
       String(svgs.filterDifference(use, image(1), toPage)),
       /: \d+ of \d+ pixels differ/,
     );
+  },
+);
+
+// Group 8k part 5: stitched noise, by Skia's raster stage (read 2026-11-10): the tile is the
+// subregion in user units, truncated; the frequency moved to whole cycles in it; the lattice
+// wrapped once past the period, which doubles each octave; the noise at half a user unit on from
+// the device pixel's corner. Two drawings at another scale (units a pixel), where a rule in device
+// pixels would fail.
+const STITCH = (id: string, turb: string, at = 'x="40" y="30"', viewBox = "0 0 200 100") =>
+  K83(id, turb, at).replace('viewBox="0 0 200 100"', `viewBox="${viewBox}"`);
+const PROBE_8K5 = [
+  STITCH(
+    "k85-a",
+    '<feTurbulence baseFrequency="0.08 0.03" numOctaves="1" seed="1" stitchTiles="stitch"/>',
+  ),
+  STITCH(
+    "k85-b",
+    '<feTurbulence type="fractalNoise" baseFrequency="0.08 0.03" seed="1" stitchTiles="stitch"/>',
+  ),
+  STITCH(
+    "k85-c",
+    '<feTurbulence type="fractalNoise" baseFrequency="0.07 0.04" numOctaves="3" seed="7" stitchTiles="stitch"/>',
+    'x="41.3" y="29.7"',
+  ),
+  STITCH(
+    "k85-d",
+    '<feTurbulence baseFrequency="0.05" numOctaves="2" seed="2" stitchTiles="stitch"/>',
+  ),
+  STITCH(
+    "k85-e",
+    '<feTurbulence baseFrequency="0.05" numOctaves="2" seed="2" stitchTiles="stitch"/>',
+    'x="40" y="30"',
+    "0 0 150 75",
+  ),
+  STITCH(
+    "k85-f",
+    '<feTurbulence baseFrequency="0.05" numOctaves="2" seed="3"/>',
+    'x="40" y="30"',
+    "0 0 150 75",
+  ),
+  // a subregion of fractional size: the tile 61 by 40 units (truncated), not 62 by 41
+  STITCH(
+    "k85-g",
+    '<feTurbulence baseFrequency="0.06 0.05" numOctaves="2" seed="4" stitchTiles="stitch" x="36" y="28" width="61.7" height="40.6"/>',
+  ),
+].join("\n");
+
+test(
+  "class B, task 18 group 8k part 5: stitched noise, as Skia draws it",
+  { timeout: TIMEOUT },
+  () => {
+    const dir = join(work, "task18-8k5");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_8K5}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    // the sample's own image and the seven filtered elements
+    has(r.out, /graphics: 8 image paint\(s\), 8 expected/, /PASS/);
   },
 );
 

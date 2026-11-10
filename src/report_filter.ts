@@ -417,23 +417,25 @@ export class Turbulence {
     }
   }
   private noise2(ch: number, vx: number, vy: number, st: number[] | null): number {
-    const [BM, N] = [0xff, 0x1000];
-    let t = vx + N;
-    let bx0 = Math.trunc(t) & BM;
-    let bx1 = (bx0 + 1) & BM;
-    const rx0 = t - Math.trunc(t);
+    // As Skia's raster stage (SkRasterPipeline_opts.h, perlin_noise, read 2026-11-10): the lattice
+    // cell by floor; when stitching, a coordinate at or past the period has the period taken off
+    // ONCE, then the index is masked. (The specification's form -- +4096, mask, then compare with
+    // 4096 + width -- compared an index already masked below 256, so this check never wrapped.)
+    const BM = 0xff;
+    let bx0 = Math.floor(vx);
+    let bx1 = bx0 + 1;
+    const rx0 = vx - bx0;
     const rx1 = rx0 - 1;
-    t = vy + N;
-    let by0 = Math.trunc(t) & BM;
-    let by1 = (by0 + 1) & BM;
-    const ry0 = t - Math.trunc(t);
+    let by0 = Math.floor(vy);
+    let by1 = by0 + 1;
+    const ry0 = vy - by0;
     const ry1 = ry0 - 1;
     if (st) {
-      const [w, h, wx, wy] = st;
-      if (bx0 >= wx) bx0 -= w;
-      if (bx1 >= wx) bx1 -= w;
-      if (by0 >= wy) by0 -= h;
-      if (by1 >= wy) by1 -= h;
+      const [w, h] = st;
+      if (bx0 >= w) bx0 -= w;
+      if (bx1 >= w) bx1 -= w;
+      if (by0 >= h) by0 -= h;
+      if (by1 >= h) by1 -= h;
     }
     bx0 &= BM;
     bx1 &= BM;
@@ -453,9 +455,8 @@ export class Turbulence {
   /**
    * One channel's sum at a point of user space: fractal noise, or turbulence (absolute values).
    * `stitch`, when stitching, is the lattice width and height a tile spans at the (already
-   * fitted) frequencies; the wrap points are counted from the noise's origin, as Skia counts them
-   * (task 18 8k, measured: Skia's `StitchData` sets wrapX = 4096 + width, where the specification
-   * adds the tile's x -- the specification's form FAILED Chrome's stitched noise).
+   * fitted) frequencies -- the period, doubled each octave with the frequency, counted from the
+   * noise's origin (Skia's raster stage).
    */
   value(
     ch: number,
@@ -467,9 +468,7 @@ export class Turbulence {
     stitch: number[] | null,
   ): number {
     const [fx, fy] = freq;
-    let st: number[] | null = stitch
-      ? [stitch[0], stitch[1], 0x1000 + stitch[0], 0x1000 + stitch[1]]
-      : null;
+    let st: number[] | null = stitch ? [stitch[0], stitch[1]] : null;
     let [vx, vy] = [x * fx, y * fy];
     let [sum, ratio] = [0, 1];
     for (let o = 0; o < octaves; o++) {
@@ -478,8 +477,8 @@ export class Turbulence {
       vx *= 2;
       vy *= 2;
       ratio *= 2;
-      // stitching doubles with the octave: width, height, and their wrap points
-      if (st) st = [st[0] * 2, st[1] * 2, 2 * st[2] - 0x1000, 2 * st[3] - 0x1000];
+      // the period doubles with the octave
+      if (st) st = [st[0] * 2, st[1] * 2];
     }
     return sum;
   }
@@ -926,35 +925,39 @@ export function runFilter(run: FilterRun, sourceSrgb: Raster): Raster & { doubt:
         let [fx, fy] = pair(a.basefrequency, 0).map((f) => Math.max(0, f));
         let stitch: number[] | null = null;
         if (a.stitchtiles === "stitch") {
-          // Skia's stitching (via Blink): the tile -- the subregion -- in device pixels, rounded;
-          // each frequency fitted to a whole number of periods in it, the nearer by ratio; the
-          // lattice width and height it spans then rounded.
-          const [tw, th] = [Math.round(region[2] - region[0]), Math.round(region[3] - region[1])];
-          const fit = (f: number, size: number, unit: number) => {
-            const perPixel = f * unit;
-            if (perPixel === 0 || size <= 0) return f;
-            const lo = Math.floor(size * perPixel) / size;
-            const hi = Math.ceil(size * perPixel) / size;
-            return (lo > 0 && perPixel / lo < hi / perPixel ? lo : hi) / unit;
+          // Stitching as Blink and Skia do it (fe_turbulence.cc, SkPerlinNoiseShaderImpl.h, read
+          // 2026-11-10): the tile is the subregion in USER units, each side truncated to a whole
+          // number (Blink's saturated_cast); each frequency moved to a whole number of cycles in
+          // it, the nearer by ratio; the period, tile x frequency, rounded.
+          // (the width back from pixels may come out a hair under a whole number -- 71.99999 for
+          // 72 at one scale -- that Blink, reading the attribute, has exactly)
+          const [tw, th] = [
+            Math.trunc((region[2] - region[0]) * run.unit[0] + 1e-6),
+            Math.trunc((region[3] - region[1]) * run.unit[1] + 1e-6),
+          ];
+          const fit = (f: number, size: number) => {
+            if (f === 0 || size <= 0) return f;
+            const lo = Math.floor(size * f) / size;
+            const hi = Math.ceil(size * f) / size;
+            return lo > 0 && f / lo < hi / f ? lo : hi;
           };
-          fx = fit(fx, tw, run.unit[0]);
-          fy = fit(fy, th, run.unit[1]);
-          stitch = [Math.round(tw * fx * run.unit[0]), Math.round(th * fy * run.unit[1])];
+          if (tw > 0 && th > 0) {
+            fx = fit(fx, tw);
+            fy = fit(fy, th);
+            stitch = [Math.round(tw * fx), Math.round(th * fy)];
+          }
         }
-        // Stitched noise is counted from the tile's corner (its wrap is from the noise origin).
-        const [cx, cy] = stitch ? toUser(region[0], region[1]) : [0, 0];
         out = turbulence(
           W,
           H,
-          // Chrome's noise lies about 1.6 device pixels on, in x and y, from the pixel's centre
-          // `turbulence` takes -- measured, not derived: at three placings of the region (two at
-          // fractions of a pixel) every offset from 1.25 to 2.0 matches all six cases, 1.1 and
-          // 2.25 do not (turbulence of type "turbulence" 178 -> 0 pixels off, a displacement by
-          // noise 54 -> 0); the middle of that window
+          // Skia's raster stage takes (point + 0.5) x frequency, the point in the shader's local
+          // space -- user units -- so the noise lies half a USER UNIT on from the device pixel's
+          // corner (read 2026-11-10; measured before at one scale: 1.25 to 2.0 device pixels past
+          // the centre fitted, half a unit from the corner is 1.82 there). Counted from user
+          // space's origin, as the stage counts its stitch tiles from noise-space 0.
           (i, j) => {
-            const d = 1.625 / (run.device ?? 1);
-            const [x, y] = toUser(i + d, j + d);
-            return [x - cx, y - cy];
+            const [x, y] = toUser(i - 0.5, j - 0.5);
+            return [x + 0.5, y + 0.5];
           },
           [fx, fy],
           // Blink caps the octaves at 9 (what 8 bits can show, and one)

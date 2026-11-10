@@ -3169,13 +3169,9 @@ export function readSvg(
     };
     for (const p of target.children.filter((c) => c.tag !== "#text")) {
       if (!PRIMITIVES.has(p.tag)) return `the filter primitive <${p.tag}>`;
-      // Run by report_filter.ts but not yet matching Chrome's output, so still named rather than
-      // judged (task 18 8k, measured): stitched noise (Skia counts its tiles in a way still
-      // unknown). Turbulence of type "turbulence" and feDisplacementMap match since part 3 (the
-      // noise's offset, edge coverage, map doubt); feTile since part 4 (run at 72 dpi, its corner
-      // floored, the PDF's fill read on its cell's own pixels).
-      if (p.tag === "feturbulence" && p.attrs.get("stitchtiles") === "stitch")
-        return "a stitched <feTurbulence>";
+      // Every primitive report_filter.ts runs now matches Chrome (task 18 8k: turbulence and
+      // displacement since part 3, feTile since part 4, stitched noise since part 5 -- the last
+      // two by Skia's own source).
       spaces.add(
         (
           own(p, "color-interpolation-filters", [target]) ??

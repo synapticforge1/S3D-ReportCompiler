@@ -1267,16 +1267,19 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
   into the pdf for fidelity of the documents"):** fetched (beside the report or from the web),
   embedded in body and source, checked pixel for pixel; one that cannot be had stops the build.
   ✅ **Part 3 DONE 2026-11-09 (known-issues #109):** turbulence of type `turbulence` and
-  `feDisplacementMap` judged (the noise 1.6 device pixels on, measured; edges sampled 16 by 16;
+  `feDisplacementMap` judged (the noise 1.6 device pixels on, measured -- since part 5 derived:
+  half a USER UNIT from the device pixel's corner; edges sampled 16 by 16;
   a near-clear map's pixels doubtful).
   ✅ **Part 3b DONE 2026-11-10 (known-issues #110):** specular light from a spot judged (an
   edge's 2 % strip, sampled 64 by 64 where a pixel's outer 32nd disagrees).
   ✅ **Part 4 DONE 2026-11-10 (known-issues #111):** feTile judged, by Skia's own rule (read from
   `SkCropImageFilter.cpp`: the source rect rounded IN on 300-dpi device pixels, the 72-dpi cell
-  point-sampled), pixel for pixel at every place on the page. **Next: stitched noise** -- its
-  rules are in Skia's raster-pipeline `perlin_noise` stage (not yet read; the shader file only
-  sets it up: the tile size rounded, the frequency moved to a whole number of cycles a tile,
-  the wrap width rounded), then the browser review.
+  point-sampled), pixel for pixel at every place on the page.
+  ✅ **Part 5 DONE 2026-11-10 (known-issues #112):** stitched noise judged, by Skia's raster
+  stage (`perlin_noise`); the noise's point derived (half a user unit from the device pixel's
+  corner), replacing part 3's measured offset. **Every filter primitive the check runs now
+  matches Chrome -- none is refused.** Next: group 7b (WebP), group 9 (text styling), the fresh
+  class-B re-check; then the browser review (below).
   Not covered: a CSS `url()` background image (none in any real report; the CSP blocks it, the
   external-ref warning names an http one) -- class B's re-check takes it.
 - 🔴 **Other browsers, after the Chromium work (owner, 2026-11-09: "firefox and firefox-esr is
@@ -1288,7 +1291,8 @@ measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-m
   through WebDriver BiDi / Marionette, not a flag; WebKit has no headless print of its own --
   Playwright's WebKit build does) and what the verifier EXPECTS it to draw (everything measured
   in task 18 is Skia's: filters at 300 dpi, pattern cells at 72 dpi, feImage bilinear, the
-  spot cone's fade, noise 1.6 device pixels on). Other Chromium browsers share Skia and the
+  spot cone's fade, noise half a user unit on, feTile rounded in on 300-dpi device pixels and
+  point-sampled to 72 dpi). Other Chromium browsers share Skia and the
   flags (unmeasured). Firefox (WebRender / Skia in parts) and Playwright's Windows WebKit are a
   baseline only: Safari on a Mac draws through CoreGraphics -- the owner checks a real Mac later.
   Order: Firefox, Firefox ESR, then WebKit by Playwright.
