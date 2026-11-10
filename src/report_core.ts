@@ -3732,6 +3732,116 @@ function declaredDelimiters(raw: string): [string, string][] {
  * number of times a reader sees it: present once was all that was checked, so a value printed
  * twice could lose an occurrence, a line or a `PASS` → `FAIL` unseen (class B, re-check 2).
  */
+/** HTML's void elements: a start tag with no end. */
+const HTML_VOID = new Set(
+  "area base br col embed hr img input link meta param source track wbr".split(" "),
+);
+/** Elements whose start closes an open `<p>` (the HTML Standard's "close a p element" list). */
+const CLOSES_P = new Set(
+  (
+    "address article aside blockquote center details dialog dir div dl fieldset figcaption " +
+    "figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr main menu nav ol p pre section " +
+    "summary table ul li dd dt"
+  ).split(" "),
+);
+
+/**
+ * The HTML elements open at `upTo` in `html`, outermost first, as their opening tags (task 18
+ * group 9: the text of a drawing inherits from them). HTML's own nesting, not a balanced count:
+ * a void element opens nothing; an end tag closes up to its element, or nothing; a start tag
+ * closes what HTML closes for it -- an open `<p>` before a block, a `<li>` before a `<li>`, a
+ * `<td>` / `<th>` before a cell or row, a `<tr>` before a row, a `<dt>` / `<dd>` before either.
+ * An inline `<svg>` or `<math>` is skipped whole; raw text (`<script>`, `<style>`, `<textarea>`,
+ * `<title>`) is passed over.
+ */
+function openElementsAt(html: string, upTo: number): string[] {
+  const open: { name: string; tag: string }[] = [];
+  const closeTo = (names: string[], stopAt: string[] = []) => {
+    for (let k = open.length - 1; k >= 0; k--) {
+      if (stopAt.includes(open[k].name)) return;
+      if (names.includes(open[k].name)) {
+        open.length = k;
+        return;
+      }
+    }
+  };
+  const re = /<(\/?)([a-zA-Z][\w:-]*)(?:"[^"]*"|'[^']*'|[^"'>])*>/g;
+  re.lastIndex = 0;
+  for (let m = re.exec(html); m && m.index < upTo; m = re.exec(html)) {
+    const name = m[2].toLowerCase();
+    if (m[1]) {
+      closeTo([name]);
+      continue;
+    }
+    if (/^(script|style|textarea|title|svg|math)$/.test(name)) {
+      // passed over whole (an svg's or math's nesting balanced)
+      const close = new RegExp(`<(/?)${name}(?=[\\s/>])(?:"[^"]*"|'[^']*'|[^"'>])*>`, "gi");
+      close.lastIndex = m.index + m[0].length;
+      let depth = m[0].endsWith("/>") ? 0 : 1;
+      for (let c = close.exec(html); c && depth > 0; c = close.exec(html)) {
+        if (/^(svg|math)$/.test(name)) depth += c[1] ? -1 : c[0].endsWith("/>") ? 0 : 1;
+        else if (c[1]) depth = 0;
+        re.lastIndex = c.index + c[0].length;
+      }
+      continue;
+    }
+    if (CLOSES_P.has(name)) closeTo(["p"], ["table", "td", "th", "button"]);
+    if (name === "li") closeTo(["li"], ["ul", "ol"]);
+    if (name === "dt" || name === "dd") closeTo(["dt", "dd"], ["dl"]);
+    if (name === "td" || name === "th") closeTo(["td", "th"], ["tr", "table"]);
+    // (closing to an element drops all it holds: a row's start closes the open row, cells and all)
+    if (name === "tr") closeTo(["tr"], ["table", "tbody", "thead", "tfoot"]);
+    if (name === "tbody" || name === "thead" || name === "tfoot")
+      closeTo(["tbody", "thead", "tfoot"], ["table"]);
+    if (HTML_VOID.has(name)) continue;
+    open.push({ name, tag: m[0] });
+  }
+  return open.map((o) => o.tag);
+}
+
+/**
+ * An ancestor's opening tag as the report's own script leaves it (task 18 group 9): an element a
+ * {@link revealedSelectors} selector matches gets the inline `visibility: visible` the script
+ * sets on it -- SkyCiv hides `#report` until its script shows it, and a drawing read without
+ * that was all hidden. A simple selector (`tag`, `#id`, `.class`, compounds of them) is matched
+ * here (every real report reveals `#report`, measured on all 61); the document's `<html>` tag is
+ * marked `data-s3d-reveal-unread` when a revealed selector is not simple, for the drawing's
+ * reader to name rather than guess.
+ */
+const SIMPLE_SELECTOR = /^([a-zA-Z][\w-]*|\*)?((?:[#.][\w-]+)*)$/;
+
+function revealedTag(tag: string, revealed: Set<string>): string {
+  if (revealed.size === 0) return tag;
+  const name = /^<([a-zA-Z][\w:-]*)/.exec(tag)?.[1].toLowerCase() ?? "";
+  const a = attrsOf(tag);
+  const id = a.get("id") ?? "";
+  const classes = new Set((a.get("class") ?? "").split(/\s+/).filter(Boolean));
+  const shown = [...revealed]
+    .flatMap((sel) => sel.split(",").map((s) => s.trim()))
+    .some((one) => {
+      const m = SIMPLE_SELECTOR.exec(one);
+      if (!m || one === "") return false;
+      const parts = m[2].match(/[#.][\w-]+/g) ?? [];
+      return (
+        (!m[1] || m[1] === "*" || m[1].toLowerCase() === name) &&
+        parts.every((p) => (p[0] === "#" ? id === p.slice(1) : classes.has(p.slice(1))))
+      );
+    });
+  if (!shown) return tag;
+  const end = tag.endsWith("/>") ? tag.length - 2 : tag.length - 1;
+  const style = (a.get("style") ?? "").replace(/"/g, "'").trim();
+  const head = tag.slice(0, end).replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i, "");
+  const before = style ? `${style}${style.endsWith(";") ? "" : ";"} ` : "";
+  return `${head} style="${before}visibility: visible"${tag.slice(end)}`;
+}
+
+/** Whether the report's script reveals anything by a selector {@link revealedTag} cannot match. */
+function revealsUnread(revealed: Set<string>): boolean {
+  return [...revealed]
+    .flatMap((sel) => sel.split(",").map((s) => s.trim()))
+    .some((one) => one === "" || !SIMPLE_SELECTOR.test(one));
+}
+
 function sourceTally(raw: string): {
   words: Map<string, number>;
   numbers: Map<string, number>;
@@ -3742,8 +3852,11 @@ function sourceTally(raw: string): {
   imageSources: string[];
   /** The drawn inline SVGs, in order ({@link drawnSvgs}). */
   svgSources: string[];
+  /** Each drawing's HTML ancestors' opening tags, outermost first ({@link drawnSvgAncestors}). */
+  svgAncestors: string[][];
 } {
   const svgSources: string[] = [];
+  const svgAncestors: string[][] = [];
   const words = new Map<string, number>();
   const numbers = new Map<string, number>();
   let pairs = new Map<string, number>();
@@ -3751,6 +3864,16 @@ function sourceTally(raw: string): {
   const imageSources: string[] = [];
   {
     let html = withoutSpinner(readerVisible(raw));
+    // Group 9: the document's own <html> and <body> start tags, before the cut below drops them --
+    // a drawing inherits from both, and a report's rules on `body` reach its labels.
+    // Each as the report's script leaves it: what it reveals carries `visibility: visible`.
+    const revealed = revealedSelectors(raw);
+    const outerTags = ["html", "body"].map((t) => {
+      const at = html.search(new RegExp(`<${t}(?=[\\s/>])`, "i"));
+      return revealedTag(at < 0 ? `<${t}>` : html.slice(at, sourceTagEnd(html, at)), revealed);
+    });
+    if (revealsUnread(revealed))
+      outerTags[0] = outerTags[0].replace(/\s*\/?>$/, " data-s3d-reveal-unread>");
 
     // Only the body is drawn; <title> would otherwise read as missing. The body as a READER sees
     // it: everything after the <body> start tag, including text past </body> or before <body>
@@ -3808,6 +3931,12 @@ function sourceTally(raw: string): {
       if (end < 0) break;
       const svg = html.slice(start, end);
       svgSources.push(svg);
+      svgAncestors.push([
+        ...outerTags,
+        ...openElementsAt(html, start)
+          .filter((t) => !/^<(html|head|body)(?=[\s/>])/i.test(t))
+          .map((t) => revealedTag(t, revealed)),
+      ]);
       expectedImages += (svg.match(SOURCE_TAG) ?? []).filter((t) =>
         /^<image\b(?:"[^"]*"|'[^']*'|[^"'>])*?\s(?:xlink:)?href\s*=\s*["']data:(?!image\/svg\+xml)/i.test(
           t,
@@ -3889,7 +4018,7 @@ function sourceTally(raw: string): {
     );
   }
 
-  return { words, numbers, pairs, expectedImages, imageSources, svgSources };
+  return { words, numbers, pairs, expectedImages, imageSources, svgSources, svgAncestors };
 }
 
 /**
@@ -3907,6 +4036,25 @@ function sourceTally(raw: string): {
  */
 export function drawnSvgs(source: string): string[] {
   return sourceTally(source).svgSources;
+}
+
+/**
+ * The HTML each of {@link drawnSvgs} stands in, in the same order: for each drawing, the opening
+ * tags of the elements around it, outermost first -- the document's `<html>` and `<body>`, then
+ * every element open where the drawing starts, by HTML's own nesting (an open `<p>` closed by a
+ * block, a cell by the next cell). A drawing's text inherits weight, style, size and colour from
+ * them, and the report's selectors match through them (roadmap task 18 group 9).
+ *
+ * @param source one raw source report
+ * @example
+ * ```ts
+ * import { drawnSvgAncestors } from "@jrmarcum/s3d-reportcompiler";
+ * console.log(drawnSvgAncestors('<body><table><tr><th><svg></svg></th></tr></table></body>'));
+ * // [["<html>", "<body>", "<table>", "<tr>", "<th>"]]
+ * ```
+ */
+export function drawnSvgAncestors(source: string): string[][] {
+  return sourceTally(source).svgAncestors;
 }
 
 /**

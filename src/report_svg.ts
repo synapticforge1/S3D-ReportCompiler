@@ -429,6 +429,147 @@ export function labelStyleProblem(label: SvgLabel, run: PdfRun, size: number): s
   return null;
 }
 
+/** `font-size`'s absolute keywords (CSS Fonts 4 § 2.5), in px at the default medium of 16. */
+const FONT_SIZE_KEYWORD: Record<string, number> = {
+  "xx-small": 9,
+  "x-small": 10,
+  small: 13,
+  medium: 16,
+  large: 18,
+  "x-large": 24,
+  "xx-large": 32,
+  "xxx-large": 48,
+};
+
+/** CSS absolute units in px. */
+const CSS_UNIT: Record<string, number> = {
+  px: 1,
+  pt: 4 / 3,
+  pc: 16,
+  in: 96,
+  cm: 96 / 2.54,
+  mm: 96 / 25.4,
+  q: 96 / 101.6,
+};
+
+/**
+ * A computed `font-size` in px -- user units inside a drawing -- from the parent's (task 18 group
+ * 9: `parseFloat` read `10pt` as 10 and `1.2em` as 1.2). A bare number is px (an SVG presentation
+ * attribute); em and % of the parent; rem of the default 16; ex and ch as half an em; `smaller` /
+ * `larger` by 1.2. Unset or unreadable inherits.
+ */
+export function fontSizePx(value: string | undefined, parent: number): number {
+  const v = (value ?? "").trim().toLowerCase();
+  if (v === "" || v === "inherit") return parent;
+  if (v === "initial") return 16;
+  if (v in FONT_SIZE_KEYWORD) return FONT_SIZE_KEYWORD[v];
+  if (v === "smaller") return parent / 1.2;
+  if (v === "larger") return parent * 1.2;
+  const m = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)$/.exec(v);
+  if (!m) return parent;
+  const n = Number(m[1]);
+  const unit = m[2];
+  if (n < 0) return parent;
+  if (unit === "") return n;
+  if (unit === "%") return (n / 100) * parent;
+  if (unit === "em") return n * parent;
+  if (unit === "rem") return n * 16;
+  if (unit === "ex" || unit === "ch") return n * parent * 0.5;
+  return unit in CSS_UNIT ? n * CSS_UNIT[unit] : parent;
+}
+
+/** The `font` shorthand's system keywords: they name the host's UI font, which no source says. */
+const SYSTEM_FONT = /^(caption|icon|menu|message-box|small-caption|status-bar)$/i;
+
+/**
+ * The `font` shorthand as its longhands (CSS Fonts 4 § 2.8): `[style || variant || weight ||
+ * stretch]? size[/line-height]? family`; every longhand it omits is reset to its initial value,
+ * as the shorthand does. `null` when it is not a valid one (no size or no family), `"system"` for
+ * a system font. (Task 18 group 9: a label styled `font: bold 12px Arial` was read at weight 400.)
+ */
+export function fontShorthand(value: string): Map<string, string> | null | "system" {
+  const v = value.trim();
+  if (SYSTEM_FONT.test(v)) return "system";
+  const words = v.match(/"[^"]*"|'[^']*'|[^\s,"']+(?:,)?|,/g) ?? [];
+  const out = new Map<string, string>([
+    ["font-style", "normal"],
+    ["font-weight", "normal"],
+    ["font-size", "medium"],
+  ]);
+  let k = 0;
+  for (; k < words.length && k < 4; k++) {
+    const w = words[k].toLowerCase();
+    if (w === "normal") continue;
+    if (w === "italic" || w === "oblique") {
+      out.set("font-style", w);
+      if (w === "oblique" && /^-?\d*\.?\d+deg$/.test(words[k + 1] ?? "")) k++;
+    } else if (w === "bold" || w === "bolder" || w === "lighter" || /^[1-9]00$/.test(w))
+      out.set("font-weight", w);
+    else if (w === "small-caps" || /^(ultra-|extra-|semi-)?(condensed|expanded)$/.test(w)) continue;
+    else break;
+  }
+  const size = words[k]?.split("/")[0];
+  if (!size || fontSizePx(size, -1) === -1) return null;
+  out.set("font-size", size);
+  // a line-height after a slash, as its own word or joined to the size
+  let next = k + 1;
+  if (!words[k].includes("/") && words[next] === "/") next += 2;
+  else if (words[next]?.startsWith("/")) next++;
+  if (next >= words.length) return null; // no family
+  return out;
+}
+
+/**
+ * The declarations of a block or a `style` attribute: each property's LAST declaration, an
+ * `!important` one kept over any later plain one (CSS Cascade 4 § 6.4); `font` expanded into
+ * the longhands this reader uses, in its place in the order. Properties outside `keep` dropped.
+ * A system font (`font: caption`) sets its longhands to `system`.
+ */
+export function declarationsOf(
+  text: string,
+  keep: Set<string>,
+): Map<string, { value: string; important: boolean }> {
+  const decls = new Map<string, { value: string; important: boolean }>();
+  const put = (prop: string, value: string, important: boolean) => {
+    if (!keep.has(prop)) return;
+    const was = decls.get(prop);
+    if (was?.important && !important) return;
+    decls.delete(prop); // re-inserted: its place in the order is its last declaration's
+    decls.set(prop, { value, important });
+  };
+  for (const d of text.split(";")) {
+    const at = d.indexOf(":");
+    if (at < 0) continue;
+    const prop = d.slice(0, at).trim().toLowerCase();
+    const raw = d.slice(at + 1).trim();
+    const important = /!\s*important\s*$/i.test(raw);
+    const value = raw.replace(/!\s*important\s*$/i, "").trim();
+    if (prop === "font") {
+      // A system font sets every longhand to the host's: marked, and named only on a label it
+      // reaches (a report's `body { font: caption }` is no reason to refuse every drawing).
+      const longhands = fontShorthand(value);
+      if (longhands === "system")
+        for (const p of ["font-style", "font-weight", "font-size"]) put(p, "system", important);
+      // An invalid shorthand is dropped, as a browser drops it (a misread valid one makes its
+      // label fail on weight, style or size: the loud direction).
+      else if (longhands) for (const [p, x] of longhands) put(p, x, important);
+      continue;
+    }
+    put(prop, value, important);
+  }
+  return decls;
+}
+
+/**
+ * Whether an element's font is (partly) a system font: one of its weight, style and size
+ * declared `system` (a `font: caption`); all three declared otherwise clears it; else inherited.
+ */
+export function systemFontOf(values: (string | undefined)[], parent: boolean): boolean {
+  if (values.some((v) => v === "system")) return true;
+  if (values.every((v) => v !== undefined)) return false;
+  return parent;
+}
+
 /** A computed `font-style`: italic or oblique (any angle) is italic; unset inherits. */
 export function fontItalic(value: string | undefined, parent: boolean): boolean {
   const v = (value ?? "").trim().toLowerCase();
@@ -2304,18 +2445,8 @@ function cssRules(css: string, unread: Set<string>, startOrder: number): Rule[] 
         if (m && (/\b(print|all)\b/i.test(m[1]) || !/\bscreen\b/i.test(m[1]))) body(inner);
         continue;
       }
-      const decls = new Map<string, { value: string; important: boolean }>();
-      for (const d of inner.split(";")) {
-        const at = d.indexOf(":");
-        if (at < 0) continue;
-        const prop = d.slice(0, at).trim().toLowerCase();
-        if (!SVG_PROPS.has(prop)) continue;
-        const raw = d.slice(at + 1).trim();
-        decls.set(prop, {
-          value: raw.replace(/!\s*important\s*$/i, "").trim(),
-          important: /!\s*important\s*$/i.test(raw),
-        });
-      }
+      // Each property's last declaration, `font` expanded (group 9).
+      const decls = declarationsOf(inner, SVG_PROPS);
       if (decls.size === 0) continue;
       for (const s of prelude.split(",")) {
         const sel = parseSelector(s.trim());
@@ -2668,6 +2799,12 @@ export function readSvg(
   svg: string,
   /** The report's stylesheets outside the drawing: a browser styles an SVG with them too. */
   outerCss = "",
+  /**
+   * Group 9: the HTML elements the drawing stands in, outermost first, as their opening tags
+   * (`<html>`, `<body …>`, … `<th>`): its text inherits their weight, style, size and colour, and
+   * the report's selectors match through them.
+   */
+  htmlAncestors: string[] = [],
 ): {
   shapes: SvgShape[];
   labels: SvgLabel[];
@@ -2787,16 +2924,12 @@ export function readSvg(
         best = cand;
       }
     }
+    // The inline style's LAST declaration of it, `font` expanded (group 9: the first was taken, and
+    // a `font` shorthand not at all). An important inline declaration beats an important rule.
+    const inline = declarationsOf(n.attrs.get("style") ?? "", new Set([prop])).get(prop);
+    if (inline?.important) return inline.value;
     if (best?.important) return best.value;
-    for (const d of (n.attrs.get("style") ?? "").split(";")) {
-      const at = d.indexOf(":");
-      if (at > 0 && d.slice(0, at).trim().toLowerCase() === prop) {
-        return d
-          .slice(at + 1)
-          .replace(/!\s*important\s*$/i, "")
-          .trim();
-      }
-    }
+    if (inline) return inline.value;
     return best?.value ?? n.attrs.get(prop);
   };
   const ancestors: Node[] = [];
@@ -2972,7 +3105,8 @@ export function readSvg(
     stroke: string;
     width: string;
     color: string;
-    size: string;
+    /** The computed font size in px (user units), group 9: units and relative sizes resolved. */
+    size: number;
     anchor: string;
     visible: boolean;
     dasharray: string;
@@ -2995,6 +3129,8 @@ export function readSvg(
     /** Group 9: the font's weight (100–900, computed) and whether it is italic or oblique. */
     weight: number;
     italic: boolean;
+    /** Group 9: a system font (`font: caption`) set some of them: the host's, no source's. */
+    systemFont: boolean;
   };
   /**
    * The mask a `mask` value puts on an element whose user space maps to the drawing by `m`
@@ -3400,6 +3536,47 @@ export function readSvg(
     });
     return null;
   };
+  /**
+   * What an element passes on: each inherited property by the cascade ({@link own}), else the
+   * browser's default for its tag (`ua`, for the HTML around a drawing: `<b>` is bolder, `<th>`
+   * bold, `<i>` italic …), else its parent's; `opacity` composes. Shared by the drawing's own
+   * elements and, since group 9, the HTML elements a drawing stands in.
+   */
+  const cascadeOf = (
+    n: Node,
+    inh: Inherited,
+    under: Node[],
+    ua: Record<string, string> = {},
+  ): Inherited => {
+    const get = (p: string) => own(n, p, under) ?? ua[p];
+    const vis = get("visibility");
+    const fontParts = ["font-weight", "font-style", "font-size"].map(get);
+    return {
+      fill: get("fill") ?? inh.fill,
+      stroke: get("stroke") ?? inh.stroke,
+      width: get("stroke-width") ?? inh.width,
+      color: get("color") ?? inh.color,
+      size: fontSizePx(get("font-size"), inh.size),
+      anchor: get("text-anchor") ?? inh.anchor,
+      visible: vis === undefined ? inh.visible : vis !== "hidden" && vis !== "collapse",
+      dasharray: get("stroke-dasharray") ?? inh.dasharray,
+      dashoffset: get("stroke-dashoffset") ?? inh.dashoffset,
+      fillOpacity: get("fill-opacity") ?? inh.fillOpacity,
+      strokeOpacity: get("stroke-opacity") ?? inh.strokeOpacity,
+      cap: get("stroke-linecap") ?? inh.cap,
+      opacity: inh.opacity * (Number.parseFloat(get("opacity") ?? "1") || 0),
+      markers: inh.markers,
+      fillRule: get("fill-rule") ?? inh.fillRule,
+      clipRule: get("clip-rule") ?? inh.clipRule,
+      join: get("stroke-linejoin") ?? inh.join,
+      miter: get("stroke-miterlimit") ?? inh.miter,
+      paintOrder: get("paint-order") ?? inh.paintOrder,
+      mask: inh.mask,
+      weight: fontWeight(get("font-weight"), inh.weight),
+      italic: fontItalic(get("font-style"), inh.italic),
+      systemFont: systemFontOf(fontParts, inh.systemFont),
+    };
+  };
   const walk = (n: Node, e: Matrix, inh: Inherited, depth: number, outerClips: SvgClip[] = []) => {
     if (n.tag === "#text" || NOT_DRAWN.has(n.tag) || depth > 32) return;
     if (!conditionsPass(n)) return;
@@ -3408,34 +3585,9 @@ export function readSvg(
       return;
     }
     if (own(n, "display", ancestors) === "none") return;
-    const vis = own(n, "visibility", ancestors);
-    const here: Inherited = {
-      fill: own(n, "fill", ancestors) ?? inh.fill,
-      stroke: own(n, "stroke", ancestors) ?? inh.stroke,
-      width: own(n, "stroke-width", ancestors) ?? inh.width,
-      color: own(n, "color", ancestors) ?? inh.color,
-      size: own(n, "font-size", ancestors) ?? inh.size,
-      anchor: own(n, "text-anchor", ancestors) ?? inh.anchor,
-      visible: vis === undefined ? inh.visible : vis !== "hidden" && vis !== "collapse",
-      dasharray: own(n, "stroke-dasharray", ancestors) ?? inh.dasharray,
-      dashoffset: own(n, "stroke-dashoffset", ancestors) ?? inh.dashoffset,
-      fillOpacity: own(n, "fill-opacity", ancestors) ?? inh.fillOpacity,
-      strokeOpacity: own(n, "stroke-opacity", ancestors) ?? inh.strokeOpacity,
-      cap: own(n, "stroke-linecap", ancestors) ?? inh.cap,
-      // A filtered element's copy is read at opacity 1: its opacity applies to the filter's image.
-      opacity: filtering.has(n)
-        ? 1
-        : inh.opacity * (Number.parseFloat(own(n, "opacity", ancestors) ?? "1") || 0),
-      markers: inh.markers,
-      fillRule: own(n, "fill-rule", ancestors) ?? inh.fillRule,
-      clipRule: own(n, "clip-rule", ancestors) ?? inh.clipRule,
-      join: own(n, "stroke-linejoin", ancestors) ?? inh.join,
-      miter: own(n, "stroke-miterlimit", ancestors) ?? inh.miter,
-      paintOrder: own(n, "paint-order", ancestors) ?? inh.paintOrder,
-      mask: inh.mask,
-      weight: fontWeight(own(n, "font-weight", ancestors), inh.weight),
-      italic: fontItalic(own(n, "font-style", ancestors), inh.italic),
-    };
+    const here = cascadeOf(n, inh, ancestors);
+    // A filtered element's copy is read at opacity 1: its opacity applies to the filter's image.
+    if (filtering.has(n)) here.opacity = 1;
     const filter = filtering.has(n) ? undefined : own(n, "filter", ancestors);
     // Markers inherit; `marker` sets all three.
     const all = own(n, "marker", ancestors);
@@ -3707,7 +3859,7 @@ export function readSvg(
       }
       case "text": {
         // The text and its own tspans: a tspan with its own x or y is a label of its own.
-        const size = Number.parseFloat(here.size) || 16;
+        const size = here.size;
         const words = (k: Node): string =>
           k.tag === "#text"
             ? k.text
@@ -3734,6 +3886,8 @@ export function readSvg(
           unread.add("a <text> whose <tspan>s are drawn in another weight, style or colour");
         if (here.visible && text && fillOf(here.fill, here.color) === undefined)
           unread.add("a <text> filled with a gradient or a pattern");
+        if (here.visible && text && here.systemFont)
+          unread.add("a <text> in a system font (the host's, which no source says)");
         if (text && here.visible)
           labels.push({
             text,
@@ -3828,7 +3982,7 @@ export function readSvg(
     stroke: "none",
     width: "1",
     color: "black",
-    size: "16",
+    size: 16,
     anchor: "start",
     visible: true,
     dasharray: "none",
@@ -3845,10 +3999,24 @@ export function readSvg(
     paintOrder: "normal",
     weight: 400,
     italic: false,
+    systemFont: false,
   };
   // The drawing's viewport in its own coordinates: its width and height, back through its viewBox;
   // a browser clips the drawing to it unless its overflow shows it (group 8d).
   let viewport: number[] | null = null;
+  // Group 9: the HTML the drawing stands in. Each element, outermost first, passes on what the
+  // cascade and the browser's defaults give it; they are the drawing's ancestors for selectors
+  // too (`.diagram text { … }` in the report's sheet reached no label before).
+  let inHtml = start;
+  for (const tag of htmlAncestors) {
+    const el = parse(tag).children.find((k) => k.tag !== "#text");
+    if (!el) continue;
+    const bare: Node = { tag: el.tag, attrs: el.attrs, children: [], text: "" };
+    if (bare.attrs.has("data-s3d-reveal-unread"))
+      unread.add("a report script that reveals by a selector this reader cannot match");
+    inHtml = cascadeOf(bare, inHtml, [...ancestors], htmlDefaults(bare));
+    ancestors.push(bare);
+  }
   for (const c of root.children) {
     let clips: SvgClip[] = [];
     if (c.tag === "svg" && viewport === null) {
@@ -3866,9 +4034,34 @@ export function readSvg(
           clips = [{ parts: [{ polygons: [region], evenOdd: false }] }];
       }
     }
-    walk(c, IDENTITY, start, 0, clips);
+    walk(c, IDENTITY, inHtml, 0, clips);
   }
   return { shapes, labels, unread: [...unread], viewport, images, filters, foreign };
+}
+
+/**
+ * The browser's own style for an HTML element (the HTML Standard's rendering section, as Chrome's
+ * user-agent sheet has it): only what a drawing's text inherits -- weight, style, size, colour.
+ */
+function htmlDefaults(n: Node): Record<string, string> {
+  const t = n.tag;
+  const ua: Record<string, string> = {};
+  if (t === "b" || t === "strong") ua["font-weight"] = "bolder";
+  if (t === "th" || /^h[1-6]$/.test(t)) ua["font-weight"] = "bold";
+  const heading: Record<string, string> = {
+    h1: "2em",
+    h2: "1.5em",
+    h3: "1.17em",
+    h4: "1em",
+    h5: "0.83em",
+    h6: "0.67em",
+  };
+  if (t in heading) ua["font-size"] = heading[t];
+  if (["i", "em", "cite", "var", "dfn", "address"].includes(t)) ua["font-style"] = "italic";
+  if (t === "small" || t === "sub" || t === "sup") ua["font-size"] = "smaller";
+  if (t === "big") ua["font-size"] = "larger";
+  if (t === "a" && n.attrs.has("href")) ua.color = "#0000ee";
+  return ua;
 }
 
 // ---------------------------------------------------------------------------

@@ -5370,6 +5370,152 @@ test(
   },
 );
 
+// Group 9a, what it left (owner, 2026-11-10: "scope the part that is not covered yet and provide
+// the fix"): the `font` shorthand; sizes with units; and the HTML a drawing stands in -- its text
+// inherits weight, style, size and colour from it, and the report's selectors reach through it.
+const PROBE_9A2 = `<style>.diagram text.ruled{font-weight:900}</style>
+<table><tr><th><svg viewBox="0 0 200 40" width="400" height="80"><text x="5" y="25">in a th cell</text></svg></th></tr></table>
+<p><b><i><svg viewBox="0 0 200 40" width="400" height="80"><text x="5" y="25" font-size="10pt">bold italic pt</text></svg></i></b></p>
+<div class="diagram" style="color:#aa0000"><svg viewBox="0 0 300 60" width="600" height="120"><text x="5" y="20" style="font: italic bold 14px Arial">by shorthand</text><text x="5" y="40" class="ruled" font-size="1.2em">ruled through</text><text x="160" y="40" fill="currentColor">its div's colour</text></svg></div>
+<h3><svg viewBox="0 0 200 40" width="400" height="80"><text x="5" y="25">heading size</text></svg></h3>`;
+
+test(
+  "class B, task 18 group 9a part 2: the font shorthand, sizes with units, the HTML around a drawing",
+  { timeout: TIMEOUT },
+  async () => {
+    // Chrome agrees: the sample with these four drawings after it PASSES.
+    const dir = join(work, "task18-9a2");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_9A2}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /PASS/);
+    // ...every drawing compared: the report's own (behind its #report reveal gate) and these.
+    const drew = /drawings: (\d+) shape paint/.exec(r.out);
+    assert.ok(drew && Number(drew[1]) > 100, `drawings compared: ${drew?.[1]}`);
+
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    // The shorthand: every longhand it omits reset; the last declaration wins; !important kept.
+    const keep = new Set(["font-weight", "font-style", "font-size"]);
+    const decl = (t: string) =>
+      Object.fromEntries([...svgs.declarationsOf(t, keep)].map(([k, v]) => [k, v.value]));
+    assert.deepEqual(decl("font: italic bold 12px/1.5 Arial"), {
+      "font-style": "italic",
+      "font-weight": "bold",
+      "font-size": "12px",
+    });
+    assert.deepEqual(decl("font-weight: bold; font: 10pt serif"), {
+      "font-weight": "normal",
+      "font-style": "normal",
+      "font-size": "10pt",
+    });
+    assert.equal(decl("font: 10pt serif; font-weight: 900")["font-weight"], "900");
+    assert.equal(decl("font-weight: bold !important; font-weight: 300")["font-weight"], "bold");
+    assert.equal(decl("font-weight: 300; font-weight: 600")["font-weight"], "600", "the last one");
+    assert.deepEqual(decl("font: caption"), {
+      "font-style": "system",
+      "font-weight": "system",
+      "font-size": "system",
+    });
+    assert.deepEqual(decl("font: bold 12px"), {}, "no family: invalid, dropped");
+    // Sizes, in px from the parent's.
+    const px = (v: string, parent = 12) => Number(svgs.fontSizePx(v, parent).toFixed(3));
+    assert.equal(px("10pt"), 13.333);
+    assert.equal(px("1.5em"), 18);
+    assert.equal(px("150%"), 18);
+    assert.equal(px("small"), 13);
+    assert.equal(px("larger"), 14.4);
+    assert.equal(px("2rem"), 32);
+    assert.equal(px("12"), 12, "a bare number is px");
+    assert.equal(px("bogus"), 12, "unreadable inherits");
+
+    // The HTML around each drawing, by HTML's nesting; what the report's script reveals.
+    const chain = (html: string) =>
+      core.drawnSvgAncestors(html)[0].map((t: string) => /^<([a-z0-9]+)/i.exec(t)?.[1]);
+    assert.deepEqual(chain("<body><table><tr><th><svg><rect/></svg>"), [
+      "html",
+      "body",
+      "table",
+      "tr",
+      "th",
+    ]);
+    assert.deepEqual(
+      chain("<body><p>a<div><svg><rect/></svg>"),
+      ["html", "body", "div"],
+      "p closed",
+    );
+    assert.deepEqual(chain("<body><table><tr><td>1<td><svg><rect/></svg>"), [
+      "html",
+      "body",
+      "table",
+      "tr",
+      "td",
+    ]);
+    assert.deepEqual(chain("<body><table><tr><td>1<tr><td><svg><rect/></svg>"), [
+      "html",
+      "body",
+      "table",
+      "tr",
+      "td",
+    ]);
+    assert.deepEqual(chain("<body><b>x</b><i><br><svg><rect/></svg>"), ["html", "body", "i"]);
+    const gated =
+      "<body><div id='report'><svg><rect/></svg></div><script>jQuery('#report').css('visibility', 'visible')</script></body>";
+    assert.match(core.drawnSvgAncestors(gated)[0][2], /style="visibility: visible"/);
+    const complex =
+      "<body><div id='report'><svg><rect/></svg></div><script>jQuery('div > #report').css('visibility', 'visible')</script></body>";
+    assert.match(core.drawnSvgAncestors(complex)[0][0], /data-s3d-reveal-unread/);
+
+    // What the text inherits from them, by the cascade and the browser's own sheet.
+    const label = (svg: string, around: string[], css = "") => {
+      const read = svgs.readSvg(svg, css, around);
+      return { ...read.labels[0], unread: read.unread };
+    };
+    const t = '<svg width="100" height="40"><text x="5" y="20">x</text></svg>';
+    assert.equal(label(t, ["<html>", "<body>", "<th>"]).weight, 700, "th");
+    assert.equal(label(t, ["<html>", "<body>", "<b>", "<b>"]).weight, 900, "b in b: bolder twice");
+    assert.equal(label(t, ["<html>", "<body>", "<em>"]).italic, true, "em");
+    assert.equal(
+      Number(label(t, ["<html>", '<body style="font-size:13px">', "<h3>"]).size.toFixed(2)),
+      15.21,
+      "h3: 1.17em of the body's 13px",
+    );
+    assert.deepEqual(
+      label(t.replace("<text", '<text fill="currentColor"'), [
+        "<html>",
+        "<body>",
+        '<div style="color:#aa0000">',
+      ]).fill.map((v: number) => Number(v.toFixed(3))),
+      [0.667, 0, 0],
+    );
+    assert.equal(
+      label(
+        t.replace("<text", '<text class="r"'),
+        ["<html>", "<body>", '<div class="diagram">'],
+        ".diagram text.r{font-weight:900}",
+      ).weight,
+      900,
+      "a page rule through the HTML",
+    );
+    const hidden = svgs.readSvg(t, "#report{visibility:hidden}", [
+      "<html>",
+      "<body>",
+      '<div id="report">',
+    ]);
+    assert.equal(hidden.labels.length, 0, "a hidden ancestor hides the text");
+    assert.match(
+      label(t, ["<html data-s3d-reveal-unread>", "<body>"]).unread.join(),
+      /reveals by a selector/,
+    );
+    assert.match(label(t, ["<html>", '<body style="font: caption">']).unread.join(), /system font/);
+  },
+);
+
 test(
   "class B, task 18 group 8k part 4: feTile, as Chrome tiles it",
   { timeout: TIMEOUT },

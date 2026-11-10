@@ -1136,8 +1136,12 @@ drawn before the first or after the last match; colour names, `hsl()`, colour al
    selector matcher of `report_svg.ts` is the starting point.
    ✅ **9a DONE 2026-11-10 (known-issues #115):** every SVG label's run held to its source's
    weight, style, colour and size; a face Chrome slants (no italic of its own) read by its skew.
-   Not yet: the CSS `font` shorthand (fails loudly), the weight and style a drawing inherits from
-   its HTML ancestors (9b's cascade). **Next: 9b, HTML text.**
+   ✅ **9a part 2 DONE 2026-11-10 (known-issues #116; owner: "scope the part that is not covered
+   yet and provide the fix"):** the `font` shorthand, sizes with units, the HTML a drawing stands
+   in (inheritance with the browser's defaults; the report's selectors through it; the `#report`
+   reveal gate as the script leaves it); a drawing that draws but reads as nothing visible now
+   fails. API: `drawnSvgAncestors` added (surface re-baselined; the next release is a minor).
+   **Next: 9b, HTML text** — `cascadeOf` and `htmlDefaults` are its starting point.
 
 **Next step, in order (owner: fixes not limits):** the items still named "not verified", each
 measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-measured):

@@ -107,6 +107,7 @@ import {
   decodeReport,
   delimSignatures,
   drawnImages,
+  drawnSvgAncestors,
   drawnSvgs,
   extractSourceTokens,
   findBrokenReferences,
@@ -1011,7 +1012,11 @@ function filteredElements(source: string): number {
   const shown = (read: ReturnType<typeof readSvg>) =>
     read.filters.filter((f) => filterShows(f) && !f.primitives.some((p) => p.tag === "fetile"))
       .length;
-  const inline = drawnSvgs(source).reduce((n, svg) => n + shown(readSvg(svg, css)), 0);
+  const around = drawnSvgAncestors(source);
+  const inline = drawnSvgs(source).reduce(
+    (n, svg, k) => n + shown(readSvg(svg, css, around[k] ?? [])),
+    0,
+  );
   const asImages = drawnImages(source)
     .filter((uri) => /^data:image\/svg\+xml/i.test(uri))
     .reduce((n, uri) => {
@@ -1265,6 +1270,10 @@ function readingOrder(a: string, b: string): number {
 const MIN_CONTRAST = 3;
 /** The smallest text that may be printed, in points: the samples' smallest is 3.61 (subscripts). */
 const MIN_TEXT_PT = 2;
+
+/** An SVG element that draws something (looked for outside definitions: `<defs>`, clips …). */
+const DRAWS =
+  /<(path|rect|circle|ellipse|line|polyline|polygon|text|image|use|foreignObject)(?=[\s/>])/i;
 
 async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -3372,9 +3381,30 @@ try {
         ]
           .map((m) => m[1])
           .join("\n");
+        // ...and the HTML each drawing stands in (group 9): its text inherits from it.
+        const around = drawnSvgAncestors(source);
         for (const [k, svg] of drawnSvgs(source).entries()) {
           const label = `${entries[i]}: drawing ${k + 1}`;
-          const result = await compareDrawing(readSvg(svg, outerCss), label);
+          const read = readSvg(svg, outerCss, around[k] ?? []);
+          // A drawing whose markup draws something but whose reading sees nothing is never
+          // compared at all -- and passed (group 9: a hidden ancestor misread hid every drawing,
+          // and the build said "drawings: 0" and PASS). A drawing the report truly hides is not
+          // here: the reader's view of the page leaves it out before this.
+          const reads =
+            read.shapes.length +
+            read.labels.length +
+            read.images.length +
+            read.filters.length +
+            read.foreign.length;
+          const drawable = svg.replace(
+            /<(defs|clipPath|mask|pattern|marker|symbol|filter|linearGradient|radialGradient)(?=[\s/>])[\s\S]*?<\/\1\s*>/gi,
+            "",
+          );
+          if (reads === 0 && read.unread.length === 0 && DRAWS.test(drawable)) {
+            check.failures.push(`${label} -- it draws, but nothing in it reads as visible`);
+            continue;
+          }
+          const result = await compareDrawing(read, label);
           drawingsCompared += result.compared;
           for (const problem of result.problems) check.failures.push(`${label} -- ${problem}`);
         }
