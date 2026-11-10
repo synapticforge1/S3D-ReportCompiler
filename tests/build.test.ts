@@ -3640,13 +3640,26 @@ test(
         }
       }
       const runs = r.labels.map(
-        (l: { text: string; x: number; y: number; anchor: string; size: number; e: number[] }) => {
+        (l: {
+          text: string;
+          x: number;
+          y: number;
+          anchor: string;
+          size: number;
+          e: number[];
+          fill?: number[] | null;
+          weight?: number;
+          italic?: boolean;
+        }) => {
           const m = svgs.mul(l.e, base);
           const width = l.text.length * l.size * 0.5 * Math.hypot(m[0], m[1]);
           const len = Math.hypot(m[0], m[1]);
           const [dx, dy] = [m[0] / len, m[1] / len];
           const [ax, ay] = [m[0] * l.x + m[2] * l.y + m[4], m[1] * l.x + m[3] * l.y + m[5]];
           const f = l.anchor === "middle" ? 0.5 : l.anchor === "end" ? 1 : 0;
+          // Drawn as Chrome draws it (group 9): Arial in the label's weight, style and fill.
+          const bold = (l.weight ?? 400) >= 600 ? "Bold" : "";
+          const face = `Arial-${bold}${l.italic ? "Italic" : ""}MT`.replace("Arial-MT", "ArialMT");
           return {
             page: 1,
             text: l.text,
@@ -3656,6 +3669,15 @@ test(
             size: l.size * len,
             dx,
             dy,
+            styles: [
+              {
+                font: `AAAAAA+${face}`,
+                fill: l.fill ?? [0, 0, 0],
+                alpha: 1,
+                mode: 0,
+                size: l.size * len,
+              },
+            ],
           };
         },
       );
@@ -4792,6 +4814,7 @@ test(
       size: 20,
       dx: 1,
       dy: 0,
+      styles: [{ font: "AAAAAA+ArialMT", fill: [0, 0, 0], alpha: 1, mode: 0, size: 20 }],
     });
     const labelRuns = words.labels.map((l: { text: string; x: number; y: number }) => runFor(l));
     assert.deepEqual(svgs.compareSvg(words, [], labelRuns, new Set()).problems, []);
@@ -5220,6 +5243,132 @@ const PROBE_8K4 = [
   TILE("k84-c", 'x="41.3" y="30.4" width="10" height="10"', 'dx="2" dy="2"'),
   TILE("k84-d", 'x="40" y="30" width="10" height="10"', 'dx="3" dy="0"'),
 ].join("\n");
+
+// Group 9a (owner, 2026-11-09: "Text styling (weight, colour, size of HTML text and SVG labels)
+// should match the html as close as possible"): each label's weight, style, colour and size, by
+// attribute, by inheritance, relative (`bolder`, `lighter`) and by a stylesheet rule.
+const PROBE_9A = `<svg viewBox="0 0 300 120" width="600" height="240"><style>.heavy{font-weight:900}.slant{font-style:italic}</style>
+<text x="10" y="20" font-size="12">plain label</text>
+<text x="10" y="40" font-size="12" font-weight="bold">bold label</text>
+<text x="10" y="60" font-size="12" font-style="italic">italic label</text>
+<text x="10" y="80" font-size="12" fill="#c00000">red label</text>
+<text x="10" y="105" font-size="20">large label</text>
+<g font-weight="bold"><text x="160" y="20" font-size="12" font-weight="lighter">lighter label</text><text x="160" y="40" font-size="12">inherited bold</text></g>
+<text x="160" y="60" font-size="12" class="heavy slant">ruled label</text>
+<g fill="#0000cc"><text x="160" y="80" font-size="12" style="font-weight:bolder">bolder blue</text></g>
+<g font-weight="bold"><text x="160" y="100" font-size="12" font-weight="bolder">bolder than bold</text></g>
+</svg>`;
+
+test(
+  "class B, task 18 group 9a: SVG labels drawn in the weight, style, colour and size their sources give",
+  { timeout: TIMEOUT },
+  async () => {
+    // Chrome agrees with the reader's cascade: the sample with the probe drawing after it PASSES.
+    const dir = join(work, "task18-9a");
+    mkdirSync(dir, { recursive: true });
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(/<\/body>/i, () => `${PROBE_9A}</body>`),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /PASS/);
+
+    // The reader's computed styles, without Chrome.
+    const svgs = await import(pathToFileURL(join(ROOT, "src", "report_svg.ts")).href);
+    const read = svgs.readSvg(PROBE_9A);
+    const by = (t: string) => read.labels.find((l: { text: string }) => l.text === t);
+    const expect: Array<[string, number, boolean, string]> = [
+      ["plain label", 400, false, "0,0,0"],
+      ["bold label", 700, false, "0,0,0"],
+      ["italic label", 400, true, "0,0,0"],
+      ["red label", 400, false, "0.75,0,0"],
+      ["large label", 400, false, "0,0,0"],
+      ["lighter label", 400, false, "0,0,0"],
+      ["inherited bold", 700, false, "0,0,0"],
+      ["ruled label", 900, true, "0,0,0"],
+      ["bolder blue", 700, false, "0,0,0.8"],
+      ["bolder than bold", 900, false, "0,0,0"],
+    ];
+    for (const [t, weight, italic, fill] of expect) {
+      const l = by(t);
+      assert.ok(l, `no label "${t}"`);
+      assert.equal(l.weight, weight, `${t}: weight`);
+      assert.equal(l.italic, italic, `${t}: italic`);
+      assert.equal(l.fill.map((v: number) => Number(v.toFixed(2))).join(","), fill, `${t}: fill`);
+    }
+    assert.deepEqual(read.unread, []);
+    //    A tspan drawn otherwise inside its text is named, never passed as one style.
+    const mixed = svgs.readSvg(
+      '<svg width="100" height="40"><text x="5" y="20">a <tspan font-weight="bold">b</tspan></text></svg>',
+    );
+    assert.match(mixed.unread.join(), /tspan.*another weight, style or colour/);
+
+    // The judgement, without Chrome: each kind of difference is refused, and named.
+    const label = { text: "x", x: 0, y: 0, anchor: "start", size: 12, e: [1, 0, 0, 1, 0, 0] };
+    const pdfRun = (font: string, fill = [0, 0, 0], size = 12, mode = 0) => ({
+      page: 1,
+      text: "x",
+      x: 0,
+      y: 0,
+      width: 5,
+      size,
+      dx: 1,
+      dy: 0,
+      styles: [{ font, fill, alpha: 1, mode, size }],
+    });
+    const judge = (l: object, r: object) => svgs.labelStyleProblem({ ...label, ...l }, r, 12);
+    const black = { fill: [0, 0, 0], weight: 400, italic: false };
+    assert.equal(judge(black, pdfRun("AAAAAA+ArialMT")), null);
+    assert.equal(judge({ ...black, weight: 700 }, pdfRun("AAAAAA+Arial-BoldMT")), null);
+    assert.equal(
+      judge({ ...black, weight: 700 }, pdfRun("AAAAAA+NoBoldFace", [0, 0, 0], 12, 2)),
+      null,
+      "synthetic bold",
+    );
+    assert.equal(judge({ ...black, italic: true }, pdfRun("AAAAAA+Arial-ItalicMT")), null);
+    //    A face with no italic (Arial-Black, measured) is slanted by Chrome: only its skew says so.
+    const slanted = pdfRun("AAAAAA+Arial-Black");
+    slanted.styles[0] = { ...slanted.styles[0], skew: 0.21 } as (typeof slanted.styles)[0];
+    assert.equal(judge({ ...black, weight: 900, italic: true }, slanted), null, "synthetic italic");
+    assert.match(String(judge({ ...black, weight: 900 }, slanted)), /printed italic/);
+    const refused: Array<[string, object, object, RegExp]> = [
+      [
+        "bold lost",
+        { ...black, weight: 700 },
+        pdfRun("AAAAAA+ArialMT"),
+        /printed not bold \(ArialMT\), its source at weight 700/,
+      ],
+      ["bold added", black, pdfRun("AAAAAA+Arial-BoldMT"), /printed bold/],
+      ["italic lost", { ...black, italic: true }, pdfRun("AAAAAA+ArialMT"), /printed upright/],
+      ["italic added", black, pdfRun("AAAAAA+Arial-ItalicMT"), /printed italic/],
+      [
+        "another colour",
+        { ...black, fill: [0.8, 0, 0] },
+        pdfRun("AAAAAA+ArialMT"),
+        /printed in #000000, its source in #cc0000/,
+      ],
+      [
+        "another size",
+        black,
+        pdfRun("AAAAAA+ArialMT", [0, 0, 0], 13),
+        /printed at 13\.00 pt, its source at 12\.00 pt/,
+      ],
+      [
+        "no style read",
+        black,
+        { ...pdfRun("AAAAAA+ArialMT"), styles: [] },
+        /a style the PDF does not say/,
+      ],
+    ];
+    for (const [what, l, r2, why] of refused) {
+      const got = judge(l, r2);
+      assert.ok(got, `${what}: passed`);
+      assert.match(got, why, what);
+    }
+  },
+);
 
 test(
   "class B, task 18 group 8k part 4: feTile, as Chrome tiles it",

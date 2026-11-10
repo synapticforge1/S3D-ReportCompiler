@@ -136,6 +136,7 @@ import {
   compareSvg,
   filterShows,
   type PdfRun,
+  type PdfRunStyle,
   type PdfShading,
   type PdfClip,
   type PdfMask,
@@ -1267,7 +1268,13 @@ const MIN_TEXT_PT = 2;
 
 async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const doc = await pdfjs.getDocument({ data: await rt.readFile(pdfPath) }).promise;
+  // `fontExtraProperties`: each font keeps its PostScript name (`Arial-BoldMT`), which says the
+  // weight and style Chrome drew a run in (task 18 group 9, measured 2026-11-10); without it
+  // pdf.js drops the name.
+  const doc = await pdfjs.getDocument({
+    data: await rt.readFile(pdfPath),
+    fontExtraProperties: true,
+  }).promise;
   let openDiagrams = 0;
 
   // Each page's text, in order, for the per-report check (compareEachReport): kept beside the
@@ -1485,7 +1492,17 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     const paints: Paint[] = [];
     /** Each image's whole box (not clipped): where its pixels are on the page. */
     const imageBoxes = new Map<string, Box>();
-    const shows: { order: number; box: Box; fill: number[]; alpha: number }[] = [];
+    const shows: {
+      order: number;
+      box: Box;
+      fill: number[];
+      alpha: number;
+      /** Group 9: where its first glyph stands on the page, its font's id, its render mode. */
+      origin: number[];
+      font: string;
+      mode: number;
+    }[] = [];
+    let fontId = "";
     // The text state: the text matrix and line matrix, the font size, the leading.
     let tm = [1, 0, 0, 1, 0, 0];
     let tlm = [1, 0, 0, 1, 0, 0];
@@ -1630,7 +1647,10 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         moveText(Number(args[0]), Number(args[1]));
       } else if (fn === pdfjs.OPS.setLeading) leading = Number(args[0]);
       else if (fn === pdfjs.OPS.nextLine) moveText(0, -leading);
-      else if (fn === pdfjs.OPS.setFont) fontSize = Math.abs(Number(args[1])) || 1;
+      else if (fn === pdfjs.OPS.setFont) {
+        fontSize = Math.abs(Number(args[1])) || 1;
+        fontId = String(args[0]);
+      }
       if (fn === pdfjs.OPS.save) stack.push({ ...gs });
       else if (fn === pdfjs.OPS.restore) gs = stack.pop() ?? gs;
       else if (fn === pdfjs.OPS.transform) gs = { ...gs, m: mul(args as number[], gs.m) };
@@ -1873,7 +1893,16 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           else {
             // Its box: the advance across, from a fifth below the baseline to four fifths above.
             const box = place([0, -0.2 * fontSize, width, 0.8 * fontSize], mul(tm, gs.m));
-            shows.push({ order: i, box, fill: gs.fill, alpha });
+            const om = mul(tm, gs.m);
+            shows.push({
+              order: i,
+              box,
+              fill: gs.fill,
+              alpha,
+              origin: [om[4], om[5]],
+              font: fontId,
+              mode: gs.mode,
+            });
           }
         }
         tm = mul([1, 0, 0, 1, width, 0], tm);
@@ -2154,12 +2183,56 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     // Runs of text for the labels (task 18 group 8b): items on one baseline, along the run's own
     // direction (a label may be rotated), that touch (a gap under a third of their size). A run's
     // width ends at its last glyph: trailing spaces made "0" 60 units wide.
+    // Group 9: each item's font (by its PostScript name) and fill, from the show it was drawn by:
+    // the show of its font whose first glyph stands where the item starts. pdf.js items carry
+    // no colour; the operator walk above has it.
+    const psName = new Map<string, string>();
+    const fontName = (id: string) => {
+      if (!psName.has(id)) {
+        let name = "";
+        try {
+          const store = id.startsWith("g_") ? page.commonObjs : page.objs;
+          name = String((store.get(id) as { name?: unknown } | null)?.name ?? "");
+        } catch {
+          name = "";
+        }
+        psName.set(id, name);
+      }
+      return psName.get(id) ?? "";
+    };
+    const styleOf = (font: string, t: number[]): PdfRunStyle | null => {
+      const [a, b, c, d, x, y] = t;
+      const len = Math.hypot(a, b) || 1;
+      // Its size across the baseline (a slant lengthens the up axis), and how far it leans.
+      const size = Math.abs(a * d - b * c) / len;
+      const skew = (a * c + b * d) / (len * (Math.hypot(c, d) || 1));
+      let best: (typeof shows)[number] | null = null;
+      let near = 0.05 * size;
+      for (const s of shows) {
+        const d = Math.hypot(s.origin[0] - x, s.origin[1] - y);
+        if (s.font === font && d <= near) {
+          best = s;
+          near = d;
+        }
+      }
+      return best
+        ? {
+            font: fontName(best.font),
+            fill: best.fill,
+            alpha: best.alpha,
+            mode: best.mode,
+            size,
+            skew,
+          }
+        : null;
+    };
     for (const raw of items) {
-      const it = raw as { str?: string; transform?: number[]; width?: number };
+      const it = raw as { str?: string; transform?: number[]; width?: number; fontName?: string };
       if (typeof it.str !== "string" || !Array.isArray(it.transform) || it.str === "") continue;
       const [a, b] = it.transform;
       const [x, y] = [it.transform[4], it.transform[5]];
       const size = Math.hypot(it.transform[2], it.transform[3]) || 1;
+      const style = /\S/.test(it.str) ? styleOf(String(it.fontName ?? ""), it.transform) : null;
       const len = Math.hypot(a, b) || 1;
       const [dx, dy] = [a / len, b / len];
       const inked = /\S/.test(it.str);
@@ -2179,6 +2252,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         along - last.width < 0.33 * size + (last.spaces ?? 0)
       ) {
         last.text += it.str;
+        if (style) last.styles = [...(last.styles ?? []), style];
         if (inked) {
           last.width = along + (it.width ?? 0);
           last.spaces = 0;
@@ -2194,6 +2268,7 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           dx,
           dy,
           spaces: 0,
+          styles: style ? [style] : [],
         });
       }
     }

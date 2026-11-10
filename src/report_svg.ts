@@ -361,7 +361,81 @@ export type SvgLabel = {
   anchor: string;
   size: number;
   e: Matrix;
+  /**
+   * Group 9: its fill as RGB 0–1 (`null` for none, `undefined` for a paint server), its weight
+   * (100–900) and whether it is italic.
+   */
+  fill?: number[] | null;
+  weight?: number;
+  italic?: boolean;
 };
+
+/**
+ * A computed `font-weight` (CSS Fonts 4 § 2.2): a keyword or a number; `bolder` / `lighter` from
+ * the parent's weight by the specification's table. Unset or unreadable inherits.
+ */
+export function fontWeight(value: string | undefined, parent: number): number {
+  const v = (value ?? "").trim().toLowerCase();
+  if (v === "" || v === "inherit") return parent;
+  if (v === "normal" || v === "initial") return 400;
+  if (v === "bold") return 700;
+  if (v === "bolder") return parent < 350 ? 400 : parent < 550 ? 700 : 900;
+  if (v === "lighter") return parent < 550 ? 100 : parent < 750 ? 400 : 700;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 && n <= 1000 ? n : parent;
+}
+
+/** A PostScript font name's weight words (`Arial-BoldMT`, `Lato-Black`, `…-SemiBold`). */
+const BOLD_NAME = /bold|black|heavy|semibold|demibold|demi\b|ultra/i;
+
+/**
+ * How a run of PDF text differs from the label it prints (task 18 group 9), or null when it is
+ * drawn as its source says: bold where the source's weight is 600 or more (by the font's name, or
+ * Chrome's synthetic bold -- render mode 2, filled and stroked), italic where its style is italic
+ * or oblique, its fill within 12 of 255 per channel, its size within 2 %. Every piece of the run
+ * is held to it; a piece the PDF could not pair with its show fails, loudly.
+ */
+export function labelStyleProblem(label: SvgLabel, run: PdfRun, size: number): string | null {
+  const styles = run.styles ?? [];
+  if (styles.length === 0) return "printed in a style the PDF does not say";
+  const hex = (c: number[]) =>
+    `#${c
+      .slice(0, 3)
+      .map((v) =>
+        Math.round(v * 255)
+          .toString(16)
+          .padStart(2, "0"),
+      )
+      .join("")}`;
+  const wantBold = (label.weight ?? 400) >= 600;
+  const wantItalic = label.italic ?? false;
+  for (const s of styles) {
+    const name = s.font.replace(/^[A-Z]{6}\+/, "");
+    const bold = BOLD_NAME.test(name) || s.mode === 2;
+    if (bold !== wantBold)
+      return `printed ${bold ? "bold" : "not bold"} (${name || "an unnamed font"}), its source at weight ${label.weight ?? 400}`;
+    // An italic face by its name, or any face slanted (Chrome's synthetic oblique, ~0.2).
+    const italic = /italic|oblique/i.test(name) || Math.abs(s.skew ?? 0) > 0.1;
+    if (italic !== wantItalic)
+      return `printed ${italic ? "italic" : "upright"} (${name || "an unnamed font"}), its source ${wantItalic ? "italic" : "upright"}`;
+    if (Math.abs(s.size - size) > 0.02 * size)
+      return `printed at ${s.size.toFixed(2)} pt, its source at ${size.toFixed(2)} pt`;
+    if (
+      Array.isArray(label.fill) &&
+      [0, 1, 2].some((c) => Math.abs(s.fill[c] - (label.fill as number[])[c]) > 12 / 255)
+    )
+      return `printed in ${hex(s.fill)}, its source in ${hex(label.fill)}`;
+  }
+  return null;
+}
+
+/** A computed `font-style`: italic or oblique (any angle) is italic; unset inherits. */
+export function fontItalic(value: string | undefined, parent: boolean): boolean {
+  const v = (value ?? "").trim().toLowerCase();
+  if (v === "" || v === "inherit") return parent;
+  if (v === "normal" || v === "initial") return false;
+  return v === "italic" || v.startsWith("oblique");
+}
 
 /** One path the PDF paints, in its own coordinates, with the transform it is drawn under. */
 export type PdfVector = {
@@ -408,6 +482,27 @@ export type PdfRun = {
   /** The direction its text runs in, a unit vector (a label may be rotated). */
   dx: number;
   dy: number;
+  /**
+   * Task 18 group 9: how each piece of it is drawn -- the font's PostScript name (`Arial-BoldMT`),
+   * its fill (sRGB 0–1) and alpha, its render mode (2 = filled and stroked: Chrome's synthetic
+   * bold), its size in points. Empty where a piece could not be paired with its show.
+   */
+  styles?: PdfRunStyle[];
+};
+
+/** How one piece of a run of text is drawn (task 18 group 9). */
+export type PdfRunStyle = {
+  font: string;
+  fill: number[];
+  alpha: number;
+  mode: number;
+  size: number;
+  /**
+   * How far its glyphs lean: the cosine between the text's direction and its up axis (0 upright).
+   * Chrome slants a face that has no italic (measured 2026-11-10: `Arial-Black` for weight 900
+   * italic): only the skew says so.
+   */
+  skew?: number;
 };
 
 /** The transform that moves nothing. */
@@ -2118,6 +2213,9 @@ const SVG_PROPS = new Set([
   "stroke-linecap",
   "font-size",
   "text-anchor",
+  // group 9: a label's weight and style
+  "font-weight",
+  "font-style",
   "color",
   "transform",
   "marker-start",
@@ -2894,6 +2992,9 @@ export function readSvg(
     paintOrder: string;
     /** Group 8h: the mask over this subtree (not a CSS inheritance: it applies to what is inside). */
     mask?: SvgMask;
+    /** Group 9: the font's weight (100–900, computed) and whether it is italic or oblique. */
+    weight: number;
+    italic: boolean;
   };
   /**
    * The mask a `mask` value puts on an element whose user space maps to the drawing by `m`
@@ -3332,6 +3433,8 @@ export function readSvg(
       miter: own(n, "stroke-miterlimit", ancestors) ?? inh.miter,
       paintOrder: own(n, "paint-order", ancestors) ?? inh.paintOrder,
       mask: inh.mask,
+      weight: fontWeight(own(n, "font-weight", ancestors), inh.weight),
+      italic: fontItalic(own(n, "font-style", ancestors), inh.italic),
     };
     const filter = filtering.has(n) ? undefined : own(n, "filter", ancestors);
     // Markers inherit; `marker` sets all three.
@@ -3612,21 +3715,57 @@ export function readSvg(
               ? " "
               : k.children.map(words).join("");
         const text = decodeEntities(n.children.map(words).join("")).replace(/\s+/g, " ").trim();
+        // Group 9: how it is drawn -- its fill (currentColor its `color`), weight and style. The
+        // fill is the paint itself (an alpha as a fourth value), `undefined` for a paint server.
+        const fillOf = (fill: string, color: string) => {
+          const p = paintOf(fill, paintOf(color, [0, 0, 0]) ?? [0, 0, 0]);
+          return p === undefined ? undefined : p;
+        };
+        // A tspan inside the text, unplaced, drawn otherwise than its text: one label, two styles.
+        const styled = (t: Node, under: Node[]): boolean =>
+          t.tag === "tspan" &&
+          !t.attrs.has("x") &&
+          !t.attrs.has("y") &&
+          (["fill", "font-weight", "font-style", "color"].some(
+            (p) => own(t, p, under) !== undefined,
+          ) ||
+            t.children.some((c) => styled(c, [...under, t])));
+        if (n.children.some((t) => styled(t, [...ancestors, n])))
+          unread.add("a <text> whose <tspan>s are drawn in another weight, style or colour");
+        if (here.visible && text && fillOf(here.fill, here.color) === undefined)
+          unread.add("a <text> filled with a gradient or a pattern");
         if (text && here.visible)
-          labels.push({ text, x: num("x"), y: num("y"), anchor: here.anchor, size, e: m });
+          labels.push({
+            text,
+            x: num("x"),
+            y: num("y"),
+            anchor: here.anchor,
+            size,
+            e: m,
+            fill: fillOf(here.fill, here.color),
+            weight: here.weight,
+            italic: here.italic,
+          });
         for (const t of n.children) {
           if (t.tag === "tspan" && (t.attrs.has("x") || t.attrs.has("y"))) {
             const tt = decodeEntities(t.children.map(words).join("")).replace(/\s+/g, " ").trim();
             const tx = Number.parseFloat(t.attrs.get("x") ?? n.attrs.get("x") ?? "0");
             const ty = Number.parseFloat(t.attrs.get("y") ?? n.attrs.get("y") ?? "0");
+            const under = [...ancestors, n];
             if (tt && here.visible)
               labels.push({
                 text: tt,
                 x: tx,
                 y: ty,
-                anchor: own(t, "text-anchor", [...ancestors, n]) ?? here.anchor,
+                anchor: own(t, "text-anchor", under) ?? here.anchor,
                 size,
                 e: m,
+                fill: fillOf(
+                  own(t, "fill", under) ?? here.fill,
+                  own(t, "color", under) ?? here.color,
+                ),
+                weight: fontWeight(own(t, "font-weight", under), here.weight),
+                italic: fontItalic(own(t, "font-style", under), here.italic),
               });
           }
         }
@@ -3704,6 +3843,8 @@ export function readSvg(
     join: "miter",
     miter: "4",
     paintOrder: "normal",
+    weight: 400,
+    italic: false,
   };
   // The drawing's viewport in its own coordinates: its width and height, back through its viewBox;
   // a browser clips the drawing to it unless its overflow shows it (group 8d).
@@ -4719,13 +4860,17 @@ export function compareSvg(
       const f = l.anchor === "middle" ? 0.5 : l.anchor === "end" ? 1 : 0;
       return [r.x + r.dx * r.width * f, r.y + r.dy * r.width * f];
     };
-    const found = runs.some((r) => {
+    const found = runs.find((r) => {
       if (!pages.has(r.page) || r.text.replace(/\s+/g, "") !== want) return false;
       const [ax, ay] = anchorOf(r);
       return Math.hypot(ax - x, ay - y) <= 0.6 * size;
     });
-    if (found) placed++;
-    else {
+    if (found) {
+      placed++;
+      // ...and drawn as its source draws it (task 18 group 9): weight, style, colour, size.
+      const wrong = labelStyleProblem(l, found, size);
+      if (wrong) problems.push(`the label "${l.text}" ${wrong}`);
+    } else {
       // Say where it was looked for, and where the nearest run with its text stands.
       const near = runs
         .filter((r) => pages.has(r.page) && r.text.replace(/\s+/g, "") === want)

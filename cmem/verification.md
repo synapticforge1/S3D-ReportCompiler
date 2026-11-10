@@ -241,8 +241,9 @@ the pixel undetermined at 8 bits, it is set aside as doubtful).
 Since #110 specular light from a spot; since #111 `feTile` (Chrome writes it as a tiling fill: not
 in the image count; its 72-dpi cell judged pixel for pixel, with no ±1-pixel range).
 Since #112 stitched noise: every filter primitive the check runs is judged, none refused.
-⚠️ Not yet verified, and named as such: a CSS filter function (`filter="blur(2px)"`). ⚠️ Not yet checked at all (group 9, owner 2026-11-09): text STYLING — weight, colour, size,
-style — of HTML text and of SVG labels.
+⚠️ Not yet verified, and named as such: a CSS filter function (`filter="blur(2px)"`). Since #115 (group 9a) each SVG label is drawn in its source's weight, style, colour and size (the
+PDF font's PostScript name, its fill, its size across the baseline, a slant by its skew). ⚠️ Not
+yet checked (group 9b, owner 2026-11-09): the STYLING of HTML text — weight, colour, size, style.
 ⚠️ Formerly NOT seen: a diagram's drawing (only its
 labels are text); a one-letter unit is caught only beside its number (#92: in
 its run of text, or in the next cell of its row). (A number broken across two lines failed until #93; it is
