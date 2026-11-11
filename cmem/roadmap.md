@@ -1391,7 +1391,15 @@ reads the stored PDF as today.
   2,836,333; PASS. 6 min in all (verification 5 min). Chrome on the same report: 33 min, no PDF.
   ⚠️ **Peak memory 22.4 GB** (the verification holds every page's text, operators and styles at
   once) -- the next thing to bring down; a smaller machine would fail before any time limit.
-- Next: the verifier's memory; tests for the native renderer in the suite (none yet); the visual
+- ✅ **The verifier's memory, 2026-11-11** (owner: "yes"; on `main`: `573ccf6`, `43d9470`): pdf.js's
+  page caches released per page (`page.cleanup()`); painted paths kept only when a report has a
+  drawing (their one reader); run styles shared; a full collection at the phase boundaries where
+  the runtime offers one (`Bun.gc`). **Measured with a full collection at each phase: the
+  verification never holds more than 1.5 GB live** (0.38 / 0.54 / 1.52 / 1.49 / 1.42 GB) -- the
+  rest was garbage the engine let pile up on a machine with memory to spare. **The full 36ft report:
+  peak 22.4 → 16.3 → 8.2 GB, 360 → 314 s, PASS each time.** Left: ~7.5 GB of churn inside the word,
+  number and style checks, ~4.5 GB in the render -- refinement, not a blocker.
+- Next: tests for the native renderer in the suite (none yet); the visual
   comparison (pages rasterised side by side, for the owner); the page-count difference (332 vs
   Chrome's 433 on the cut) measured; then the member reports (maths, SVG).
 
