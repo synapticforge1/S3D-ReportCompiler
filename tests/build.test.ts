@@ -7640,7 +7640,11 @@ test(
         (dir, origin) => {
           // Someone else pushed meanwhile: origin has a commit the bump does not sit on.
           const other = `${dir}-other`;
-          spawnSync("git", ["clone", "-q", origin, other]);
+          // main by name: origin's default branch is whatever ROOT had checked out when it was
+          // cloned, and from another branch the push below was a non-fast-forward, refused
+          // quietly, so origin never moved (found running the suite on a trial branch, 2026-11-11).
+          const cloned = spawnSync("git", ["clone", "-q", "-b", "main", origin, other]);
+          assert.equal(cloned.status, 0, "clone of origin's main");
           spawnSync("git", [
             "-C",
             other,
@@ -7654,7 +7658,8 @@ test(
             "-m",
             "elsewhere",
           ]);
-          spawnSync("git", ["-C", other, "push", "-q", "origin", "HEAD:main"]);
+          const pushed = spawnSync("git", ["-C", other, "push", "-q", "origin", "HEAD:main"]);
+          assert.equal(pushed.status, 0, `the push from elsewhere: ${pushed.stderr}`);
         },
         /it is 1 ahead and 1 behind/,
       ],
