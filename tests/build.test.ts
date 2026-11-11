@@ -233,10 +233,11 @@ test("hidden content in one report: set-wide conservation fails", { timeout: TIM
   );
   has(
     r.out,
-    // Every token of the report is missing (it is hidden whole): 223 / 116 since 2026-11-08,
+    // Every token of the report is missing (it is hidden whole): 268 / 116 since 2026-11-10, when
+    // single letters and `/ | ( ) *` count too (re-check 3, group A); 223 / 116 from 2026-11-08,
     // when words of two letters, symbols (the ASCII operators too) and whole number tokens are
     // counted and a short word keeps its case (class B; 171 / 114, then 214 / 116, 218 / 116).
-    /missing:\s+223 word\(s\), 116 number\(s\)/,
+    /missing:\s+268 word\(s\), 116 number\(s\)/,
     /1 blank page\(s\)/,
     /VERIFICATION FAILED/,
     /- content missing from the PDF/,
@@ -259,8 +260,9 @@ test(
       /per-report: 1 of 2 report\(s\) missing their own content/,
       // Every token of the hidden row, each one occurrence short, since class B re-check 2 counts
       // occurrences (presence saw only the 6 words that appear in no other row); its operators
-      // and its numbers' neighbours too since task 18 item 2 (24 words, 7 numbers before).
-      /b_report\.html: 26 word\(s\), 21 number\(s\) -- design \(3 of 4\), moment \(2 of 6\), of \(26 of 27\)/,
+      // and its numbers' neighbours too since task 18 item 2 (24 words, 7 numbers before); its
+      // single letters and `/ | ( ) *` since re-check 3 group A (26 words before).
+      /b_report\.html: 31 word\(s\), 21 number\(s\) -- design \(3 of 4\), moment \(2 of 6\), of \(26 of 27\)/,
       /VERIFICATION FAILED/,
       /- content missing from its own report: b_report\.html/,
     );
@@ -2412,6 +2414,108 @@ test(
   },
 );
 
+test(
+  "member reports first, any other report after them (owner, 2026-11-10)",
+  { timeout: TIMEOUT },
+  async () => {
+    // "the 'member_x_report' files are the primary target": a report of its own in the set (a
+    // SkyCiv zip held '36ftGatePostCheckCaseA SkyCiv Report.html') is merged after them, however
+    // its name sorts -- by a leading digit it came first.
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    assert.deepEqual(
+      core.sortReportNames([
+        "36ft Gate Check.html",
+        "member_10_report.html",
+        "Zeta check.html",
+        "member_2_report.html",
+        "dir/member_1_report.html",
+      ]),
+      [
+        "dir/member_1_report.html",
+        "member_2_report.html",
+        "member_10_report.html",
+        "36ft Gate Check.html",
+        "Zeta check.html",
+      ],
+    );
+    // Built: the verifier's own reading order agrees (it fails a package out of order), and the
+    // check of its own report is last.
+    const dir = join(work, "order-members-first");
+    mkdirSync(dir, { recursive: true });
+    const copy = (from: string, to: string) =>
+      writeFileSync(join(dir, to), readFileSync(join(SAMPLES, from)));
+    copy("member_0_report.html", "member_0_report.html");
+    copy("member_1_report.html", "36ft Gate Check.html");
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    hasNot(r.out, /out of reading order/);
+    const html = readFileSync(join(dir, "out", "c.html"), "utf8");
+    assert.ok(
+      html.indexOf("MEMBER #1 DESIGN REPORT") < html.indexOf("MEMBER #2 DESIGN REPORT"),
+      "the member report is not first",
+    );
+    // The stored PDF has no structure tree (owner, 2026-11-10: "Drop it" -- two thirds of a
+    // table-heavy PDF), and the verification above read that very file and passed.
+    has(r.out, /untagged: \d+ structure-tree object\(s\) dropped/);
+    const { PDFDocument, PDFName } = await import("pdf-lib");
+    const stored = await PDFDocument.load(readFileSync(join(dir, "out", "c.pdf")));
+    assert.equal(stored.catalog.get(PDFName.of("StructTreeRoot")), undefined, "a structure tree");
+    assert.equal(stored.getPages()[0].node.get(PDFName.of("StructParents")), undefined);
+  },
+);
+
+test("class B re-check 3, group A: maths' single letters and operators are counted", async () => {
+  // The fresh re-check (2026-11-10) found `F_y` → `F_u`, `P` → `M`, `/` → `*` and a dropped
+  // parenthesis all passed: single letters and those operators were no tokens. The page texts below
+  // are as the reader gives MathJax's output (a script apart from its base; at TeX's floor size,
+  // joined to it -- measured; a tall parenthesis in pieces -- measured on a real zip report).
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const source =
+    "<html><head><script>MathJax.Hub.Config({tex2jax:{inlineMath:[['[mathin]','[mathin]']],displayMath:[['[math]','[math]']]}});</script></head><body>" +
+    "<h2>MEMBER #1 DESIGN REPORT</h2><p>Yield [mathin]F_{y}=50[mathin] ratio [mathin]P_{r}/P_{c}=0.5[mathin]</p>" +
+    "<p>stress [math]F_{cr}=0.658^{\\frac{F_{y}}{F_{e}}}[math] term [math]\\left(\\frac{a}{b}\\right)^{2}[math]</p>" +
+    // a script in a script, in line (h at script size, k at scriptscript: apart) and in a display
+    // fraction (its terms at text size: n at script, q at scriptscript: apart)
+    "<p>nested [mathin]g^{h_{k}}[mathin] shown [math]\\frac{m^{n_{q}}}{2}[math]</p></body></html>";
+  const expected = core.extractSourceTokens([source]);
+  const page = (text: string) => ({
+    text,
+    pages: 1,
+    imagePaints: 0,
+    diagramTitlePages: [],
+    diagramAxisPages: [],
+    headingPages: [1],
+    blankPages: [],
+  });
+  const good =
+    "MEMBER #1 DESIGN REPORT Yield F y = 50 ratio P r / P c = 0.5 stress F cr = 0.658 Fy Fe term ⎛ a b ⎝ ⎞ ⎠ 2 nested g h k shown m n q 2";
+  assert.deepEqual(core.compareAgainstPdf(expected, page(good), 1).failures, [], "the clean page");
+  const clean = core.compareEachReport([source], [good]);
+  assert.ok(clean.checked, clean.reason);
+  assert.deepEqual(clean.reports[0].missingWords, [], "the clean page, counted");
+  for (const [what, edit, token] of [
+    ["F_y printed F_u", good.replace("F y = 50", "F u = 50"), "y"],
+    ["P printed M", good.replace("P r /", "M r /"), "P"],
+    ["/ printed *", good.replace("P r / P c", "P r * P c"), "/"],
+    ["a parenthesis dropped", good.replace("⎛ a b ⎝ ⎞ ⎠", "a b ⎞ ⎠"), "("],
+    ["a fraction's letter changed", good.replace("⎛ a b", "⎛ a c"), "b"],
+    // a lost letter that a printed WORD still holds: a letter is counted standing alone
+    ["y lost, a word holds one", good.replace("F y = 50", "F = 50 mystery"), "y"],
+    // a script printed at its base's size where TeX sets it smaller
+    ["an in-line script set at its base's size", good.replace("g h k", "g hk"), "h"],
+    ["a display fraction's script set at its base's size", good.replace("m n q", "m nq"), "n"],
+  ] as const) {
+    // Counted per report (the document's own check asks presence; a count is the report's).
+    const r = core.compareEachReport([source], [edit]);
+    assert.ok(r.checked, r.reason);
+    const missing: string[] = r.reports[0].missingWords;
+    assert.ok(
+      missing.some((w: string) => w === token || w.startsWith(`${token} `)),
+      `${what}: "${token}" not named (${missing.join(", ") || "nothing missing"})`,
+    );
+  }
+});
+
 test("review 3, group E: every graphics and structure check can fail", async () => {
   // Two of the four checks verification.md lists had no failing case: deleting any of these lines
   // left every test green (2026-11-07 review). Each failure planted alone, on a clean observation.
@@ -2643,8 +2747,12 @@ test("review 3, group A: nothing is added, hidden or carried between reports", a
 
   // 10. The verification expects no column spec after `[t]`, and no reference's key.
   const words = (s: string) => [...core.extractSourceTokens([doc(s)]).words];
-  assert.deepEqual(words("[mathin]\\begin{array}[t]{lcr} a \\end{array}[mathin]"), []);
-  assert.deepEqual(words("[mathin]x \\label{eq:stress}[mathin] see \\eqref{eq:stress}"), ["see"]);
+  //    (the content -- `a`, `x` -- is expected: single letters count since re-check 3 group A)
+  assert.deepEqual(words("[mathin]\\begin{array}[t]{lcr} a \\end{array}[mathin]"), ["a"]);
+  assert.deepEqual(words("[mathin]x \\label{eq:stress}[mathin] see \\eqref{eq:stress}").sort(), [
+    "see",
+    "x",
+  ]);
   //     A definition's name and argument count are not expected; its body is (review 4, B1).
   assert.deepEqual(words("[mathin]\\newcommand{\\Mn}[1]{Moment}\\Mn{1}[mathin]"), ["moment"]);
 
@@ -3422,8 +3530,10 @@ test("class B, re-check 2: every occurrence, no line-split words, capitals only 
     missing("[mathin]t_{w}[mathin] <p>web tw</p>", "t w\nweb").includes("tw (1 of 2)"),
     "a deleted tw hid behind maths",
   );
-  //    A Greek symbol does not touch a Latin word: MathJax prints `\phi P_{c}` as "ϕPc".
-  assert.deepEqual(missing("<p>Pc</p>[mathin]\\phi P_{c}[mathin]", "Pc\nϕPc"), []);
+  //    A Greek symbol does not touch a Latin word: MathJax prints `\phi P_{c}` as "ϕP c" -- the
+  //    Greek letter against its operand, the script apart at its smaller size (the reader's text;
+  //    the samples' `2\phi P_c` passes with single letters counted, re-check 3 group A).
+  assert.deepEqual(missing("<p>Pc</p>[mathin]\\phi P_{c}[mathin]", "Pc\nϕP c"), []);
   //    A heading's own capitals are its own token's, not a lower-case word's set upper-case.
   assert.ok(
     missing(
@@ -6588,11 +6698,18 @@ test("review 4, groups A and B: the next template's constructs bake as a browser
     "\\newtagform{brackets}[\\textbf]{[}{]}\\usetagform{brackets}",
     "\\Newextarrow{\\xr}{5,10}{0x21C0}",
     "\\DeclarePairedDelimiter\\abs{\\lvert}{\\rvert}\\mathtoolsset{centercolon}",
-    "\\begin{multlined}[t][10cm] a \\end{multlined}",
   ]) {
     const t = tokens(`[mathin]${s}[mathin]`);
     assert.deepEqual([...t.numbers, ...t.words], [], `${s}: a setting was expected`);
   }
+  //    An environment's settings are not expected; its content is (a single letter counts since
+  //    re-check 3 group A).
+  const multlined = tokens("[mathin]\\begin{multlined}[t][10cm] a \\end{multlined}[mathin]");
+  assert.deepEqual(
+    [...multlined.numbers, ...multlined.words],
+    ["a"],
+    "multlined: a setting expected",
+  );
 });
 
 test(

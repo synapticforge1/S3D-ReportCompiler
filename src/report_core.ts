@@ -2923,6 +2923,16 @@ export function decodeEntities(s: string): string {
   );
 }
 
+/** A stretched delimiter's top piece, as the delimiter it draws. */
+const STRETCHED_TOP: Record<string, string> = {
+  "⎛": "(",
+  "⎞": ")",
+  "⎡": "[",
+  "⎤": "]",
+  "⎧": "{",
+  "⎫": "}",
+};
+
 /**
  * Text normalised for comparison, the same way on both sides: the minus sign and the dashes a
  * value is written with read as "-", and the Latin ligatures a PDF text layer can hold (`ﬁ`) as
@@ -2937,6 +2947,11 @@ function normalizeText(text: string): string {
       .replace(/[ﬀ-ﬆ]/g, (c) => c.normalize("NFKC"))
       // Characters that draw nothing: a zero-width space or joiner inside `12​.5` split it.
       .replace(/[​-‍⁠﻿]/g, "")
+      // A delimiter MathJax stretches past its largest size is drawn in pieces -- `⎛` over `⎝` for
+      // a tall `(` (measured in a real zip report, 2026-11-10): its top piece reads as the
+      // delimiter, the others as nothing, once `(` became a counted token (re-check 3, group A).
+      .replace(/[⎛⎞⎡⎤⎧⎫]/g, (c) => STRETCHED_TOP[c] ?? c)
+      .replace(/[⎜⎝⎟⎠⎢⎣⎥⎦⎨⎩⎪⎬⎭]/g, "")
   );
 }
 
@@ -2960,14 +2975,21 @@ function wordTokens(text: string): string[] {
   const words = (t.match(/\p{L}{2,}/gu) ?? []).map((w) =>
     [...w].length <= 3 ? w : w.toLowerCase(),
   );
+  // A single Latin letter standing alone -- maths' identifiers above all (`F_y` → F and y, `P = 0.5`)
+  // -- with its case: `P` → `M`, `F_y` → `F_u`, `P_r`/`P_c` passed while only two-letter words
+  // counted (class B re-check 3, group A). Alone means no Latin letter either side; a Greek one may
+  // touch it, as maths prints `\phi P_c` as "ϕPc".
+  const letters = t.match(/(?<!\p{Script=Latin})\p{Script=Latin}(?!\p{Script=Latin})/gu) ?? [];
   // A symbol: anything but an ASCII character, a decimal digit, a space or an invisible format
   // character -- so `²` (category No, not a digit) is one, and so is every non-ASCII LETTER on its
   // own: a single `λ` is no two-letter word, but λ → φ changes the quantity.
   // And the ASCII operators a value's meaning turns on, each counted (task 18 item 2): a `<` → `>`,
   // a `+` → `-`, an empty cell's `-` → `+` changes a check, and none was a token. Every `-` counts,
   // hyphens too, on both sides alike (maths minus signs read as `-`, normalizeText).
-  const symbols = t.match(/[^\p{Nd}\s\p{Cf}\p{ASCII}]|[<>=+%-]/gu) ?? [];
-  return [...words, ...symbols];
+  // Re-check 3, group A: `/`, `|`, `(`, `)` and `*` too -- `Pr/Pc` → `Pr*Pc`, an absolute value's
+  // bars, `\left( … \right)` dropped all passed.
+  const symbols = t.match(/[^\p{Nd}\s\p{Cf}\p{ASCII}]|[<>=+%\-/|()*]/gu) ?? [];
+  return [...words, ...letters, ...symbols];
 }
 
 /**
@@ -3041,7 +3063,13 @@ function countWord(
    */
   claimed: number | null = 0,
 ): number {
-  // A symbol in the text as printed, case and all: `Δ` is not `δ`.
+  // A symbol in the text as printed, case and all: `Δ` is not `δ`. A single Latin letter is a
+  // word, not a symbol: counted where it stands alone (re-check 3, group A), as it was tokenised.
+  if (/^\p{Script=Latin}$/u.test(word)) {
+    return (
+      exact.match(new RegExp(`(?<!\\p{Script=Latin})${word}(?!\\p{Script=Latin})`, "gu")) ?? []
+    ).length;
+  }
   if ([...word].length === 1 || !/\p{L}/u.test(word)) return exact.split(word).length - 1;
   // What may not touch the word: a letter -- but for a word not in Greek, not a Greek one. Maths
   // prints a symbol against its operand (`\phi P_{c}` as "ϕPc"), so "Pc" stands there whole.
@@ -3280,6 +3308,103 @@ function printedProse(text: string, runs = false): string {
             ? ` ${name} `
             : " ",
     );
+}
+
+/**
+ * A script printed against its base where TeX can make it no smaller (re-check 3, group A): TeX
+ * sets text, script and scriptscript sizes; a `^` / `_` raises one level, a fraction's terms one
+ * (none for a display fraction at text level), and scriptscript is the floor. A script whose base
+ * is already at scriptscript prints at the base's own size, and pdf.js gives the two as ONE item:
+ * `0.658^{\frac{F_{y}}{F_{e}}}` prints "Fy" and "Fe" (measured 2026-11-10), where one level up
+ * `F_y` prints apart ("F", then a smaller "y"). Each maths span of `text` -- by the report's own
+ * delimiters, display or in-line -- is rewritten with such scripts joined to their bases.
+ */
+function glueFloorScripts(text: string, maths: Delim[]): string {
+  if (maths.length === 0) return text;
+  /** `tex` with its floor scripts joined, read at `level` (0 text, 1 script, 2 scriptscript). */
+  const walk = (tex: string, level: number, display: boolean): string => {
+    let out = "";
+    let i = 0;
+    /** The group at `at` ("{" … "}"), or the one token there; [content, end, wasGroup]. */
+    const arg = (at: number): [string, number, boolean] => {
+      let j = at;
+      while (j < tex.length && tex[j] === " ") j++;
+      if (tex[j] === "{") {
+        let depth = 0;
+        for (let k = j; k < tex.length; k++) {
+          if (tex[k] === "\\") k++;
+          else if (tex[k] === "{") depth++;
+          else if (tex[k] === "}" && --depth === 0) return [tex.slice(j + 1, k), k + 1, true];
+        }
+        return [tex.slice(j + 1), tex.length, true];
+      }
+      if (tex[j] === "\\") {
+        const name = /^\\(?:[a-zA-Z]+|.)/.exec(tex.slice(j))?.[0] ?? "\\";
+        return [name, j + name.length, false];
+      }
+      return [tex[j] ?? "", j + 1, false];
+    };
+    while (i < tex.length) {
+      const c = tex[i];
+      if (c === "^" || c === "_") {
+        const [content, end, group] = arg(i + 1);
+        const inner = walk(content, Math.min(level + 1, 2), display);
+        out += level >= 2 ? inner : group ? `${c}{${inner}}` : `${c}${inner}`;
+        i = end;
+        continue;
+      }
+      const command = /^\\[a-zA-Z]+/.exec(tex.slice(i))?.[0];
+      if (command && /^\\[dt]?frac$/.test(command)) {
+        const terms =
+          command === "\\dfrac" || (display && level === 0 && command !== "\\tfrac")
+            ? level
+            : Math.min(level + 1, 2);
+        const [num, afterNum] = arg(i + command.length);
+        const [den, afterDen] = arg(afterNum);
+        out += `${command}{${walk(num, terms, display)}}{${walk(den, terms, display)}}`;
+        i = afterDen;
+        continue;
+      }
+      if (command) {
+        out += command;
+        i += command.length;
+        continue;
+      }
+      if (c === "\\") {
+        out += tex.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (c === "{") {
+        const [content, end] = arg(i);
+        out += `{${walk(content, level, display)}}`;
+        i = end;
+        continue;
+      }
+      out += c;
+      i++;
+    }
+    return out;
+  };
+  // Every span of every pair, longest opener first (`[mathin]` before `[math]`).
+  const pairs = [...maths].sort((a, b) => b.open.length - a.open.length);
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    let found: { at: number; d: Delim } | null = null;
+    for (const d of pairs) {
+      const at = text.indexOf(d.open, i);
+      if (at >= 0 && (found === null || at < found.at)) found = { at, d };
+    }
+    if (!found) break;
+    const from = found.at + found.d.open.length;
+    const to = text.indexOf(found.d.close, from);
+    if (to < 0) break;
+    out += text.slice(i, from) + walk(text.slice(from, to), 0, found.d.display);
+    out += found.d.close;
+    i = to + found.d.close.length;
+  }
+  return out + text.slice(i);
 }
 
 /** Each sub- or superscript as its own token, as it prints: `F_yS` is F, y and S; `M_{nz}` M and nz. */
@@ -3676,6 +3801,11 @@ export function extractSourceTokens(sources: string[]): SourceTokens {
  * reads SkyCiv's `['\[','\]']` as "[" and "]" (roadmap task 18 item 1).
  */
 function declaredDelimiters(raw: string): [string, string][] {
+  return declaredMaths(raw).map((d) => [d.open, d.close]);
+}
+
+/** {@link declaredDelimiters} with each pair's kind: display maths or in-line. */
+function declaredMaths(raw: string): Delim[] {
   const scripts = [
     ...raw.replace(/<!--[\s\S]*?-->/g, "").matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi),
   ]
@@ -3702,8 +3832,9 @@ function declaredDelimiters(raw: string): [string, string][] {
       (_m, u?: string, x?: string, c?: string) =>
         u || x ? String.fromCharCode(parseInt((u ?? x) as string, 16)) : (c ?? ""),
     );
-  const pairs: [string, string][] = [];
-  for (const key of scripts.matchAll(/(?<![\w$])["']?(?:inline|display)Math["']?\s*:\s*/g)) {
+  const pairs: Delim[] = [];
+  for (const key of scripts.matchAll(/(?<![\w$])["']?(inline|display)Math["']?\s*:\s*/g)) {
+    const display = key[1] === "display";
     const at = (key.index ?? 0) + key[0].length;
     let array = scripts[at] === "[" ? bracket(at) : "";
     const name = /^[A-Za-z_$][\w$]*/.exec(scripts.slice(at))?.[0];
@@ -3721,7 +3852,7 @@ function declaredDelimiters(raw: string): [string, string][] {
       const open = jsString(p[2]);
       const close = jsString(p[4]);
       if (open && close && !(open.length === 1 && "[](){}<>".includes(open)))
-        pairs.push([open, close]);
+        pairs.push({ open, close, display });
     }
   }
   return pairs;
@@ -3979,8 +4110,13 @@ function sourceTally(raw: string): {
     // `<sub>`/`<sup>`, which prints apart -- still separates.
     // ...in the document's own <html> and <body>, every start tag as the report's script leaves it.
     body = `${outerTags[0]}${outerTags[1]}${html.replace(startTagRe(), (t: string) => revealedTag(t, revealed))}</body></html>`;
-    const text = dropNonPrintingTex(
-      decodeEntities(html.replace(SOURCE_TAG, (tag) => (INLINE_TAG.test(tag) ? "" : " "))),
+    // Scripts set at the floor size joined to their bases, as they print ({@link glueFloorScripts}).
+    const maths = declaredMaths(raw);
+    const text = glueFloorScripts(
+      dropNonPrintingTex(
+        decodeEntities(html.replace(SOURCE_TAG, (tag) => (INLINE_TAG.test(tag) ? "" : " "))),
+      ),
+      maths,
     );
 
     // Command and delimiter names are notation, not content: a reader never sees "dfrac". They
@@ -4021,14 +4157,17 @@ function sourceTally(raw: string): {
     // its own pairs with the number in the cell before it (`<td>12</td><td>m</td>` is "12\tm",
     // a CELL pair, which the page need only hold on one line, {@link cellPairCount}); a row's end
     // still ends the run (task 18 item 2, its last gap).
-    const runs = dropNonPrintingTex(
-      decodeEntities(
-        html
-          .replace(/\s+/g, " ")
-          .replace(SOURCE_TAG, (tag) =>
-            INLINE_TAG.test(tag) ? "" : CELL_TAG.test(tag) ? "\t" : "\n",
-          ),
+    const runs = glueFloorScripts(
+      dropNonPrintingTex(
+        decodeEntities(
+          html
+            .replace(/\s+/g, " ")
+            .replace(SOURCE_TAG, (tag) =>
+              INLINE_TAG.test(tag) ? "" : CELL_TAG.test(tag) ? "\t" : "\n",
+            ),
+        ),
       ),
+      maths,
     );
     pairs = neighbourTally(
       isolateScripts(printedProse(unDelimited(runs), true)).replace(/[{}]/g, " "),
@@ -4691,9 +4830,21 @@ export function findBrokenReferences(reports: BakedReport[]): ReferenceCheck {
   return { references, unresolved, broken };
 }
 
-/** Order report filenames the way a reader expects: member_2 before member_10. */
+/** A SkyCiv member report's file name (`member_12_report.html`), the set's primary content. */
+const MEMBER_REPORT = /^member_\d+_report\.html?$/i;
+
+/**
+ * Order report filenames the way a reader expects: SkyCiv's member reports first, member_2 before
+ * member_10; then every other report, in the same natural order (🔒 owner, 2026-11-10: "the
+ * 'member_x_report' files are the primary target" -- a report of its own in the set, such as a
+ * separate check, is merged after them, however its name sorts).
+ */
 export function sortReportNames(names: string[]): string[] {
-  return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const member = (n: string) => MEMBER_REPORT.test(n.replace(/^.*[\\/]/, ""));
+  return [...names].sort(
+    (a, b) =>
+      Number(!member(a)) - Number(!member(b)) || a.localeCompare(b, undefined, { numeric: true }),
+  );
 }
 
 // ---------------------------------------------------------------------------

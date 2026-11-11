@@ -1165,7 +1165,44 @@ calc(…)` misread (should be named unread). Checked fine: a fraction's terms sw
 `<`, text off-page or clipped, `scaleY(0.12)`, an SVG faded or moved over text, MathJax's CSS
 dropped, `font-family: Symbol`; no false FAIL from soft hyphens, `<wbr>`, rem / % / larger, hsl /
 named / `rgb(/ 80%)`, group opacity, small-caps, bolder, `<sup>`, the shorthand, `\color` in
-`\text`. CSS `url()` backgrounds not re-probed (still listed). Awaiting the owner's go-ahead.
+`\text`. CSS `url()` backgrounds not re-probed (still listed). **Owner: "yes"** — fix all, in the
+order A (maths structure + styling), B (image placement), C (orientation), D (cover, overprint,
+decoration), E (values against their cells), F (per-occurrence styles; the two false FAILs).
+Group A part 1 done (committed 2026-11-11 with the member-first order and the dropped structure
+tree; `bun run test` 95 pass, 2 skip (POSIX), 0 fail, 497 s): single Latin letters and `/ | ( ) *` counted;
+a script at TeX's floor size read joined to its base (`0.658^{\frac{F_y}{F_e}}` prints "Fy");
+a stretched delimiter's pieces (`⎛`…`⎝`) read as the delimiter (a real zip report).
+
+🔁 **A second real zip, 2026-11-10 (owner's Downloads; client data, built only in scratch
+copies):** the 75 member reports + `36ftGatePostCheckCaseA SkyCiv Report.html`, a DIFFERENT
+kind of SkyCiv report: no "MEMBER #n DESIGN REPORT" heading, no maths, ~200 tables with 360,000
+rows (3.1 M cells, 60 MB), one image taller than a page, ~7,400 pages. Chrome ran past 30 min.
+**Owner's decisions:** "the 'member_x_report' files are the primary target" — member reports
+first, any other report merged LAST (done: `sortReportNames` and the verifier's own
+`readingOrder`); test the 36ft report and the member reports SEPARATELY, combine once all works;
+"36ft report first" before groups A–F continue; an image taller than a page SCALED to fit one
+page; "compressing the pdf file is important for the stored size" — the tagged-PDF structure
+tree DROPPED when packing ("Drop it": 22.3 → 7.4 MB on 891 table pages; samples 0.99 → 0.83 MB;
+verification passes on the untagged PDF). Measured render: 3 % of the report 15 s, 6 % 43 s, 12 %
+89 s (891 pages; 117 MB rendered, 22 MB stored). **To do for it:** report starts found without
+the member heading (each report's own first words as its signature); the tall image; a render
+limit that grows with the document. 🔒 **Owner, 2026-11-10: "just remember the fidelity of the
+document is paramount"** — each change here is held to it: what prints must be the source's,
+proved by the verification on the stored PDF; a size saving may drop only what does not print
+(the structure tree), and the one printed change accepted (an over-tall image scaled to a page)
+keeps its pixels the source's and must be verified whole on its page.
+🔒 **Owner, 2026-11-10 (later): the 36ft report moved back out of the zip, to the documents folder
+where it normally resides — "keeping them separate tests is a better idea for now. at least until
+all of the bugs in the code are worked out."** So two test sets, never mixed until then: the
+member reports (the 75-report zip) and the 36ft report on its own (a scratch copy; client data,
+never in the repo).
+
+⏸️ **Paused 2026-11-10 (owner: "pause here for today"); resumed 2026-11-11 (owner: "lets proceed
+from where we left off yesterday").** (1) ✅ committed 2026-11-11 (above). (2) the 36ft report on
+its own: report starts without the member heading (each report's first words as its signature),
+an over-tall image scaled to one page (measure how Chrome resolves a page height under its
+shrink-to-fit first), a render limit that grows with the document (its full-size timing was
+running at the pause); (3) then group A parts 2–3 (maths roles; maths styling), and B–F.
 
 **Next step, in order (owner: fixes not limits):** the items still named "not verified", each
 measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-measured):

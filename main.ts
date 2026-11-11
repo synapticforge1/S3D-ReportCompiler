@@ -95,7 +95,7 @@
 // ---------------------------------------------------------------------------
 
 import { inflateSync } from "node:zlib";
-import { PDFDocument } from "pdf-lib";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRef, PDFStream } from "pdf-lib";
 
 import {
   assembleDocument,
@@ -1248,6 +1248,10 @@ type PdfDetail = {
  * case and accents aside. 0 when a reader could not tell them apart -- either order is right.
  */
 function readingOrder(a: string, b: string): number {
+  // SkyCiv's member reports first, every other report after them (owner, 2026-11-10: "the
+  // 'member_x_report' files are the primary target"; a report of its own is merged last).
+  const isMember = (n: string) => /^member_\d+_report\.html?$/i.test(n.replace(/^.*[\\/]/, ""));
+  if (isMember(a) !== isMember(b)) return isMember(a) ? -1 : 1;
   const pa = a.split(/(\d+)/);
   const pb = b.split(/(\d+)/);
   for (let k = 0; k < Math.min(pa.length, pb.length); k++) {
@@ -1274,6 +1278,44 @@ function readingOrder(a: string, b: string): number {
 const MIN_CONTRAST = 3;
 /** The smallest text that may be printed, in points: the samples' smallest is 3.61 (subscripts). */
 const MIN_TEXT_PT = 2;
+
+/**
+ * Chrome's tagged-PDF structure tree removed, with every object only it reached; returns how many
+ * objects went. 🔒 Owner, 2026-11-10 ("Drop it"; "compressing the pdf file is important for the
+ * stored size"): the tree is an entry per table, row and cell -- two thirds of a table-heavy
+ * report's stored PDF (measured: 22.3 → 7.4 MB on 891 pages of SkyCiv tables; the 13 samples 0.99
+ * → 0.83 MB). The cost is a screen reader's table navigation. The verification does not use the
+ * tree: the tags it reads (marked content, #93) stay in the page content, and the stored PDF is
+ * what it reads. pdf-lib writes every object it holds, reachable or not, so the tree's objects are
+ * swept by reachability from the trailer.
+ */
+function dropStructureTree(pdf: PDFDocument): number {
+  pdf.catalog.delete(PDFName.of("StructTreeRoot"));
+  pdf.catalog.delete(PDFName.of("MarkInfo"));
+  for (const page of pdf.getPages()) page.node.delete(PDFName.of("StructParents"));
+  const ctx = pdf.context;
+  const keep = new Set<string>();
+  const stack: unknown[] = [ctx.trailerInfo.Root, ctx.trailerInfo.Info];
+  while (stack.length > 0) {
+    const o = stack.pop();
+    if (o instanceof PDFRef) {
+      const k = o.toString();
+      if (keep.has(k)) continue;
+      keep.add(k);
+      stack.push(ctx.lookup(o));
+    } else if (o instanceof PDFDict) for (const [, v] of o.entries()) stack.push(v);
+    else if (o instanceof PDFArray) for (const v of o.asArray()) stack.push(v);
+    else if (o instanceof PDFStream) stack.push(o.dict);
+  }
+  let dropped = 0;
+  for (const [ref] of ctx.enumerateIndirectObjects()) {
+    if (!keep.has(ref.toString())) {
+      ctx.delete(ref);
+      dropped++;
+    }
+  }
+  return dropped;
+}
 
 /** An SVG element that draws something (looked for outside definitions: `<defs>`, clips …). */
 const DRAWS =
@@ -3204,6 +3246,8 @@ try {
 
   let final = rendered;
   if (optimize) {
+    const untagged = dropStructureTree(pdf);
+    if (untagged > 0) console.log(`  untagged: ${untagged} structure-tree object(s) dropped`);
     final = await pdf.save({ useObjectStreams: true });
     await rt.writeFile(candidatePdf, final);
     console.log(
