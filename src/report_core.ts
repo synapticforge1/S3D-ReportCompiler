@@ -4079,12 +4079,15 @@ function readSourceTally(raw: string): {
     // baker's mistakes. An external image cannot render hermetically anyway,
     // and the bake step warns separately if any survives. Tags read quote-aware: a ">" inside
     // an earlier attribute's value hid the src from `[^>]*`.
+    // A value quoted or NOT: `src=data:image/jpeg;base64,…` is HTML too, and the 36ft model
+    // report writes its three screenshots so -- they were neither counted nor compared, and Chrome's
+    // right output failed as "an image split across a page break" (2026-11-11).
     const drawn = (html.match(SOURCE_TAG) ?? []).filter((t) =>
-      /^<img\b[\s\S]*?\ssrc\s*=\s*["']data:/i.test(t),
+      /^<img\b[\s\S]*?\ssrc\s*=\s*["']?data:/i.test(t),
     );
     // An SVG image paints no image: Chrome draws it as paths (measured, task 18 8c), so it is not
     // in the count of image paints; it is checked as a drawing, with the rest of {@link drawnImages}.
-    expectedImages += drawn.filter((t) => !/\ssrc\s*=\s*["']data:image\/svg\+xml/i.test(t)).length;
+    expectedImages += drawn.filter((t) => !/\ssrc\s*=\s*["']?data:image\/svg\+xml/i.test(t)).length;
     // Each top-level inline SVG as a reader sees it, in order, for the geometry check
     // ({@link drawnSvgs}): nesting balanced, so an inner <svg> stays inside its outer one.
     // Since task 18 8f its raster `<image>`s are image paints too (Chrome paints one as an image,
@@ -4114,7 +4117,7 @@ function readSourceTally(raw: string): {
           .map((t) => revealedTag(t, revealed)),
       ]);
       expectedImages += (svg.match(SOURCE_TAG) ?? []).filter((t) =>
-        /^<image\b(?:"[^"]*"|'[^']*'|[^"'>])*?\s(?:xlink:)?href\s*=\s*["']data:(?!image\/svg\+xml)/i.test(
+        /^<image\b(?:"[^"]*"|'[^']*'|[^"'>])*?\s(?:xlink:)?href\s*=\s*["']?data:(?!image\/svg\+xml)/i.test(
           t,
         ),
       ).length;
@@ -4124,7 +4127,9 @@ function readSourceTally(raw: string): {
     for (const t of drawn) {
       // To the quote that opened it: an SVG image's URI holds the other quote (`xmlns='…'`), and
       // cut at it the image read as an empty drawing that passed (task 18 8c, by mutation).
-      const src = /\ssrc\s*=\s*(["'])(data:(?:(?!\1)[\s\S])*)\1/i.exec(t)?.[2];
+      // Unquoted, it runs to the first space or `>`.
+      const m = /\ssrc\s*=\s*(?:(["'])(data:(?:(?!\1)[\s\S])*)\1|(data:[^\s>]*))/i.exec(t);
+      const src = m?.[2] ?? m?.[3];
       if (src !== undefined) imageSources.push(decodeEntities(src));
     }
 

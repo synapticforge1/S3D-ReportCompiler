@@ -2517,6 +2517,33 @@ test("class B re-check 3, group A: maths' single letters and operators are count
 });
 
 test(
+  "an image whose src is not quoted is counted and compared (2026-11-11)",
+  { timeout: TIMEOUT },
+  async () => {
+    // The 36ft model report writes `<img class=… src=data:image/jpeg;base64,…>`: the verifier read
+    // quoted values only, so its screenshots were neither counted nor compared, and Chrome's right
+    // output failed as "an image was split across a page break".
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    const uri = "data:image/png;base64,iVBORw0KGgo=";
+    for (const q of ['"', "'", ""]) {
+      const doc = `<html><body><img alt=x src=${q}${uri}${q}></body></html>`;
+      assert.deepEqual(core.drawnImages(doc), [uri], `src quoted with [${q}]`);
+      assert.equal(core.extractSourceTokens([doc]).expectedImages, 1, `src quoted with [${q}]`);
+    }
+    // Built: a sample's image unquoted, counted, and compared pixel for pixel.
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const unquoted = sample.replace(/(<img\b[^>]*?\ssrc=)"(data:[^"]*)"/i, "$1$2");
+    assert.notEqual(unquoted, sample, "the sample has no quoted data image to unquote");
+    const dir = join(work, "unquoted-src");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "member_0_report.html"), unquoted);
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /images:\s+1 of 1 identical to their sources/, /PASS/);
+  },
+);
+
+test(
   "a report without a member heading is found by its own opening (2026-11-11)",
   { timeout: TIMEOUT },
   async () => {
