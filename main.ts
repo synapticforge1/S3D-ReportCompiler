@@ -1368,7 +1368,13 @@ function dropStructureTree(pdf: PDFDocument): number {
 const DRAWS =
   /<(path|rect|circle|ellipse|line|polyline|polygon|text|image|use|foreignObject)(?=[\s/>])/i;
 
-async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
+async function readPdf(
+  pdfPath: string,
+  /** Keep every painted path for the drawing check: only when some report has a drawing. */
+  keepVectors: boolean,
+): Promise<PdfObservations & PdfDetail> {
+  /** Each distinct style a run is drawn in, shared ({@link PdfRunStyle}). */
+  const runStyles = new Map<string, PdfRunStyle>();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   // `fontExtraProperties`: each font keeps its PostScript name (`Arial-BoldMT`), which says the
   // weight and style Chrome drew a run in (task 18 group 9, measured 2026-11-10); without it
@@ -2107,7 +2113,10 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
         const op = Number(args[0]);
         const fills = FILLS.has(op);
         const strokes = STROKES.has(op);
-        if (!clipPending && !unseen && (fills || strokes)) {
+        // Kept only when a report has a drawing to compare them with: the drawing check is their
+        // one reader (the cover and contrast checks run per page, above). The full 36ft report,
+        // which has none, held ~900,000 of them (2026-11-11).
+        if (keepVectors && !clipPending && !unseen && (fills || strokes)) {
           // A pattern paint stands in place of the colour (the colour last set is stale under it).
           const fillPattern =
             gs.fillShading !== undefined ||
@@ -2330,16 +2339,17 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
           near = d;
         }
       }
-      return best
-        ? {
-            font: fontName(best.font),
-            fill: best.fill,
-            alpha: best.alpha,
-            mode: best.mode,
-            size,
-            skew,
-          }
-        : null;
+      if (!best) return null;
+      // One object per distinct style, shared by every run drawn in it (2026-11-11: one per run,
+      // the full 36ft report's 2.3 M runs held millions of copies of a handful of styles).
+      const font2 = fontName(best.font);
+      const key = `${font2}|${best.fill.join(",")}|${best.alpha}|${best.mode}|${size}|${skew}`;
+      let shared = runStyles.get(key);
+      if (!shared) {
+        shared = { font: font2, fill: best.fill, alpha: best.alpha, mode: best.mode, size, skew };
+        runStyles.set(key, shared);
+      }
+      return shared;
     };
     for (const raw of items) {
       const it = raw as { str?: string; transform?: number[]; width?: number; fontName?: string };
@@ -2434,6 +2444,10 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
     // count will not equal the number of sources. The verification replaces these with the core's
     // report starts, which also finds a report that prints no member heading (2026-11-11).
     if (/MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/i.test(text)) obs.headingPages.push(p);
+    // Everything needed from the page is in `obs`: pdf.js's caches for it (its operator list,
+    // fonts, text) go now, not at the end of the document (2026-11-11: ~40 % of what reading the
+    // 36ft report kept, measured on a cut).
+    page.cleanup();
   }
 
   return obs;
@@ -3343,7 +3357,10 @@ try {
     // group 8i), which the source's own count of images does not know: added here, per report.
     const filteredImages = sources.map(filteredElements);
     expected.expectedImages += filteredImages.reduce((a, b) => a + b, 0);
-    const observed = await readPdf(candidatePdf);
+    const observed = await readPdf(
+      candidatePdf,
+      sources.some((s) => drawnSvgs(s).length > 0),
+    );
     // Where each report starts, by its member heading or, when it prints none, by its own opening
     // words (2026-11-11): the core finds them, and every check below cuts the PDF there.
     const located = findReportStarts(sources, observed.pageTexts);
