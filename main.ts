@@ -127,6 +127,7 @@ import {
   sniffImageType,
   sortReportNames,
   svgStyleWarnings,
+  bakeContainment,
   bakeRemovals,
   bakeWarnings,
   cssWarnings,
@@ -2834,6 +2835,8 @@ const removed = [
   [bakeRemovals.atRules, "CSS at-rule(s) that cannot be scoped"],
   [bakeRemovals.bodySheetsMoved, "body <style> block(s) moved into the scoped sheet"],
   [bakeRemovals.noscript, "<noscript> element(s), which a browser does not draw"],
+  [bakeContainment.strayDivEnds, "stray </div>(s) that would have closed a report's wrapper"],
+  [bakeContainment.closedAtEnd, "element(s) a report left open, closed at its end"],
 ] as const;
 if (removed.some(([n]) => n > 0)) {
   console.log(

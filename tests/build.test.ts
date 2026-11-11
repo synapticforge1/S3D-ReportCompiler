@@ -2650,6 +2650,59 @@ test(
 );
 
 test(
+  "a report closes only what it opened: a stray </div>, a table left open (2026-11-11)",
+  { timeout: TIMEOUT },
+  async () => {
+    // The 36ft model report has a stray </div> near its end: standing alone it closes nothing; in
+    // the combined document it closed the report's styled wrapper, and 637 words printed black at
+    // 16 px. Found by the style check on the report's first complete build.
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    core.resetBakeState();
+    const baked = core.bakeBody(
+      "<html><body><div>a</div></div><p>b</p><table><tr><td><div>c</td></tr></table><table><tr><td>d",
+      "r0-",
+    );
+    assert.equal(core.bakeContainment.strayDivEnds, 1, baked);
+    assert.match(baked, /<div>a<\/div><p>b<\/p>/, "the stray </div> was not dropped");
+    // a cell's own div is closed by its cell; the table left open is closed at the report's end
+    assert.match(baked, /<td>d<\/td><\/table>\s*$/, "what the report left open was not closed");
+
+    // Built through Chrome: the text after a stray </div> keeps its report's styles, and a report
+    // after one that left a table open is not drawn inside it.
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const dir = join(work, "contain-report");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      sample.replace(
+        /<\/body>/i,
+        `</div><p style="color:#8a1c1c;font-weight:bold">Strayend lastword</p></body>`,
+      ),
+    );
+    writeFileSync(
+      join(dir, "member_1_report.html"),
+      readFileSync(join(SAMPLES, "member_1_report.html"), "utf8").replace(
+        /<\/body>/i,
+        "<table><tr><td>Unclosed cellword</body>",
+      ),
+    );
+    writeFileSync(
+      join(dir, "member_2_report.html"),
+      readFileSync(join(SAMPLES, "member_2_report.html")),
+    );
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(
+      r.out,
+      /removed:.*1 stray <\/div>\(s\) that would have closed a report's wrapper/,
+      /element\(s\) a report left open, closed at its end/,
+      /per-report: 3\/3/,
+      /PASS/,
+    );
+  },
+);
+
+test(
   "an image whose src is not quoted is counted and compared (2026-11-11)",
   { timeout: TIMEOUT },
   async () => {
