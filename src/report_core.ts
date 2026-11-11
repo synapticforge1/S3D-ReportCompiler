@@ -2010,6 +2010,8 @@ export function resetBakeState(): void {
   }
   delimSignatures.clear();
   tallyCache.clear();
+  bakeContainment.strayDivEnds = 0;
+  bakeContainment.closedAtEnd = 0;
   seenOpeners.clear();
   skippedDelims.clear();
   svgStyleWarnings.clear();
@@ -2199,6 +2201,136 @@ function stripActiveAttrs(tag: string): string {
   return head + rest;
 }
 
+/**
+ * What {@link containReport} changed, per build (reset by {@link resetBakeState}): end tags that
+ * would have closed the report's own wrapper, dropped; elements the report left open, closed at
+ * its end.
+ */
+export const bakeContainment: { strayDivEnds: number; closedAtEnd: number } = {
+  strayDivEnds: 0,
+  closedAtEnd: 0,
+};
+
+/** Elements at which HTML's default scope stops: an end tag never closes past one of them. */
+const SCOPE_BOUNDARY = new Set([
+  "table",
+  "td",
+  "th",
+  "caption",
+  "object",
+  "template",
+  "marquee",
+  "applet",
+]);
+
+/**
+ * A report's body closed on itself, as it parses standing alone. Each report is wrapped in a
+ * `<div class="report-sheet">` that carries its scoped styles ({@link assembleDocument}); a
+ * `</div>` with no `<div>` of the report open closes nothing standing alone -- a browser ignores
+ * it -- but in the combined document it closes the WRAPPER, and the rest of the report prints
+ * outside its styles. The 36ft model report has one, near its end (`… no members are in
+ * compression. </div>`): 637 words printed black at 16 px instead of #1c2533 at 12 px, found by
+ * the style check on its first complete build (2026-11-11). And what a report leaves open runs to
+ * its document's end standing alone, but here would swallow the wrapper's `</div>` (a table left
+ * open keeps it out of scope) and nest the next report inside it.
+ *
+ * So, tracking only what decides it -- the report's open `<div>`s and the elements HTML's scope
+ * stops at (a table, a cell, a caption …), SVG and MathML read as the foreign content they are --
+ * a `</div>` with no `<div>` of the report in scope is dropped, and every element left open is
+ * closed at the report's end. Counted in {@link bakeContainment}.
+ */
+function containReport(body: string): string {
+  type Open = { tag: string };
+  const stack: Open[] = [];
+  let out = "";
+  let at = 0;
+  const tag = /<!--[\s\S]*?(?:-->|$)|<(\/?)([a-zA-Z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^"'>])*)>/g;
+  const closeTo = (i: number) => {
+    stack.length = i;
+  };
+  const nearest = (names: (t: string) => boolean, stopAt: (t: string) => boolean) => {
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (names(stack[i].tag)) return i;
+      if (stopAt(stack[i].tag)) return -1;
+    }
+    return -1;
+  };
+  const inTable = (t: string) => t === "table";
+  for (let m = tag.exec(body); m; m = tag.exec(body)) {
+    if (m[2] === undefined) continue; // a comment
+    const name = m[2].toLowerCase();
+    const end = m[1] === "/";
+    const selfClosing = /\/\s*$/.test(m[3]);
+    if (!end) {
+      if (
+        name === "svg" ||
+        name === "math" ||
+        name === "textarea" ||
+        name === "title" ||
+        name === "xmp"
+      ) {
+        // Foreign or raw content: passed over to its own end, nesting balanced.
+        if (selfClosing) continue;
+        const close = new RegExp(`<(/?)${name}(?=[\\s/>])(?:"[^"]*"|'[^']*'|[^"'>])*>`, "gi");
+        close.lastIndex = tag.lastIndex;
+        let depth = 1;
+        let resume = body.length;
+        for (let c = close.exec(body); c; c = close.exec(body)) {
+          if (name === "svg" || name === "math") depth += c[1] ? -1 : /\/\s*>$/.test(c[0]) ? 0 : 1;
+          else if (c[1]) depth = 0;
+          if (depth === 0) {
+            resume = c.index + c[0].length;
+            break;
+          }
+        }
+        if (resume === body.length) stack.push({ tag: name }); // unclosed: closed at the end
+        tag.lastIndex = resume;
+        continue;
+      }
+      // A cell, row or section ends the cell open in its table.
+      if (/^(td|th|tr|tbody|thead|tfoot)$/.test(name)) {
+        const cell = nearest((t) => t === "td" || t === "th", inTable);
+        if (cell >= 0) closeTo(cell);
+      }
+      if (name === "div" || SCOPE_BOUNDARY.has(name)) stack.push({ tag: name });
+      continue;
+    }
+    if (name === "div") {
+      const open = nearest(
+        (t) => t === "div",
+        (t) => SCOPE_BOUNDARY.has(t),
+      );
+      if (open < 0) {
+        // Standing alone, ignored -- so dropping it is the same; here it could close the wrapper.
+        out += body.slice(at, m.index);
+        at = tag.lastIndex;
+        bakeContainment.strayDivEnds++;
+        continue;
+      }
+      closeTo(open);
+    } else if (SCOPE_BOUNDARY.has(name)) {
+      const open =
+        name === "table"
+          ? nearest(inTable, () => false)
+          : nearest(
+              (t) => t === name,
+              (t) => t === "table" && name !== "table",
+            );
+      if (open >= 0) closeTo(open);
+    } else if (/^(tr|tbody|thead|tfoot)$/.test(name)) {
+      const cell = nearest((t) => t === "td" || t === "th", inTable);
+      if (cell >= 0) closeTo(cell);
+    }
+  }
+  out += body.slice(at);
+  // What the report leaves open, closed at its end: innermost first.
+  for (let i = stack.length - 1; i >= 0; i--) {
+    out += `</${stack[i].tag}>`;
+    bakeContainment.closedAtEnd++;
+  }
+  return out;
+}
+
 /** Attributes whose value is a URL a browser may navigate to or load. */
 const URL_ATTRS = new Set(["href", "xlink:href", "src", "action", "formaction", "data"]);
 
@@ -2365,7 +2497,7 @@ export function bakeBody(src: string, prefix: string): string {
 
   // Every diagram sheet left is one svgSheetsToMove judged hoistable, so none may survive: one
   // that did would apply, unscoped, to every report on the page. Refused, not left (§ practices 2).
-  const out = portableSvg(body);
+  const out = containReport(portableSvg(body));
   for (const { start, end } of outerSvgs(out)) {
     const left = [...out.slice(start, end).matchAll(STYLE_BLOCK)].filter(
       (m) => styleBlockKind(m[1]) !== "ignored",
