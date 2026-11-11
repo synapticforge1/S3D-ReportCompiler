@@ -1421,7 +1421,8 @@ reads the stored PDF as today.
   breaks (SkyCiv's `<span class="subheading">`), kept with what follows (`Flow.keeping` /
   `hasContent`: a box is not moved off a page holding only its own heading); a table's header rows
   (all `th`) kept with its first row. **The cut: 371 pages (Chrome 433; 332 before), no page holding
-  only a heading, PASS.** Tests: the model report (no lone heading; the subheading with its header
+  only a heading, PASS.** The full report: 7,161 pages (6,969 before), 24.68 MB, PASS in 328 s,
+  peak 8.9 GB. Tests: the model report (no lone heading; the subheading with its header
   rows and first row; no page ending in a header row) and the header rows at the lengths that
   force them; each rule's mutant caught.
 - Next: the visual
