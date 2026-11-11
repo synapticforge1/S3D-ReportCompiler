@@ -107,7 +107,16 @@ takes those numbers; the stray `0.0.0-stage` was deprecated, then unpublished, b
 Newest first. Run ids are `publish.yml` runs unless named. "Attested" = JSR `rekorLogId` present;
 npm provenance = `dist.attestations.provenance`.
 
-### 1.5.0 — in progress, 2026-11-10 · minor
+### 1.5.0 — 2026-11-10 · minor · tag `v1.5.0` (annotated, made by CI) on `3be72b4`
+
+**Read back:** the third attempt's run on `3be72b4`, all six jobs green (Rekor and npm
+provenance read back fatally in CI); `verify-release 1.5.0 --npm --github` → exit 0 (JSR
+attested, Rekor `3797459486`; npm with provenance; the Release at the commit JSR got, npm's copy
+of it); installed from npm into a scratch folder: `--version` → 1.5.0, `VERSION` 1.5.0,
+`drawnSvgAncestors` and `readerBody` exported. ⚠️ The gate limit the 1.5.1 request found stays
+open: `bun run bump patch` on an unreleased version is judged by the requested level against
+the last tag, not by the version it makes.
+
 
 **What changes:** group 9 — the report's text and every diagram label printed in the weight,
 style, colour and size their sources give (known-issues #115–#117); `drawnSvgAncestors` and
@@ -120,7 +129,7 @@ private `Selector`; the owner pasted the log) — fixed in `5b0e107`; (2) CI on 
 CANCELLED, so `checks` refused that run too. The owner then asked for 1.5.1; the bump gate
 refused a PATCH: it judges the requested level against v1.4.0 (floor minor), not knowing 1.5.0
 was never released (a gate limit, recorded). Owner's choice: **release 1.5.0** — this memory
-commit's push re-arms it (`jsr.json` 1.5.0, untagged).
+commit's push re-armed it (`jsr.json` 1.5.0, untagged), and it went through.
 
 ### 1.4.0 — 2026-11-10 · minor · tag `v1.4.0` (annotated, made by CI) on `2138fa8`
 
