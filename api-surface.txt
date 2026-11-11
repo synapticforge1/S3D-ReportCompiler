@@ -25,6 +25,7 @@ symbol	.	PdfObservations	typeAlias	export type PdfObservations = { text: string;
 symbol	.	PerReportResult	typeAlias	export type PerReportResult = { checked: boolean; reason: string; reports: ReportConservation[]; }
 symbol	.	ReferenceCheck	typeAlias	export type ReferenceCheck = { references: number; unresolved: number; broken: { report: number; target: string; }[]; }
 symbol	.	ReportConservation	typeAlias	export type ReportConservation = { report: number; missingWords: string[]; missingNumbers: string[]; }
+symbol	.	ReportStarts	typeAlias	export type ReportStarts = { starts: number[]; reason: ""; } | { starts: null; reason: string; }
 symbol	.	SourceTokens	typeAlias	export type SourceTokens = { words: Set<string>; numbers: Set<string>; expectedImages: number; }
 symbol	.	VERSION	variable	export declare const VERSION = "<VERSION>"
 symbol	.	VerificationResult	typeAlias	export type VerificationResult = { missingWords: string[]; missingNumbers: string[]; leftoverLatex: string[]; splitDiagrams: number[]; failures: string[]; }
@@ -49,6 +50,7 @@ symbol	.	drawnSvgs	function	export declare function drawnSvgs(source: string): s
 symbol	.	extractSourceTokens	function	export declare function extractSourceTokens(sources: string[]): SourceTokens
 symbol	.	findBrokenReferences	function	export declare function findBrokenReferences(reports: BakedReport[]): ReferenceCheck
 symbol	.	findLeftoverMath	function	export declare function findLeftoverMath(baked: string): string[]
+symbol	.	findReportStarts	function	export declare function findReportStarts(sources: string[], pageTexts: string[]): ReportStarts
 symbol	.	inlineLinkedImages	function	export declare function inlineLinkedImages(html: string, found: Map<string, string>): string
 symbol	.	linkedImages	function	export declare function linkedImages(body: string): string[]
 symbol	.	mathStats	variable	export declare const mathStats: { converted: number; failed: number; firstFailure: string; }
