@@ -1336,6 +1336,18 @@ function recodeJpegs(pdf: PDFDocument): { count: number; before: number; after: 
   return { count, before, after };
 }
 
+/**
+ * A full garbage collection between the build's phases, where the runtime offers one (Bun's
+ * `Bun.gc`); nothing elsewhere. Measured on the full 36ft model report (2026-11-11): the
+ * verification never holds more than 1.5 GB live, but on a machine with memory to spare the engine
+ * let garbage pile up to a 16.3 GB peak; collecting at the four phase boundaries brought the peak
+ * to 7.7 GB. Node and Deno expose no such hint without a flag; their engine collects harder as it
+ * nears its own heap limit, which 1.5 GB live is well under.
+ */
+function collectGarbage(): void {
+  (globalThis as { Bun?: { gc(force: boolean): void } }).Bun?.gc(true);
+}
+
 function dropStructureTree(pdf: PDFDocument): number {
   pdf.catalog.delete(PDFName.of("StructTreeRoot"));
   pdf.catalog.delete(PDFName.of("MarkInfo"));
@@ -3320,6 +3332,7 @@ try {
   }
 
   console.log(`  rendered: ${(rendered.length / 1e6).toFixed(2)} MB`);
+  collectGarbage(); // the render's working memory, before the packing and the verification
 
   // Parse once. The page count is available from the same document we repack,
   // so re-loading the saved bytes just to count pages would parse it twice.
@@ -3357,10 +3370,12 @@ try {
     // group 8i), which the source's own count of images does not know: added here, per report.
     const filteredImages = sources.map(filteredElements);
     expected.expectedImages += filteredImages.reduce((a, b) => a + b, 0);
+    collectGarbage();
     const observed = await readPdf(
       candidatePdf,
       sources.some((s) => drawnSvgs(s).length > 0),
     );
+    collectGarbage(); // reading every page's operators and text leaves most of it behind
     // Where each report starts, by its member heading or, when it prints none, by its own opening
     // words (2026-11-11): the core finds them, and every check below cuts the PDF there.
     const located = findReportStarts(sources, observed.pageTexts);
@@ -3424,6 +3439,7 @@ try {
     let drawingsCompared = 0;
     let stylesCompared = 0;
     let stylesInSources = 0;
+    collectGarbage(); // the word and number checks' working text, before the images and styles
     if (observed.headingPages.length === entries.length) {
       const starts = observed.headingPages;
       for (let i = 0; i < sources.length; i++) {
