@@ -107,6 +107,21 @@ takes those numbers; the stray `0.0.0-stage` was deprecated, then unpublished, b
 Newest first. Run ids are `publish.yml` runs unless named. "Attested" = JSR `rekorLogId` present;
 npm provenance = `dist.attestations.provenance`.
 
+### 1.5.0 — in progress, 2026-11-10 · minor
+
+**What changes:** group 9 — the report's text and every diagram label printed in the weight,
+style, colour and size their sources give (known-issues #115–#117); `drawnSvgAncestors` and
+`readerBody` added (the README's 1.5.0 row).
+**How:** owner "push then release"; level asked, given: minor. Release notes `f690633`; `bun run
+bump minor` (v1.4.0's samples PASS) → `bump to v1.5.0` (`accd4c4`); `bun run release --no-wait`
+pushed `main`. **Refused twice, as designed — nothing tagged, nothing published (JSR 404):**
+(1) CI's JSR docs lint failed on `accd4c4` (group 9b's exported `Rule` / `matches` named the
+private `Selector`; the owner pasted the log) — fixed in `5b0e107`; (2) CI on `5b0e107` was
+CANCELLED, so `checks` refused that run too. The owner then asked for 1.5.1; the bump gate
+refused a PATCH: it judges the requested level against v1.4.0 (floor minor), not knowing 1.5.0
+was never released (a gate limit, recorded). Owner's choice: **release 1.5.0** — this memory
+commit's push re-arms it (`jsr.json` 1.5.0, untagged).
+
 ### 1.4.0 — 2026-11-10 · minor · tag `v1.4.0` (annotated, made by CI) on `2138fa8`
 
 **What changed:** 6 API additions — `linkedImages`, `inlineLinkedImages` (an image a report links
