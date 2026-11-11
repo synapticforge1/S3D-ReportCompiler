@@ -1,6 +1,7 @@
 cli-env	CHROME_PATH
 cli-env	S3D_CHROME_NO_SANDBOX
 cli-env	S3D_CHROME_TIMEOUT_MS
+cli-env	S3D_RENDERER
 cli-flag	--help
 cli-flag	--keep-html
 cli-flag	--no-keep-html
@@ -91,6 +92,7 @@ symbol	./runtime	listNames	function	export declare function listNames(dir: strin
 symbol	./runtime	makeTempDir	function	export declare function makeTempDir(prefix: string): Promise<string>
 symbol	./runtime	mkdirp	function	export declare function mkdirp(dir: string): Promise<void>
 symbol	./runtime	readFile	function	export declare function readFile(file: string): Promise<Uint8Array>
+symbol	./runtime	readRenderFonts	function	export declare function readRenderFonts(): Promise<RenderFonts>
 symbol	./runtime	readTextFile	function	export declare function readTextFile(file: string): Promise<string>
 symbol	./runtime	realPath	function	export declare function realPath(target: string): Promise<string>
 symbol	./runtime	removeQuietly	function	export declare function removeQuietly(target: string, recursive?: boolean): Promise<void>
