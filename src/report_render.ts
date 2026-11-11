@@ -1614,6 +1614,14 @@ class Flow {
   private pending: number[] = [];
   /** Something is on this page (margins after an UNFORCED break are truncated before it). */
   placed = false;
+  /**
+   * Something on this page that is not kept with what follows it (a heading, its rule): moving a
+   * block on to the next page gains nothing on a page that holds only its own heading -- it would
+   * leave the heading alone there (owner, 2026-11-11, choosing how breaks behave: "I agree with B").
+   */
+  hasContent = false;
+  /** What is placed now is kept with what follows it. */
+  keeping = false;
   /** The page was begun by a forced break (or is the first): margins at its top are kept. */
   forced = true;
   /** A forced break waits for the next piece. */
@@ -1651,6 +1659,7 @@ class Flow {
     this.page++;
     this.y = 0;
     this.placed = false;
+    this.hasContent = false;
     this.forced = forced;
     this.breakNext = false;
   }
@@ -1672,6 +1681,7 @@ class Flow {
     this.y = at.y + h;
     if (this.y > this.limit) throw new TooTall();
     this.placed = true;
+    if (!this.keeping) this.hasContent = true;
     for (let k = this.open.length - 1; k >= 0 && this.open[k].start === null; k--) {
       this.open[k].start = at;
     }
@@ -1785,25 +1795,108 @@ class Layout {
   /** The children of `e` in a block formatting context, at `x`, `width` wide. */
   blockChildren(e: Elem, x: number, width: number, flow: Flow, sink: (p: number) => Sink): void {
     let run: (Elem | string)[] = [];
+    // A box that avoids breaks inside it keeps its leading text with what follows it: if it must
+    // break, not straight after its opening line -- its title (SkyCiv's `<span class="subheading">`
+    // before its table was left alone on a page; owner, 2026-11-11: "I agree with B").
+    let lead = this.styled(e).avoidInside;
     const flush = () => {
-      if (run.length) this.inline(e, run, x, width, flow);
+      if (run.length) {
+        const was = flow.keeping;
+        if (lead) flow.keeping = true;
+        this.inline(e, run, x, width, flow);
+        flow.keeping = was;
+      }
       run = [];
     };
-    for (const k of e.kids) {
+    const kids = e.kids;
+    for (let i = 0; i < kids.length; i++) {
+      const k = kids[i];
       if (typeof k === "string") {
         run.push(k);
         continue;
       }
       const s = this.styled(k);
       if (s.display === "none") continue;
-      if (this.isBlock(k)) {
+      if (this.isBlock(k) && /^h[1-6]$/.test(k.tag)) {
+        // A heading, and the rules right after it, kept with what follows (owner, 2026-11-11:
+        // "I agree with B" -- Chrome strands a heading at a page's foot, or alone on a page).
         flush();
+        lead = false;
+        const rules: number[] = [];
+        let next = i + 1;
+        for (; next < kids.length; next++) {
+          const n = kids[next];
+          if (typeof n === "string") {
+            if (n.trim() === "") continue;
+            break;
+          }
+          if (this.styled(n).display === "none") continue;
+          if (n.tag === "hr") rules.push(next);
+          else break;
+        }
+        this.keepWithNext(
+          k,
+          rules.map((r) => kids[r] as Elem),
+          kids[next],
+          e,
+          width,
+          flow,
+        );
+        const was = flow.keeping;
+        flow.keeping = true;
+        this.block(k, x, width, flow, sink);
+        for (const r of rules) this.block(kids[r] as Elem, x, width, flow, sink);
+        flow.keeping = was;
+        i = rules.length ? rules[rules.length - 1] : i;
+      } else if (this.isBlock(k)) {
+        flush();
+        lead = false;
         this.block(k, x, width, flow, sink);
       } else if (/^table-/.test(s.display)) {
         this.refuse.add(`a <${k.tag}> outside a table`);
       } else run.push(k);
     }
     flush();
+  }
+
+  /**
+   * Before a heading: start the next page unless the heading, its rules and the start of what
+   * follows share this one. The start is the whole of a following box that avoids breaks inside it
+   * (it would move on alone otherwise), else up to four of its lines. Not on a page that holds only
+   * kept content, and not before a heading that starts a page of its own anyway.
+   */
+  keepWithNext(
+    heading: Elem,
+    rules: Elem[],
+    next: Elem | string | undefined,
+    parent: Elem,
+    width: number,
+    flow: Flow,
+  ): void {
+    if (!flow.hasContent || this.styled(heading).breakBefore === "page") return;
+    const room = flow.room();
+    let need = 0;
+    for (const b of [heading, ...rules]) {
+      const h = this.measure(b, width, room);
+      if (h === null) return; // taller than the room: nothing to keep together
+      need += h + px(this.styled(b).margin[2], width);
+    }
+    const lines = 4 * this.lineHeightOf(this.styled(parent));
+    let start = 0;
+    if (next !== undefined && typeof next !== "string" && this.isBlock(next)) {
+      const ns = this.styled(next);
+      const h = this.measure(next, width, Math.max(0, room - need));
+      start =
+        h === null
+          ? ns.avoidInside
+            ? Number.POSITIVE_INFINITY
+            : lines
+          : ns.avoidInside
+            ? h
+            : Math.min(h, lines);
+      start += px(ns.margin[0], width);
+    } else if (next !== undefined) start = lines;
+    if (need + start > room) flow.newPage(false);
   }
 
   /** A block-level box: margins, borders, padding, its content, its breaks. */
@@ -1838,10 +1931,13 @@ class Layout {
       else if (ml === "auto") left = cbWidth - used - right;
     }
     flow.margin(px(mt, cbWidth));
-    // Keep the box whole when it fits a page and asks to (its own break-inside, or a table's).
-    if (s.avoidInside && flow.placed) {
-      const h = this.measure(e, cbWidth);
-      if (h !== null && h > flow.room()) flow.newPage(false);
+    // `break-inside: avoid`, as Blink applies it: a box that does not fit in the room left goes on
+    // to the next page, even one taller than a page (a break inside it is then allowed). Not off
+    // a page that holds only its own heading ({@link Flow.hasContent}).
+    if (s.avoidInside && flow.hasContent) {
+      const room = flow.room();
+      const h = this.measure(e, cbWidth, room);
+      if (h === null || h > room) flow.newPage(false);
     }
     const boxX = x + left;
     this.reaches(boxX + width + pad[1] + pad[3] + bw[1] + bw[3], () => `a <${e.tag}> box`);
@@ -1894,9 +1990,9 @@ class Layout {
     }
   }
 
-  /** The height `e` takes, laid out alone, or null past a page (a break inside it is allowed). */
-  measure(e: Elem, cbWidth: number): number | null {
-    const flow = new Flow(Number.POSITIVE_INFINITY, () => NULL_SINK, this.pageH);
+  /** The height `e` takes, laid out alone, or null past `limit` (a page, unless said). */
+  measure(e: Elem, cbWidth: number, limit = this.pageH): number | null {
+    const flow = new Flow(Number.POSITIVE_INFINITY, () => NULL_SINK, limit);
     const s = this.styled(e);
     try {
       // The box from its border edge: no breaks before or after it, its own margins not counted.
@@ -2633,19 +2729,24 @@ class Layout {
       return { boxes, h };
     };
 
-    // Kept whole when it fits a page (the table's own break-inside: avoid).
-    // Rows measured ahead are kept for the layout; the measuring stops once past a page.
+    // The table's own `break-inside: avoid`, as Blink applies it (see {@link block}): moved on to
+    // the next page when it does not fit in the room left. Rows measured ahead are kept for the
+    // layout; the measuring stops once past the room.
     const measured: { boxes: CellBox[]; h: number }[] = [];
     const top = collapse ? 0 : tb[0] + tpad[0] + sp;
     const bottom = collapse ? 0 : tb[2] + tpad[2] + sp;
-    if (ts.avoidInside && flow.placed) {
+    if (ts.avoidInside && flow.hasContent) {
+      const room = flow.room();
       let total = top + bottom;
-      for (let ri = 0; ri < g.rows.length && total <= flow.height; ri++) {
+      for (let ri = 0; ri < g.rows.length && total <= room; ri++) {
         measured.push(measureRow(ri));
         total += measured[ri].h + (collapse ? 0 : sp);
       }
-      if (total <= flow.height && total > flow.room()) flow.newPage(false);
+      if (total > room) flow.newPage(false);
     }
+    /** A row of header cells only (`th`): kept with the row after it. */
+    const isHeader = (ri: number) =>
+      g.cells[ri].length > 0 && g.cells[ri].every((c) => c.tag === "th");
     // Collapsed borders drawn as a grid, each line once (owner, 2026-11-11: "the resulting pdf is
     // minimized"): a row's top edges merged along it where they are alike; each column's edge
     // merged down the page; a row's bottom edge drawn only where no row below shares it -- the
@@ -2697,6 +2798,21 @@ class Layout {
     flow.open.push(entry);
     if (top > 0) flow.place(top);
     for (let ri = 0; ri < g.rows.length; ri++) {
+      // Header rows keep with the first row after them: none is left at a page's foot apart from
+      // the body it heads (they were: "X Y Z" at one page's foot, "ID Coordinate…" atop the next).
+      if (isHeader(ri) && (ri === 0 || !isHeader(ri - 1)) && flow.hasContent) {
+        let need = 0;
+        let j = ri;
+        for (; j < g.rows.length && isHeader(j); j++) {
+          measured[j] ??= measureRow(j);
+          need += measured[j].h;
+        }
+        if (j < g.rows.length) {
+          measured[j] ??= measureRow(j);
+          need += measured[j].h;
+        }
+        if (need > flow.room()) flow.newPage(false);
+      }
       const { boxes, h } = measured[ri] ?? measureRow(ri);
       measured[ri] = undefined as unknown as { boxes: CellBox[]; h: number }; // let it go
       if (h > flow.height) this.refuse.add("a table row taller than a page");

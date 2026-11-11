@@ -2753,7 +2753,10 @@ hr { border-top: 2px solid #103E50; margin-top: 5px; }
 .job-result-table td, .job-result-table th { text-align: right; font-size: 12px; padding: 1px 4px 1px 10px; }
 .job-result-table td { font-family: "Courier New", Courier, monospace; border: 1px solid #ddd; }
 .job-result-table tr:nth-child(even) { background: rgba(212, 212, 212, 0.59); }
-.job-result-table td.max { background-color: #ff5d5d; } .job-result-table td.min { background-color: #9ad873; }`;
+.job-result-table td.max { background-color: #ff5d5d; } .job-result-table td.min { background-color: #9ad873; }
+table, td, tr, th { page-break-inside: avoid !important; }
+.job-result-container { page-break-inside: avoid; }
+.subheading { font-weight: bold; font-size: 16px; width: 100%; display: inline-block; }`;
   const row = (i: number) =>
     `<tr${i % 25 === 0 ? ' class="row-divider"' : ""}><td>${i}</td><td>${(i * 0.137).toFixed(3)}</td>` +
     `<td class="${i % 7 === 0 ? "max" : "min"}">${(i * -2.71).toFixed(2)}</td><td>${(i * 31.4).toFixed(1)}</td></tr>`;
@@ -2766,7 +2769,9 @@ hr { border-top: 2px solid #103E50; margin-top: 5px; }
 <div><span class="lc-subheading">Load Case: D</span></div>
 <p>WARNING:<br>1) Buckling analysis accuracy reduced.</p>
 <h1 id="nodes" class="rep-page-header page-break-before">&nbsp;Nodal Results</h1><hr>
-<table class="job-result-table"><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th></tr>${Array.from({ length: rows }, (_v, i) => row(i + 1)).join("")}</table>
+<table class="job-result-table"><tr><th>ID</th><th>X</th><th>Y</th><th>Z</th></tr>${Array.from({ length: 34 }, (_v, i) => row(i + 1)).join("")}</table>
+<div class="job-result-container"><span class="subheading">NODE TABLE (ft)</span>
+<table class="job-result-table"><tr class="header-row"><th></th><th>X</th><th>Y</th><th>Z</th></tr><tr class="header-row"><th>ID</th><th>Coord</th><th>Coord</th><th>Coord</th></tr>${Array.from({ length: rows }, (_v, i) => row(i + 1)).join("")}</table></div>
 <table class="job-result-table"><tr>${wide}</tr><tr>${Array.from({ length: 13 }, (_v, k) => `<td>${k * 1000 + 77}</td>`).join("")}</tr></table>
 <p>no members are in compression.</p></div>
 <h1 class="rep-page-header page-break-before">&nbsp;Screenshots</h1><hr>
@@ -2840,8 +2845,102 @@ test(
     const again = build(dir, { env });
     assert.equal(again.code, 0, tail(again.out));
     assert.ok(Buffer.from(readFileSync(again.pdf)).equals(Buffer.from(bytes)), "two builds differ");
+
+    // Page breaks (owner, 2026-11-11: "I agree with B"): a box that avoids breaks inside it moves
+    // on when it does not fit the room left (Blink's rule), but no heading is left alone -- an h1,
+    // or the subheading that opens such a box -- and a table's header rows keep with its first row.
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const read = await pdfjs.getDocument({ data: new Uint8Array(bytes), verbosity: 0 }).promise;
+    const pages: string[] = [];
+    for (let p = 1; p <= read.numPages; p++) {
+      const tc = await (await read.getPage(p)).getTextContent();
+      pages.push(
+        (tc.items as { str?: string }[])
+          .map((i) => i.str ?? "")
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
+    }
+    for (const [p, t] of pages.entries()) {
+      assert.doesNotMatch(
+        t,
+        /^(Table of Contents|Nodal Results|NODE TABLE \(ft\)|Screenshots)$/,
+        `page ${p + 1} holds only a heading`,
+      );
+    }
+    const sub = pages.findIndex((t) => t.includes("NODE TABLE (ft)"));
+    assert.ok(sub >= 0, "the subheading was not printed");
+    assert.match(
+      pages[sub],
+      /NODE TABLE \(ft\) X Y Z ID Coord Coord Coord 1 0\.137/,
+      "heading, header rows and first row apart",
+    );
+    assert.ok(
+      sub > pages.findIndex((t) => t.includes("Nodal Results ID")),
+      "the box did not move on",
+    );
+    for (const [p, t] of pages.entries()) {
+      assert.doesNotMatch(
+        t,
+        /(ID X Y Z|ID Coord Coord Coord)$/,
+        `page ${p + 1} ends with a header row`,
+      );
+    }
   },
 );
+
+test("native renderer: a table's header rows keep with its first row (task 19)", async () => {
+  // Where nothing moves a table on (it follows a box's kept opening text), its header rows could
+  // land at a page's foot: at some length of that text below, they do -- and must move on with the
+  // first row (owner, 2026-11-11: "I agree with B").
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const { renderDocument } = await import(
+    pathToFileURL(join(ROOT, "src", "report_render.ts")).href
+  );
+  const { readRenderFonts } = await import(
+    pathToFileURL(join(ROOT, "src", "report_runtime.ts")).href
+  );
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const fonts = await readRenderFonts();
+  let moved = 0;
+  for (let lines = 40; lines <= 54; lines++) {
+    core.resetBakeState();
+    const src =
+      "<html><head><style>body{font-family:Arial;font-size:16px;line-height:20px}" +
+      ".box{page-break-inside:avoid} th,td{padding:2px}</style></head><body><div class=box>" +
+      Array.from({ length: lines }, (_v, k) => `Lead line ${k + 1}<br>`).join("") +
+      "<table><tr><th>Hd1</th><th>Hd2</th></tr><tr><th>Units</th><th>kN</th></tr>" +
+      Array.from(
+        { length: 30 },
+        (_v, k) => `<tr><td>${k + 1}</td><td>${(k + 1) * 2.5}</td></tr>`,
+      ).join("") +
+      "</table></div></body></html>";
+    const html = core.assembleDocument(
+      [core.bakeBody(src, "r0-")],
+      [core.bakeStyle(src, ".rs0", "r0-")],
+      "",
+    );
+    const out = await renderDocument(html, fonts);
+    assert.deepEqual(out.refused, [], `${lines} lines`);
+    const read = await pdfjs.getDocument({ data: out.pdf as Uint8Array, verbosity: 0 }).promise;
+    for (let p = 1; p <= read.numPages; p++) {
+      const tc = await (await read.getPage(p)).getTextContent();
+      const t = (tc.items as { str?: string }[])
+        .map((i) => i.str ?? "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      assert.doesNotMatch(
+        t,
+        /(Hd1 Hd2|Units kN)$/,
+        `${lines} lines: page ${p} ends with a header row`,
+      );
+      if (p > 1 && /^Hd1 Hd2 Units kN 1 2\.5/.test(t)) moved++;
+    }
+  }
+  assert.ok(moved > 0, "no length put the header rows at a page's foot: the case was not made");
+});
 
 test("native renderer: what it cannot draw is refused, by name (task 19)", async () => {
   // A member report (maths, drawings) is outside the trial's subset: the build stops, and nothing

@@ -1409,6 +1409,21 @@ reads the stored PDF as today.
   text-transform, a background image each refused by name through `renderDocument`. (3)
   `S3D_RENDERER` refuses another value. Inverted: the resource-order bug (caught by the warning
   check) and a render-time stamp ("two builds differ").
+- ✅ **Visual review and page breaks, 2026-11-11.** Matching pages of the 3 MB cut rendered side
+  by side (a local page in the session's scratch -- client data, never published). Seen: title,
+  tables, zebra rows, superscripts, and the shrink-to-fit (column widths and wrapping) the same;
+  the number columns heavier (Liberation Mono's stroke against Courier New's thin one). Different:
+  breaks around boxes with `break-inside: avoid` -- Chrome moves such a box on when it does not
+  fit the room left (Blink's rule), stranding headings (60 pages of the cut hold only a heading);
+  the renderer moved one only if it fit a page, and split a table's two header rows. 🔒 **Owner,
+  given A (Chrome's rule exactly) or B (that rule, and no heading left alone): "I agree with B".**
+  Built: Blink's rule; `h1`–`h6` with their `<hr>`, and the opening text of a box that avoids
+  breaks (SkyCiv's `<span class="subheading">`), kept with what follows (`Flow.keeping` /
+  `hasContent`: a box is not moved off a page holding only its own heading); a table's header rows
+  (all `th`) kept with its first row. **The cut: 371 pages (Chrome 433; 332 before), no page holding
+  only a heading, PASS.** Tests: the model report (no lone heading; the subheading with its header
+  rows and first row; no page ending in a header row) and the header rows at the lengths that
+  force them; each rule's mutant caught.
 - Next: the visual
   comparison (pages rasterised side by side, for the owner); the page-count difference (332 vs
   Chrome's 433 on the cut) measured; then the member reports (maths, SVG).
