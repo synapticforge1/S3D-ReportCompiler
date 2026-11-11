@@ -1361,3 +1361,25 @@ reads the stored PDF as today.
   Chrome's** -- and the same image-count failure as Chrome's, which was the verifier's (#118).
 - Next: the full report natively; the visual comparison (pages rasterised side by side, for the
   owner); the page-count difference (orphans / widows, row heights, line breaking) measured.
+
+**Lossless JPEG re-coding, both renderers (on `main`, 2026-11-11).** 🔒 Owner: "scope the
+re-optimizing of the JPEG's entropy coding and test the actual gain or loss before we add it";
+then "I agree with the recommendation on the JPEG re-optimisation build"; and "this will need to
+work on all platforms, linux, mac, windows, web, ios and android" -- so TypeScript, no binary.
+- **Scoped first:** of the four real sets only the 36ft report carries JPEGs (4, 0.79 MB, all
+  baseline with the standard tables); the member reports carry one PNG each, which Chrome already
+  stores once. libjpeg-turbo 2.1.5's `jpegtran` (fetched in WSL, not installed): `-optimize` 21.4 %
+  (786 → 618 KB), `-progressive` 25.5 %; pixels identical through libjpeg-turbo AND pdf.js. Chosen:
+  baseline -- progressive's 4 % more is not worth some print pipelines' trouble with it.
+- **Built:** `src/report_jpeg.ts` (`optimizeJpeg`; internal, no API change): each scan read to its
+  symbols, optimal tables by T.81 Annex K.2, the same symbols re-written, read back and compared
+  before it is returned; sequential Huffman 8-bit, any sampling, restarts, several scans; anything
+  else left as it is. The packing step (`recodeJpegs`, main.ts) re-codes every DCTDecode stream,
+  whichever renderer drew it; the build says `jpeg: N image(s) re-coded losslessly, A → B kB`, and
+  the image check still compares each with its source, pixel for pixel.
+- **Proved:** on the 36ft JPEGs and on eleven synthetic fixtures (`tests/jpeg/`: 4:2:0, 4:2:2,
+  4:4:4, grey, two restart intervals, three scans with and without restarts, already optimal;
+  progressive and arithmetic left alone), every scan's entropy data is BYTE-IDENTICAL to
+  `jpegtran -optimize`'s with the same structure, the pixels identical through pdf.js; damaged
+  input never throws. A tie-rule mutant is caught. **Chrome's cut of the 36ft report: 3.12 → 2.95
+  MB, PASS, 5 of 5 images identical.**

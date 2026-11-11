@@ -95,7 +95,8 @@
 // ---------------------------------------------------------------------------
 
 import { inflateSync } from "node:zlib";
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRef, PDFStream } from "pdf-lib";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, PDFRef, PDFStream } from "pdf-lib";
+import { optimizeJpeg } from "./src/report_jpeg.ts";
 
 import {
   assembleDocument,
@@ -1290,6 +1291,35 @@ const MIN_TEXT_PT = 2;
  * what it reads. pdf-lib writes every object it holds, reachable or not, so the tree's objects are
  * swept by reachability from the trailer.
  */
+/**
+ * Every JPEG image in the PDF re-coded losslessly with Huffman tables optimal for its own data
+ * ({@link optimizeJpeg}: every coefficient, so every pixel, unchanged -- the image check below
+ * compares each one with its source, pixel for pixel). 🔒 Owner, 2026-11-11: the PDF "minimized";
+ * "I agree with the recommendation on the JPEG re-optimisation build". Measured on the 36ft model
+ * report's screenshots: 21.4 % of their bytes. A stream with any filter besides DCTDecode, or a
+ * JPEG the re-coder does not read, is left as it is.
+ */
+function recodeJpegs(pdf: PDFDocument): { count: number; before: number; after: number } {
+  const ctx = pdf.context;
+  let count = 0;
+  let before = 0;
+  let after = 0;
+  for (const [ref, obj] of ctx.enumerateIndirectObjects()) {
+    if (!(obj instanceof PDFRawStream)) continue;
+    const filter = obj.dict.get(PDFName.of("Filter"));
+    const only =
+      filter instanceof PDFArray ? (filter.size() === 1 ? filter.get(0) : null) : (filter ?? null);
+    if (only?.toString() !== "/DCTDecode") continue;
+    const smaller = optimizeJpeg(obj.contents);
+    if (smaller === null) continue;
+    count++;
+    before += obj.contents.length;
+    after += smaller.length;
+    ctx.assign(ref, PDFRawStream.of(obj.dict, smaller));
+  }
+  return { count, before, after };
+}
+
 function dropStructureTree(pdf: PDFDocument): number {
   pdf.catalog.delete(PDFName.of("StructTreeRoot"));
   pdf.catalog.delete(PDFName.of("MarkInfo"));
@@ -3250,6 +3280,13 @@ try {
   if (optimize) {
     const untagged = dropStructureTree(pdf);
     if (untagged > 0) console.log(`  untagged: ${untagged} structure-tree object(s) dropped`);
+    const jpegs = recodeJpegs(pdf);
+    if (jpegs.count > 0) {
+      console.log(
+        `  jpeg:     ${jpegs.count} image(s) re-coded losslessly, ` +
+          `${(jpegs.before / 1e3).toFixed(0)} → ${(jpegs.after / 1e3).toFixed(0)} kB`,
+      );
+    }
     final = await pdf.save({ useObjectStreams: true });
     await rt.writeFile(candidatePdf, final);
     console.log(
