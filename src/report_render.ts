@@ -1465,13 +1465,28 @@ class Recorder implements Sink {
 
 const NULL_SINK: Sink = { rect() {}, text() {}, image() {} };
 
+/** A coordinate or size in points, to 0.01 pt (3.5 µm: below any printer's dot). */
 const num = (n: number) => {
-  const r = Math.round(n * 1000) / 1000;
+  const r = Math.round(n * 100) / 100;
   return Object.is(r, -0) ? "0" : String(r);
 };
 
+/** A drawing operation on a page, in points from the page's lower left. */
+type PageOp =
+  | { k: 0; x: number; y: number; w: number; h: number; c: RGBA }
+  | { k: 1; x: number; y: number; face: Face; size: number; c: RGBA; s: string; w: number }
+  | { k: 2; x: number; y: number; w: number; h: number; img: Img };
+
+/**
+ * One page's drawing, kept by layer (the painting order) and written compactly (owner,
+ * 2026-11-11: the package's size "is not an issue, as long as the resulting pdf is minimized"):
+ * one text object at a time, the font, the fill and its alpha set only when they change, the
+ * pieces of a line that follow on from each other in one style joined into one string -- with no
+ * kerning, each glyph advances exactly as the layout measured, so joining moves nothing --
+ * rectangles filled with no save and restore around them, coordinates to 0.01 pt.
+ */
 class PageSink implements Sink {
-  private readonly layers = new Map<number, string[]>();
+  private readonly layers = new Map<number, PageOp[]>();
   readonly fonts = new Set<Face>();
   readonly images = new Set<Img>();
   readonly alphas = new Set<number>();
@@ -1480,7 +1495,7 @@ class PageSink implements Sink {
   constructor(pt: number) {
     this.pt = pt;
   }
-  private push(layer: number, op: string) {
+  private push(layer: number, op: PageOp) {
     let l = this.layers.get(layer);
     if (!l) {
       l = [];
@@ -1488,46 +1503,100 @@ class PageSink implements Sink {
     }
     l.push(op);
   }
-  private fill(c: RGBA): string {
-    const rgb = `${num(c[0] / 255)} ${num(c[1] / 255)} ${num(c[2] / 255)} rg`;
-    if (c[3] >= 1) return rgb;
-    const a = Math.round(c[3] * 1000) / 1000;
-    this.alphas.add(a);
-    return `/GS${Math.round(a * 1000)} gs ${rgb}`;
-  }
   rect(layer: number, x: number, y: number, w: number, h: number, c: RGBA): void {
     if (w <= 0 || h <= 0 || c[3] <= 0) return;
     const X = MARGIN_PT + x * this.pt;
     const Y = PAGE_H_PT - MARGIN_PT - (y + h) * this.pt;
-    this.push(
-      layer,
-      `q ${this.fill(c)} ${num(X)} ${num(Y)} ${num(w * this.pt)} ${num(h * this.pt)} re f Q`,
-    );
+    this.push(layer, { k: 0, x: X, y: Y, w: w * this.pt, h: h * this.pt, c });
   }
   text(x: number, baseline: number, face: Face, size: number, c: RGBA, s: string): void {
     if (s === "" || c[3] <= 0) return;
     this.fonts.add(face);
     const X = MARGIN_PT + x * this.pt;
     const Y = PAGE_H_PT - MARGIN_PT - baseline * this.pt;
-    this.push(
-      FG_LAYER,
-      `q ${this.fill(c)} BT /${face.name} ${num(size * this.pt)} Tf 1 0 0 1 ${num(X)} ${num(Y)} Tm <${face.hex(s)}> Tj ET Q`,
-    );
+    const pts = size * this.pt;
+    this.push(FG_LAYER, { k: 1, x: X, y: Y, face, size: pts, c, s, w: face.width(s, pts) });
   }
   image(x: number, y: number, w: number, h: number, img: Img): void {
     this.images.add(img);
     const X = MARGIN_PT + x * this.pt;
     const Y = PAGE_H_PT - MARGIN_PT - (y + h) * this.pt;
-    this.push(
-      FG_LAYER,
-      `q ${num(w * this.pt)} 0 0 ${num(h * this.pt)} ${num(X)} ${num(Y)} cm /Im${img.ref.objectNumber} Do Q`,
-    );
+    this.push(FG_LAYER, { k: 2, x: X, y: Y, w: w * this.pt, h: h * this.pt, img });
   }
   content(): string {
-    return [...this.layers.keys()]
-      .sort((a, b) => a - b)
-      .map((k) => (this.layers.get(k) as string[]).join("\n"))
-      .join("\n");
+    const out: string[] = [];
+    let inText = false;
+    let fill = "0 0 0 rg"; // the PDF's initial fill: black
+    let alpha = 1;
+    let font: Face | null = null;
+    let fontSize = -1;
+    /** A line's text, held while its next piece may follow on in the same style. */
+    let run: { op: Extract<PageOp, { k: 1 }>; hex: string; end: number } | null = null;
+    const setFill = (c: RGBA) => {
+      const f = `${num(c[0] / 255)} ${num(c[1] / 255)} ${num(c[2] / 255)} rg`;
+      if (f !== fill) {
+        out.push(f);
+        fill = f;
+      }
+      const a = c[3] >= 1 ? 1 : Math.round(c[3] * 1000) / 1000;
+      if (a !== alpha) {
+        this.alphas.add(a);
+        out.push(`/GS${Math.round(a * 1000)} gs`);
+        alpha = a;
+      }
+    };
+    const flush = () => {
+      if (!run) return;
+      out.push(`1 0 0 1 ${num(run.op.x)} ${num(run.op.y)} Tm <${run.hex}> Tj`);
+      run = null;
+    };
+    const endText = () => {
+      flush();
+      if (inText) out.push("ET");
+      inText = false;
+    };
+    for (const layer of [...this.layers.keys()].sort((a, b) => a - b)) {
+      for (const op of this.layers.get(layer) as PageOp[]) {
+        if (op.k === 1) {
+          const r = run as { op: Extract<PageOp, { k: 1 }>; hex: string; end: number } | null;
+          if (
+            r &&
+            r.op.face === op.face &&
+            r.op.size === op.size &&
+            r.op.c.every((v, i) => v === op.c[i]) &&
+            Math.abs(r.op.y - op.y) < 0.005 &&
+            Math.abs(r.end - op.x) < 0.01
+          ) {
+            r.hex += op.face.hex(op.s);
+            r.end += op.w;
+            continue;
+          }
+          flush();
+          if (!inText) {
+            out.push("BT");
+            inText = true;
+          }
+          if (op.face !== font || op.size !== fontSize) {
+            out.push(`/${op.face.name} ${num(op.size)} Tf`);
+            font = op.face;
+            fontSize = op.size;
+          }
+          setFill(op.c);
+          run = { op, hex: op.face.hex(op.s), end: op.x + op.w };
+        } else if (op.k === 0) {
+          endText();
+          setFill(op.c);
+          out.push(`${num(op.x)} ${num(op.y)} ${num(op.w)} ${num(op.h)} re f`);
+        } else {
+          endText();
+          out.push(
+            `q ${num(op.w)} 0 0 ${num(op.h)} ${num(op.x)} ${num(op.y)} cm /Im${op.img.ref.objectNumber} Do Q`,
+          );
+        }
+      }
+    }
+    endText();
+    return out.join("\n");
   }
 }
 
@@ -2577,6 +2646,53 @@ class Layout {
       }
       if (total <= flow.height && total > flow.room()) flow.newPage(false);
     }
+    // Collapsed borders drawn as a grid, each line once (owner, 2026-11-11: "the resulting pdf is
+    // minimized"): a row's top edges merged along it where they are alike; each column's edge
+    // merged down the page; a row's bottom edge drawn only where no row below shares it -- the
+    // table's last, or the last before a page break. The same lines, in the same places.
+    type HSeg = { x0: number; x1: number; e: Edge };
+    type VSeg = { page: number; x: number; y0: number; y1: number; e: Edge };
+    const alike = (a: Edge, b: Edge) => a.w === b.w && a.color.every((v, i) => v === b.color[i]);
+    const drawH = (page: number, y: number, segs: HSeg[]) => {
+      const out = flow.sinkFor(page);
+      let cur: HSeg | null = null;
+      const emit = (s: HSeg | null) => {
+        if (s && s.e.w > 0)
+          out.rect(BORDER_LAYER, s.x0, y - s.e.w / 2, s.x1 - s.x0, s.e.w, s.e.color);
+      };
+      for (const s of segs) {
+        if (cur && alike(cur.e, s.e) && s.x0 <= cur.x1 + 0.01) cur.x1 = Math.max(cur.x1, s.x1);
+        else {
+          emit(cur);
+          cur = { ...s };
+        }
+      }
+      emit(cur);
+    };
+    const vOpen = new Map<number, VSeg>();
+    const emitV = (v: VSeg) => {
+      if (v.e.w > 0)
+        flow
+          .sinkFor(v.page)
+          .rect(BORDER_LAYER, v.x - v.e.w / 2, v.y0, v.e.w, v.y1 - v.y0, v.e.color);
+    };
+    const vEdge = (key: number, seg: VSeg) => {
+      const o = vOpen.get(key);
+      if (
+        o &&
+        o.page === seg.page &&
+        Math.abs(o.y1 - seg.y0) < 0.01 &&
+        Math.abs(o.x - seg.x) < 0.01 &&
+        alike(o.e, seg.e)
+      ) {
+        o.y1 = seg.y1;
+        return;
+      }
+      if (o) emitV(o);
+      vOpen.set(key, seg);
+    };
+    let lastBottom: { page: number; y: number; segs: HSeg[] } | null = null;
+
     const entry = { start: null as Placed | null };
     flow.open.push(entry);
     if (top > 0) flow.place(top);
@@ -2591,6 +2707,8 @@ class Layout {
       const x0 = colX[0];
       const x1 = colX[colX.length - 1] + widths[widths.length - 1];
       if (rs.background && rs.exact) out.rect(row.depth, x0, at.y, x1 - x0, h, rs.background);
+      const tops: HSeg[] = [];
+      const bottoms: HSeg[] = [];
       for (const [k, b] of boxes.entries()) {
         const s = this.styled(b.el);
         const pad = s.padding.map((p) => px(p, cbWidth));
@@ -2617,26 +2735,14 @@ class Layout {
           bl = L.w / 2;
           bt = T.w / 2;
           bb = B.w / 2;
-          if (T.w)
-            out.rect(
-              BORDER_LAYER,
-              b.x - L.w / 2,
-              at.y - T.w / 2,
-              b.w + L.w / 2 + R.w / 2,
-              T.w,
-              T.color,
-            );
-          if (B.w)
-            out.rect(
-              BORDER_LAYER,
-              b.x - L.w / 2,
-              at.y + h - B.w / 2,
-              b.w + L.w / 2 + R.w / 2,
-              B.w,
-              B.color,
-            );
-          if (L.w) out.rect(BORDER_LAYER, b.x - L.w / 2, at.y, L.w, h, L.color);
-          if (R.w) out.rect(BORDER_LAYER, b.x + b.w - R.w / 2, at.y, R.w, h, R.color);
+          const x0e = b.x - L.w / 2;
+          const x1e = b.x + b.w + R.w / 2;
+          tops.push({ x0: x0e, x1: x1e, e: T });
+          bottoms.push({ x0: x0e, x1: x1e, e: B });
+          vEdge(k, { page: at.page, x: b.x, y0: at.y, y1: at.y + h, e: L });
+          if (k === row2.length - 1) {
+            vEdge(k + 1, { page: at.page, x: b.x + b.w, y0: at.y, y1: at.y + h, e: R });
+          }
         } else {
           this.decorateBox(b.el, { ...s, background: null }, out, b.x, at.y, b.w, h);
           bl = s.border[3].w;
@@ -2648,7 +2754,17 @@ class Layout {
         const free = h - pad[0] - pad[2] - bt - bb - contentH;
         b.rec.replay(out, b.x + bl + pad[3], at.y + bt + pad[0] + free / 2);
       }
+      if (collapse) {
+        // The row above ends a page fragment: its bottom edge is drawn there; on the same page
+        // this row's top edge is the line they share.
+        if (lastBottom && lastBottom.page !== at.page)
+          drawH(lastBottom.page, lastBottom.y, lastBottom.segs);
+        drawH(at.page, at.y, tops);
+        lastBottom = { page: at.page, y: at.y + h, segs: bottoms };
+      }
     }
+    if (lastBottom) drawH(lastBottom.page, lastBottom.y, lastBottom.segs);
+    for (const v of vOpen.values()) emitV(v);
     if (bottom > 0) flow.place(bottom);
     flow.open.pop();
     const end = flow.here();
@@ -2819,6 +2935,9 @@ export async function renderDocument(html: string, fonts: RenderFonts): Promise<
   const alphaRefs = new Map<number, PDFRef>();
   for (const s of sinks) {
     const p = pdf.addPage([PAGE_W_PT, PAGE_H_PT]);
+    // The content FIRST: writing it is what finds the alpha states it uses (resources attached
+    // before it left /GS… names undefined, and every zebra row opaque, 2026-11-11).
+    const content = s.content();
     for (const face of s.fonts) p.node.setFontDictionary(PDFName.of(face.name), face.font.ref);
     for (const img of s.images) p.node.setXObject(PDFName.of(`Im${img.ref.objectNumber}`), img.ref);
     for (const a of s.alphas) {
@@ -2829,7 +2948,7 @@ export async function renderDocument(html: string, fonts: RenderFonts): Promise<
       }
       p.node.setExtGState(PDFName.of(`GS${Math.round(a * 1000)}`), ref);
     }
-    const stream = pdf.context.flateStream(s.content());
+    const stream = pdf.context.flateStream(content);
     p.node.set(PDFName.of("Contents"), pdf.context.register(stream));
   }
   const bytes = await pdf.save({ useObjectStreams: true });

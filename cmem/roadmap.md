@@ -1374,5 +1374,15 @@ reads the stored PDF as today.
   identical; styling 110,504 / 110,504; three faces embedded (Liberation Sans, Sans Bold, Mono:
   33 KB of subsets; Chrome's ArialMT, Arial-BoldMT, CourierNewPSMT: 82 KB); the nine unused faces
   swept out by the packer.
+- 🔒 **Owner, 2026-11-11: "The package growing by 6mb is not an issue, as long as the resulting
+  pdf is minimized."** Images: carried as the source's own bytes (the pixel check requires it; a
+  lossy re-encode is ruled out); the one lossless gain left there is a JPEG's entropy coding
+  re-optimised (~5–15 % of the JPEG bytes, not done). The page content was the lever: written
+  compactly (one text object, state set only when it changes, a line's pieces in one string,
+  0.01 pt) and collapsed table borders drawn as a grid, each line once. **The 3 MB cut: 3.19 →
+  1.74 MB (Chrome 3.12), page content 2.28 → 0.84 MB; a table page's 848 fills → 88; still PASS.**
+- Found on the way: the H33 release test's "behind origin" case cloned origin's default branch,
+  which is whatever branch ROOT had checked out -- from a branch other than main its push was
+  refused quietly and the guard never reached (fixed on main too, `9b48dce`).
 - Next: the full report natively; the visual comparison (pages rasterised side by side, for the
   owner); the page-count difference (332 vs Chrome's 433 on the cut) measured.
