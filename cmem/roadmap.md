@@ -1147,6 +1147,26 @@ drawn before the first or after the last match; colour names, `hsl()`, colour al
    API: `readerBody` added). **Group 9 is DONE. Next: the fresh class-B re-check**, then the
    browser review.
 
+🔁 **Fresh class-B re-check 3, 2026-11-10 (owner: "proceed with the recheck"; a fresh reviewer,
+measured with a harness that bakes a modified copy and verifies against the ORIGINAL sample;
+member_0 only, `local/` untouched).** Controls: unmodified PASSES, `0.045` → `0.046` FAILS. **Nine
+lenient gaps, each PASSED:** (1) maths structure — single Latin letters and `/ | ( ) *` are no
+tokens (`report_core.ts` wordTokens; checked), sub/superscript read alike: `F_y` → `F_u`,
+`P_r`/`P_c` swapped, `in^2` → `in_2`, a fraction bar dropped, `/` → `*`, `|…|` dropped; (2) an
+`<img>` judged by pixels only (`main.ts` ~1949; checked): mirrored, squashed 148 → 22 pt, 45 %
+clipped, opacity 0.04, wholly under a white box — "1 of 1 identical"; (3) a drawing placed by
+any matrix: `scaleX(-1)`, `rotate(180deg)`; (4) text partly covered (`-1.067` shown "-1.06"), or
+printed over other text; (5) maths styling unchecked (`\color{red}`, `\mathbf`, `\Large`, both
+ways); (6) `text-decoration` (a struck "STATUS PASS"); (7) text mirrored / upside down; (8) a value
+moved between cells of a row (ΔZ ↔ δz; #92's neighbour check pairs units only) — known; (9) styles
+swapped between two occurrences of one word (multiset; low). **Two false FAILs (loud, no sample
+hits them):** the capitals rule across a `<br>` (U+2028) with `text-transform`; `font-size:
+calc(…)` misread (should be named unread). Checked fine: a fraction's terms swapped, λ across
+`<`, text off-page or clipped, `scaleY(0.12)`, an SVG faded or moved over text, MathJax's CSS
+dropped, `font-family: Symbol`; no false FAIL from soft hyphens, `<wbr>`, rem / % / larger, hsl /
+named / `rgb(/ 80%)`, group opacity, small-caps, bolder, `<sup>`, the shorthand, `\color` in
+`\text`. CSS `url()` backgrounds not re-probed (still listed). Awaiting the owner's go-ahead.
+
 **Next step, in order (owner: fixes not limits):** the items still named "not verified", each
 measured 2026-11-09 (scratch probe; Chrome's output named here so it is not re-measured):
 - ✅ **8e — a gradient with stop-opacity, DONE 2026-11-09 (known-issues #100):** a tiling pattern
