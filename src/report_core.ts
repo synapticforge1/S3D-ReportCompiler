@@ -3021,29 +3021,68 @@ const NUMBER_TOKEN =
 const SIGN = String.raw`(?<![\p{L}\p{N}\])}.,])-`;
 
 /**
- * Where `token` (a {@link textNumbers} token) stands WHOLE in `text`: no digit, point or separator
+ * Where `token` (a {@link textNumbers} token) stands WHOLE in a text: no digit, point or separator
  * joined to either side of it, so `0.9` is not found in `0.95`, `125` not in `1250`, `250` not in
  * `1,250`, `12` not in `12,300`. An unsigned token is not found right after a SIGN (`12.5` is not
  * `-12.5`), though it may follow a binary minus (`5-3`). A signed token may print its minus apart
- * from its digits: MathJax spaces `M_{u} -0.537` as a binary minus, "- 0.537".
+ * from its digits: MathJax spaces `M_{u} -0.537` as a binary minus, "- 0.537". With `flags` "gu" it
+ * counts every place over a text (`text.match(…).length`: the rule's definition); with "uy" a
+ * signed token's minus (and the space after it) is a lookbehind, so the pattern matches AT the
+ * digits -- what {@link NumberIndex} tries at each place it indexed.
  */
-function hasNumber(text: string, token: string): boolean {
-  return countNumber(text, token) > 0;
-}
-
-/** How many times `token` stands whole in `text` ({@link hasNumber}'s rules). */
-function countNumber(text: string, token: string): number {
+function numberPattern(token: string, flags: "gu" | "uy"): RegExp {
   const signed = token.startsWith("-");
   const digits = (signed ? token.slice(1) : token).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let before = signed ? String.raw`-\s?` : `(?<!${SIGN})`;
   before = `(?<![\\d.])${before}`;
+  if (signed && flags === "uy") before = `(?<=${before})`;
   // The tail of a thousands number: three digits after an integer group and a comma.
   if (!signed && /^\d{3}(?!\d)/.test(token))
     before = String.raw`(?<!(?<![\d.])\d{1,3}(?:,\d{3})*,)` + before;
   // The head of one: an integer of one to three digits followed by ",ddd".
   const after = /^-?\d{1,3}$/.test(token) ? String.raw`(?!,\d{3}(?!\d))` : "";
-  const re = new RegExp(`${before}${digits}${after}(?!\\d|\\.\\d|[eE][-+]?\\d)`, "gu");
-  return (text.match(re) ?? []).length;
+  return new RegExp(`${before}${digits}${after}(?!\\d|\\.\\d|[eE][-+]?\\d)`, flags);
+}
+
+/**
+ * How many times each of many tokens stands whole in one text ({@link numberPattern}), without searching the whole text once per
+ * token -- which grew as numbers × text: the 36ft model report (16,178 distinct numbers in 21 M
+ * characters) ran its verification past 20 minutes (2026-11-11, profiled: this, the cell pairs and
+ * the style grouping). The text is read ONCE: every place a run of digits and points begins (no
+ * digit or point before it) is indexed by the run's start up to its first point that no digit
+ * follows. A token's digits can only stand whole at such a place, and there the run's key is the
+ * token's own digits up to its first comma or exponent; so each token's own pattern is tried at
+ * those places alone, and counts exactly what it counts over the whole text.
+ */
+class NumberIndex {
+  private readonly starts = new Map<string, number[]>();
+  private readonly text: string;
+  constructor(text: string) {
+    this.text = text;
+    for (const m of text.matchAll(/(?<![\d.])[\d.]+/g)) {
+      const key = numberKey(m[0]);
+      if (key === "") continue;
+      let at = this.starts.get(key);
+      if (!at) {
+        at = [];
+        this.starts.set(key, at);
+      }
+      at.push(m.index ?? 0);
+    }
+  }
+  /** How many times `token` stands whole in the text: exactly what `text.match(numberPattern(token, "gu"))` counts. */
+  count(token: string): number {
+    const digits = token.startsWith("-") ? token.slice(1) : token;
+    const at = this.starts.get(numberKey(/^[\d.]*/.exec(digits)?.[0] ?? ""));
+    if (!at) return 0;
+    const re = numberPattern(token, "uy");
+    let n = 0;
+    for (const p of at) {
+      re.lastIndex = p;
+      if (re.test(this.text)) n++;
+    }
+    return n;
+  }
 }
 
 /**
@@ -3146,7 +3185,7 @@ function neighbourTally(text: string, runs = false): Map<string, number> {
  * positioned cell paints after the rest of its row, so "1" then "LC3" came out of order and a
  * correct page failed (task 18 group 6).
  */
-function cellPairCount(page: string, key: string): number {
+function cellPairCount(page: PageLines, key: string): number {
   const [a, b] = key.split("\t");
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const whole = (s: string) =>
@@ -3155,11 +3194,71 @@ function cellPairCount(page: string, key: string): number {
       : /\p{L}/u.test(s)
         ? new RegExp(`(?<!\\p{L})${esc(s)}(?!\\p{L})`, "gu")
         : new RegExp(esc(s), "gu");
+  const ra = whole(a);
+  const rb = whole(b);
   let n = 0;
-  for (const line of normalizeText(page).split("\n")) {
-    n += Math.min((line.match(whole(a)) ?? []).length, (line.match(whole(b)) ?? []).length);
+  for (const i of page.both(a, b)) {
+    const line = page.lines[i];
+    n += Math.min((line.match(ra) ?? []).length, (line.match(rb) ?? []).length);
   }
   return n;
+}
+
+/**
+ * A page text's lines for {@link cellPairCount}, normalised and split ONCE, each indexed by what a
+ * pair's half can stand on: a run of digits and points (keyed as {@link NumberIndex} keys it), a
+ * run of letters, a symbol. Searched per pair over every line, the cell pairs grew as pairs × text
+ * (2026-11-11, the 36ft report). A half stands whole on a line only where the line holds its key --
+ * a number where a run with its digits begins, a word where a run of exactly its leading letters
+ * does, a symbol where the symbol is -- so the lines holding both halves' keys are the only lines
+ * the exact test needs to run on; it counts what it counted.
+ */
+class PageLines {
+  readonly lines: string[];
+  private readonly by = new Map<string, number[]>();
+  constructor(page: string) {
+    this.lines = normalizeText(page).split("\n");
+    const add = (key: string, i: number) => {
+      let at = this.by.get(key);
+      if (!at) {
+        at = [];
+        this.by.set(key, at);
+      }
+      if (at[at.length - 1] !== i) at.push(i);
+    };
+    this.lines.forEach((line, i) => {
+      for (const m of line.matchAll(/(?<![\d.])[\d.]+/g)) add(`n:${numberKey(m[0])}`, i);
+      for (const m of line.matchAll(/\p{L}+/gu)) add(`w:${m[0]}`, i);
+      for (const ch of line) if (!/[\p{L}\p{N}\s]/u.test(ch)) add(`c:${ch}`, i);
+    });
+  }
+  /** The lines a half could stand whole on; `null`: any line (a half no key describes). */
+  private of(half: string): number[] | null {
+    if (/^\d|^\.\d/.test(half))
+      return this.by.get(`n:${numberKey(/^[\d.]*/.exec(half)?.[0] ?? "")}`) ?? [];
+    const letters = /^\p{L}+/u.exec(half)?.[0];
+    if (letters) return this.by.get(`w:${letters}`) ?? [];
+    const first = [...half][0];
+    if (first !== undefined && !/[\p{L}\p{N}\s]/u.test(first))
+      return this.by.get(`c:${first}`) ?? [];
+    return null;
+  }
+  /** The lines that could hold both halves, in order. */
+  both(a: string, b: string): number[] {
+    const x = this.of(a);
+    const y = this.of(b);
+    if (x === null && y === null) return this.lines.map((_l, i) => i);
+    if (x === null) return y as number[];
+    if (y === null) return x;
+    const inY = new Set(y);
+    return x.filter((i) => inY.has(i));
+  }
+}
+
+/** A run of digits and points cut at its first point no digit follows (`12..5` → `12`). */
+function numberKey(run: string): string {
+  const cut = run.search(/\.(?!\d)/);
+  return cut < 0 ? run : run.slice(0, cut);
 }
 
 /** Whether `word` stands in `text` at least once ({@link countWord}). */
@@ -4170,9 +4269,9 @@ function readSourceTally(raw: string): {
     // Each token counted with the SAME matcher the PDF is counted with: by tokens, `t_{w}` was no
     // "tw", but its printed "t w" matched one in the PDF, so the PDF always held a surplus and one
     // occurrence could go unseen (`of`, `tw`, `Pr`, `ry` on member_0).
-    const numberText = normalizeText(prose);
+    const numberText = new NumberIndex(normalizeText(prose));
     for (const n of new Set(numberTokens(prose))) {
-      numbers.set(n, Math.max(1, countNumber(numberText, n)));
+      numbers.set(n, Math.max(1, numberText.count(n)));
     }
     // Words with each sub- or superscript as its own token, as it is printed: `F_yS` is F, y and S
     // (not the "word" yS), `M_{nz}` is M and nz.
@@ -4462,7 +4561,8 @@ export function compareAgainstPdf(
   const lower = text.toLowerCase();
 
   const missingWords = [...src.words].filter((w) => !hasWord(lower, w, text));
-  const missingNumbers = [...src.numbers].filter((n) => !hasNumber(text, n));
+  const numberIndex = new NumberIndex(text);
+  const missingNumbers = [...src.numbers].filter((n) => numberIndex.count(n) === 0);
 
   // The two bracket delimiters are named explicitly, but the real protection is
   // the backslash-command pattern: it catches unrendered TeX whatever delimiter
@@ -4628,6 +4728,10 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
         return found >= n ? [] : [found === 0 ? name : `${name} (${found} of ${n})`];
       });
     const neighbours = neighbourTally(page);
+    // Each read once, then asked per token (2026-11-11: per token over the whole text, the 36ft
+    // report's check grew as tokens × text).
+    const numberIndex = new NumberIndex(text);
+    const visualLines = new PageLines(visual);
     // Maths left as prose prints its delimiters: a declared pair around text in this report's own
     // pages means the bake never read it. The LaTeX check looks for the standard delimiters only;
     // a report's own -- `@@`, a bare `$` -- were looked for only as the BAKE read them, so a config
@@ -4645,14 +4749,14 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
         ...short(own.words, (w) => countWord(lower, w, text, own.words.get(w.toUpperCase()) ?? 0)),
       ],
       missingNumbers: [
-        ...short(own.numbers, (n) => countNumber(text, n)),
+        ...short(own.numbers, (n) => numberIndex.count(n)),
         // A number with the wrong neighbour is a changed value: "12 m" where the PDF has "12 N".
         // A cell pair stands next to its neighbour in the page's order, or on one line in any order:
         // cells of a row sit at different heights (a neighbour wraps, or is centred), and a
         // positioned cell paints after its row; each held where the other failed a correct page.
         ...short(own.pairs, (p) =>
           p.includes("\t")
-            ? Math.max(neighbours.get(p.replace("\t", " ")) ?? 0, cellPairCount(visual, p))
+            ? Math.max(neighbours.get(p.replace("\t", " ")) ?? 0, cellPairCount(visualLines, p))
             : (neighbours.get(p) ?? 0),
         ),
       ],

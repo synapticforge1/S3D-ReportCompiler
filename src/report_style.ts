@@ -392,9 +392,25 @@ export function compareStyles(
 } {
   const scale = printScale(source, printed) ?? 1;
   let judged = 0;
+  // Each word's occurrences as its distinct styles, counted, in the order each first occurs:
+  // paired occurrence by occurrence, a word printed tens of thousands of times (the 36ft report's
+  // "0.000") made the comparison grow as its square -- and adding each occurrence copied the list
+  // (2026-11-11, profiled). Identical styles pair identically, so pairing a style's count at once,
+  // in the same order, pairs as the occurrences did.
+  type Counted = { style: TextStyle; n: number };
   const group = (ws: StyledWord[]) => {
-    const g = new Map<string, TextStyle[]>();
-    for (const w of ws) g.set(w.word, [...(g.get(w.word) ?? []), w.style]);
+    const g = new Map<string, Map<string, Counted>>();
+    for (const w of ws) {
+      let styles = g.get(w.word);
+      if (!styles) {
+        styles = new Map();
+        g.set(w.word, styles);
+      }
+      const k = `${styleKey(w.style)} ${w.style.size}`;
+      const c = styles.get(k);
+      if (c) c.n++;
+      else styles.set(k, { style: w.style, n: 1 });
+    }
     return g;
   };
   const same = (s: TextStyle, p: TextStyle) =>
@@ -405,31 +421,45 @@ export function compareStyles(
     Math.abs(p.size - s.size * scale) <= 0.02 * s.size * scale + 0.01;
   const got = group(printed);
   const problems: string[] = [];
-  for (const [word, styles] of group(source)) {
-    const left = [...(got.get(word) ?? [])];
-    const missed: TextStyle[] = [];
-    for (const s of styles) {
-      const at = left.findIndex((p) => same(s, p));
-      if (at >= 0) left.splice(at, 1);
-      else missed.push(s);
+  for (const [word, styled] of group(source)) {
+    const left = [...(got.get(word)?.values() ?? [])].map((c) => ({ ...c }));
+    const missed: Counted[] = [];
+    let total = 0;
+    for (const s of styled.values()) {
+      total += s.n;
+      let need = s.n;
+      for (const p of left) {
+        if (need === 0) break;
+        if (p.n === 0 || !same(s.style, p.style)) continue;
+        const take = Math.min(need, p.n);
+        p.n -= take;
+        need -= take;
+      }
+      if (need > 0) missed.push({ style: s.style, n: need });
     }
+    const missedN = missed.reduce((a, m) => a + m.n, 0);
+    const leftN = left.reduce((a, p) => a + p.n, 0);
     // Only a word the PDF prints is judged here: an occurrence it does not print at all (cut by
     // a wrap -- `word-break: break-all` printed "Zorbl" / "axian", task 18 item 3 -- or lost) is
     // the word check's, which joins wraps and names what is missing. So a miss counts while an
     // occurrence the PDF printed in some other style is left over.
-    const wrong = Math.min(missed.length, left.length);
+    const wrong = Math.min(missedN, leftN);
     // Said, so a reading that loses words (glued, unpaired) is seen, not passed as judged.
-    judged += styles.length - missed.length + wrong;
+    judged += total - missedN + wrong;
     if (wrong === 0) continue;
     const what = (s: TextStyle) => `${styleKey(s)} at ${Number(s.size.toFixed(2))} px`;
-    const shown = [...new Set(missed.map(what))].slice(0, 2).join(", ");
+    const shown = [...new Set(missed.map((m) => what(m.style)))].slice(0, 2).join(", ");
     const printedAs = [
-      ...new Set(left.map((p) => `${styleKey(p)} at ${Number((p.size / scale).toFixed(2))} px`)),
+      ...new Set(
+        left
+          .filter((p) => p.n > 0)
+          .map((p) => `${styleKey(p.style)} at ${Number((p.style.size / scale).toFixed(2))} px`),
+      ),
     ]
       .slice(0, 2)
       .join(", ");
     problems.push(
-      `"${word}": ${wrong} of its ${styles.length} printed otherwise than its source -- wanted ${shown}; printed ${printedAs}`,
+      `"${word}": ${wrong} of its ${total} printed otherwise than its source -- wanted ${shown}; printed ${printedAs}`,
     );
   }
   return { problems, scale, judged };
