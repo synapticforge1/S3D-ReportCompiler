@@ -134,6 +134,7 @@ import {
   VERSION,
   zipWithFile,
 } from "./src/report_core.ts";
+import { renderDocument } from "./src/report_render.ts";
 
 import * as rt from "./src/report_runtime.ts";
 import { compareStyles, printedWords, styledWords } from "./src/report_style.ts";
@@ -341,6 +342,14 @@ if (!["", "0", "1", "false", "true", "no", "yes"].includes(sandboxSetting)) {
   );
 }
 const sandboxOptOut = ["1", "true", "yes"].includes(sandboxSetting);
+// 🧪 Roadmap task 19, a scoped trial (owner, 2026-11-11): S3D_RENDERER=native lays the baked
+// document out with this package's own renderer instead of Chrome. Everything after the render --
+// packing, the whole verification -- is unchanged.
+const rendererSetting = (rt.env("S3D_RENDERER") ?? "").trim().toLowerCase();
+if (!["", "chrome", "native"].includes(rendererSetting)) {
+  settingError(`S3D_RENDERER=${JSON.stringify(rendererSetting)} is not "chrome" or "native".`);
+}
+const nativeRenderer = rendererSetting === "native";
 const timeoutSetting = rt.env("S3D_CHROME_TIMEOUT_MS");
 const chromeTimeoutMs =
   timeoutSetting === undefined || timeoutSetting.trim() === ""
@@ -3167,76 +3176,94 @@ try {
   console.log(`  html:     ${(htmlBytes.length / 1e6).toFixed(2)} MB, self-contained`);
 
   // The old PDF was removed, and proved gone, before the bake was written.
-  const htmlUrl = await rt.toFileUrl(htmlPath);
-  rendering = rt.runWithTimeout(
-    chrome,
-    [
-      "--headless=new",
-      "--disable-gpu",
-      // No script runs in the render: the bake strips scripts and handlers, and the document itself
-      // forbids scripting (its Content-Security-Policy, assembleDocument). Not by a Chrome flag:
-      // `--blink-settings=scriptEnabled=false` makes --print-to-pdf write NO file (measured
-      // 2026-11-06, Chrome; exit 0, empty stderr).
-      // Chrome's sandbox stays on, except as root (a container), where Chrome cannot start with it.
-      // It used to be off everywhere, justified as "the input is a document this script generated
-      // itself" -- but the bake is made from whatever reports are in the folder (2026-11-06).
-      ...(noSandbox ? ["--no-sandbox"] : []),
-      // One language whatever the host's (task 18 8j): SVG's `systemLanguage` and `<switch>` draw
-      // by it, so a host in another locale drew a different report; the verification reads by the
-      // same "en-US" (measured: en, en-US, en-GB and "de, en" drawn; fr and "" not).
-      "--lang=en-US",
-      "--no-first-run",
-      "--disable-extensions",
-      // Chrome refuses to start against a profile already in use.
-      `--user-data-dir=${rt.joinPath(workDir, "profile")}`,
-      `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MS}`,
-      "--run-all-compositor-stages-before-draw",
-      "--no-pdf-header-footer",
-      `--print-to-pdf=${candidatePdf}`,
-      htmlUrl,
-    ],
-    chromeTimeoutMs,
-    interrupt.signal,
-  );
-  const result = (await rendering) as Awaited<ReturnType<typeof rt.runWithTimeout>>;
-  rendering = null;
-  // An interrupt is handled by its signal handler (cleanup, then exit 130); this flow stops here.
-  await haltIfInterrupted();
-  if (result.timedOut) {
-    const limit =
-      chromeTimeoutMs < 1000 ? `${chromeTimeoutMs} ms` : `${Math.round(chromeTimeoutMs / 1000)} s`;
-    throw new Error(
-      `Chrome did not finish within ${limit} and was stopped. ` +
-        `A larger document may need more: set S3D_CHROME_TIMEOUT_MS (milliseconds).`,
-    );
-  }
   let rendered: Uint8Array;
-  try {
-    rendered = await rt.readFile(candidatePdf);
-  } catch {
-    // Said in plain words when the cause is the sandbox: its own message is easy to miss.
-    const sandboxHint = /no usable sandbox|sandbox/i.test(result.stderr)
-      ? "\nChrome could not start its sandbox here. If this host cannot provide one to an " +
-        "ordinary user, set S3D_CHROME_NO_SANDBOX=1 for this build (the reports' own code is " +
-        "still blocked: the bake strips it and the document forbids scripts)."
-      : "";
-    // Exit 0 and no file: the usual sign of a CHROME_PATH that names a launcher, which starts the
-    // browser and exits before it has printed (review 4).
-    const launcherHint =
-      result.code === 0 && rt.env("CHROME_PATH")
-        ? "\nCHROME_PATH must name the browser program itself, not a script that starts it and exits."
+  if (nativeRenderer) {
+    const t0 = Date.now();
+    const native = await renderDocument(combinedHtml);
+    if (native.pdf === null) {
+      throw new Error(
+        `The native renderer (trial, roadmap task 19) refused this document:\n  - ${native.refused.join("\n  - ")}`,
+      );
+    }
+    rendered = native.pdf;
+    await rt.writeFile(candidatePdf, rendered);
+    console.log(
+      `  native:   ${native.pages} pages laid out in ${((Date.now() - t0) / 1000).toFixed(1)} s, no browser` +
+        (native.scale < 1 ? ` (shrunk to fit: ${(native.scale * 100).toFixed(1)}%)` : ""),
+    );
+  } else {
+    const htmlUrl = await rt.toFileUrl(htmlPath);
+    rendering = rt.runWithTimeout(
+      chrome,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        // No script runs in the render: the bake strips scripts and handlers, and the document itself
+        // forbids scripting (its Content-Security-Policy, assembleDocument). Not by a Chrome flag:
+        // `--blink-settings=scriptEnabled=false` makes --print-to-pdf write NO file (measured
+        // 2026-11-06, Chrome; exit 0, empty stderr).
+        // Chrome's sandbox stays on, except as root (a container), where Chrome cannot start with it.
+        // It used to be off everywhere, justified as "the input is a document this script generated
+        // itself" -- but the bake is made from whatever reports are in the folder (2026-11-06).
+        ...(noSandbox ? ["--no-sandbox"] : []),
+        // One language whatever the host's (task 18 8j): SVG's `systemLanguage` and `<switch>` draw
+        // by it, so a host in another locale drew a different report; the verification reads by the
+        // same "en-US" (measured: en, en-US, en-GB and "de, en" drawn; fr and "" not).
+        "--lang=en-US",
+        "--no-first-run",
+        "--disable-extensions",
+        // Chrome refuses to start against a profile already in use.
+        `--user-data-dir=${rt.joinPath(workDir, "profile")}`,
+        `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MS}`,
+        "--run-all-compositor-stages-before-draw",
+        "--no-pdf-header-footer",
+        `--print-to-pdf=${candidatePdf}`,
+        htmlUrl,
+      ],
+      chromeTimeoutMs,
+      interrupt.signal,
+    );
+    const result = (await rendering) as Awaited<ReturnType<typeof rt.runWithTimeout>>;
+    rendering = null;
+    // An interrupt is handled by its signal handler (cleanup, then exit 130); this flow stops here.
+    await haltIfInterrupted();
+    if (result.timedOut) {
+      const limit =
+        chromeTimeoutMs < 1000
+          ? `${chromeTimeoutMs} ms`
+          : `${Math.round(chromeTimeoutMs / 1000)} s`;
+      throw new Error(
+        `Chrome did not finish within ${limit} and was stopped. ` +
+          `A larger document may need more: set S3D_CHROME_TIMEOUT_MS (milliseconds).`,
+      );
+    }
+    try {
+      rendered = await rt.readFile(candidatePdf);
+    } catch {
+      // Said in plain words when the cause is the sandbox: its own message is easy to miss.
+      const sandboxHint = /no usable sandbox|sandbox/i.test(result.stderr)
+        ? "\nChrome could not start its sandbox here. If this host cannot provide one to an " +
+          "ordinary user, set S3D_CHROME_NO_SANDBOX=1 for this build (the reports' own code is " +
+          "still blocked: the bake strips it and the document forbids scripts)."
         : "";
-    throw new Error(
-      `Chrome produced no PDF (exit status ${result.code}).\n${result.stderr.trim()}${sandboxHint}${launcherHint}`,
-    );
-  }
-  // Chrome's exit status counts too, even with a PDF written: it was never read, so a Chrome that
-  // crashed after writing one still ended in "Created" under --no-verify (2026-11-06 review).
-  if (result.code !== 0) {
-    throw new Error(
-      `Chrome wrote a PDF but exited with status ${result.code}, so the PDF cannot be trusted.\n` +
-        result.stderr.trim(),
-    );
+      // Exit 0 and no file: the usual sign of a CHROME_PATH that names a launcher, which starts the
+      // browser and exits before it has printed (review 4).
+      const launcherHint =
+        result.code === 0 && rt.env("CHROME_PATH")
+          ? "\nCHROME_PATH must name the browser program itself, not a script that starts it and exits."
+          : "";
+      throw new Error(
+        `Chrome produced no PDF (exit status ${result.code}).\n${result.stderr.trim()}${sandboxHint}${launcherHint}`,
+      );
+    }
+    // Chrome's exit status counts too, even with a PDF written: it was never read, so a Chrome that
+    // crashed after writing one still ended in "Created" under --no-verify (2026-11-06 review).
+    if (result.code !== 0) {
+      throw new Error(
+        `Chrome wrote a PDF but exited with status ${result.code}, so the PDF cannot be trusted.\n` +
+          result.stderr.trim(),
+      );
+    }
   }
 
   console.log(`  rendered: ${(rendered.length / 1e6).toFixed(2)} MB`);
