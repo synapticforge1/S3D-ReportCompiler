@@ -1212,7 +1212,10 @@ rendered **33.3 min and exited 0 with NO PDF** (no reason printed; 10 processes,
 "can the transform of html to pdf be accomplished without browser interaction during the
 process? This would take a step in our checks off the table for the other browsers"): "lets test
 a scoped trial and see if we can move this forward faster."** → task 19, a native renderer
-(below). The split render is not being built. (2c) the tall image: not measured (no PDF). (2) the 36ft report on
+(below). The split render is not being built. (2c) ✅ **the "tall image" was the verifier's**
+(known-issues #118, 2026-11-11): an unquoted `src` was not read, so the report's screenshots were
+not expected; Chrome and the native renderer both draw all five images of a 3 MB cut of the
+report. (2) the 36ft report on
 its own: report starts without the member heading (each report's first words as its signature),
 an over-tall image scaled to one page (measure how Chrome resolves a page height under its
 shrink-to-fit first), a render limit that grows with the document (its full-size timing was
@@ -1342,3 +1345,19 @@ out; its own HTML parser and cascade, NOT the verifier's (`report_style.ts` / `r
 design-decisions §9 -- a shared reader would make the style check a tautology); pdf-lib for the
 document, content streams written directly (millions of cells). The verification is unchanged and
 reads the stored PDF as today.
+
+**Progress (branch `trial/native-render`, 2026-11-11; `S3D_RENDERER=native` selects it):**
+- The whole 36ft report (62 MB baked) laid out in **~28 s** (Chrome: 33 min, no PDF) -- refused
+  then for MathJax's never-matching selectors (fixed: a pseudo-element refused only where its rule
+  matches) and an 849 px table.
+- **Chrome's shrink-to-fit, measured** on a 3 MB cut of the report: every size printed at 0.635
+  pt/px (50 px → 31.75 pt, 13 → 8.26, 12 → 7.62) = 0.75 × 720 / 850, the widest table's width.
+  Blink lays the document out at the page width, then again at the width it reaches (at most twice
+  the page), the page height in the same ratio, and scales every page down. The renderer does the
+  same (two passes); a box past the content box prints into the margin as Chrome's does (a
+  `max-width: 100%` image's own 1 px border); past the paper it is refused.
+- **The 3 MB cut, native: 332 pages (Chrome 433); 280 words / 2,744 numbers, 0 missing; per-report
+  1/1; styling 110,504 of 110,504; images 2 of 2 identical; lowest contrast and smallest text as
+  Chrome's** -- and the same image-count failure as Chrome's, which was the verifier's (#118).
+- Next: the full report natively; the visual comparison (pages rasterised side by side, for the
+  owner); the page-count difference (orphans / widows, row heights, line breaking) measured.
