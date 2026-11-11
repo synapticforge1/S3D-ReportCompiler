@@ -19,7 +19,8 @@
  * @module
  */
 
-import { PDFDocument, PDFName, type PDFFont, type PDFRef, StandardFonts } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import { PDFDocument, PDFName, type PDFFont, type PDFRef } from "pdf-lib";
 import { decodeEntities } from "./report_core.ts";
 
 // ---------------------------------------------------------------------------
@@ -1323,13 +1324,27 @@ function fontKey(families: string, refuse: Refusals): FontKey {
 }
 
 // ---------------------------------------------------------------------------
-// Fonts: the standard 14, with the vertical metrics of the faces Chrome uses for them
+// Fonts: Liberation, embedded, with the vertical metrics of the faces Chrome uses
 // ---------------------------------------------------------------------------
 
 /**
- * Chrome on this host draws Arial, Courier New and Times New Roman; the PDF's standard Helvetica,
- * Courier and Times have the same advance widths (they are metric-compatible by design). The
- * vertical metrics (ascent, descent, line gap: `normal` line height) are those faces' own.
+ * The fonts {@link renderDocument} draws in, by family: regular, bold, italic, bold italic, each a
+ * TrueType file's bytes. The package ships Liberation 2.1.5 (SIL OFL 1.1, `fonts/liberation/`),
+ * read and checked by the runtime's `readRenderFonts`: metric-compatible with the Arial, Courier
+ * New and Times New Roman Chrome draws a SkyCiv report in on Windows -- every glyph the same
+ * advance -- and EMBEDDED (subset to the glyphs printed), so every viewer shows the faces the
+ * layout measured (owner, 2026-11-11: "we should embed the fonts into the file that are required
+ * for fidelity. and into the project for full compatibility on the usage and incorporation").
+ */
+export type RenderFonts = {
+  sans: [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
+  mono: [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
+  serif: [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
+};
+
+/**
+ * The vertical metrics (ascent, descent, line gap: `normal` line height) of Arial, Courier New and
+ * Times New Roman -- which Liberation Sans, Mono and Serif share, by design.
  */
 const METRICS: Record<FontKey, { ascent: number; descent: number; gap: number }> = {
   sans: { ascent: 0.905, descent: 0.212, gap: 0.033 },
@@ -1337,53 +1352,36 @@ const METRICS: Record<FontKey, { ascent: number; descent: number; gap: number }>
   serif: { ascent: 0.891, descent: 0.216, gap: 0.042 },
 };
 
-const FACES: Record<FontKey, [StandardFonts, StandardFonts, StandardFonts, StandardFonts]> = {
-  sans: [
-    StandardFonts.Helvetica,
-    StandardFonts.HelveticaBold,
-    StandardFonts.HelveticaOblique,
-    StandardFonts.HelveticaBoldOblique,
-  ],
-  mono: [
-    StandardFonts.Courier,
-    StandardFonts.CourierBold,
-    StandardFonts.CourierOblique,
-    StandardFonts.CourierBoldOblique,
-  ],
-  serif: [
-    StandardFonts.TimesRoman,
-    StandardFonts.TimesRomanBold,
-    StandardFonts.TimesRomanItalic,
-    StandardFonts.TimesRomanBoldItalic,
-  ],
-};
+/** What pdf-lib keeps of the font it embeds: fontkit's font, which knows its glyphs. */
+type Glyphs = { hasGlyphForCodePoint(cp: number): boolean };
 
 class Face {
   private readonly widths = new Map<string, number>();
   private readonly codes = new Map<string, string>();
   readonly font: PDFFont;
+  /** The font's resource name on a page. */
   readonly name: string;
   private readonly refuse: Refusals;
+  private readonly glyphs: Glyphs;
   constructor(font: PDFFont, name: string, refuse: Refusals) {
     this.font = font;
     this.name = name;
     this.refuse = refuse;
+    this.glyphs = (font as unknown as { embedder: { font: Glyphs } }).embedder.font;
   }
-  /** The advance of one character at size 1, or null when the font cannot encode it. */
+  /** The advance of one character at size 1. A character the font has no glyph for is refused. */
   private advance(ch: string): number {
     let w = this.widths.get(ch);
     if (w === undefined) {
-      try {
-        const hex = this.font.encodeText(ch).toString().slice(1, -1);
-        this.codes.set(ch, hex);
-        w = this.font.widthOfTextAtSize(ch, 1);
-      } catch {
+      const cp = ch.codePointAt(0) ?? 0;
+      // fontkit would draw a missing glyph as .notdef (a box) and say nothing.
+      if (!this.glyphs.hasGlyphForCodePoint(cp)) {
         this.refuse.add(
-          `the character U+${ch.codePointAt(0)?.toString(16).toUpperCase().padStart(4, "0")} (${ch}) in ${this.name}`,
+          `the character U+${cp.toString(16).toUpperCase().padStart(4, "0")} (${ch}): no glyph in ${this.font.name}`,
         );
-        this.codes.set(ch, "3F");
-        w = this.font.widthOfTextAtSize("?", 1);
       }
+      this.codes.set(ch, this.font.encodeText(ch).toString().slice(1, -1));
+      w = this.font.widthOfTextAtSize(ch, 1);
       this.widths.set(ch, w);
     }
     return w;
@@ -1405,12 +1403,16 @@ class Face {
 
 class Fonts {
   private readonly faces = new Map<string, Face>();
-  static async load(pdf: PDFDocument, refuse: Refusals): Promise<Fonts> {
+  static async load(pdf: PDFDocument, files: RenderFonts, refuse: Refusals): Promise<Fonts> {
+    pdf.registerFontkit(fontkit);
     const f = new Fonts();
+    let n = 0;
     for (const key of ["sans", "mono", "serif"] as FontKey[]) {
       for (let k = 0; k < 4; k++) {
-        const name = FACES[key][k];
-        f.faces.set(`${key}${k}`, new Face(await pdf.embedFont(name), name, refuse));
+        // Subset: only the glyphs printed are embedded. Not features: no ligature or kerning
+        // pass, so each character is its own glyph at its own advance, as the layout measured.
+        const font = await pdf.embedFont(files[key][k], { subset: true });
+        f.faces.set(`${key}${k}`, new Face(font, `F${++n}`, refuse));
       }
     }
     return f;
@@ -1509,7 +1511,7 @@ class PageSink implements Sink {
     const Y = PAGE_H_PT - MARGIN_PT - baseline * this.pt;
     this.push(
       FG_LAYER,
-      `q ${this.fill(c)} BT /${face.name.replace(/-/g, "")} ${num(size * this.pt)} Tf 1 0 0 1 ${num(X)} ${num(Y)} Tm <${face.hex(s)}> Tj ET Q`,
+      `q ${this.fill(c)} BT /${face.name} ${num(size * this.pt)} Tf 1 0 0 1 ${num(X)} ${num(Y)} Tm <${face.hex(s)}> Tj ET Q`,
     );
   }
   image(x: number, y: number, w: number, h: number, img: Img): void {
@@ -2721,8 +2723,10 @@ function dataBytes(uri: string): { type: string; bytes: Uint8Array } | null {
  * (the document's own `@page`). Returns the PDF only when nothing was refused.
  *
  * @param html the document {@link assembleDocument} made
+ * @param fonts the faces to draw in and embed ({@link RenderFonts}; the runtime's
+ *   `readRenderFonts` reads the ones the package ships)
  */
-export async function renderDocument(html: string): Promise<NativeRender> {
+export async function renderDocument(html: string, fonts: RenderFonts): Promise<NativeRender> {
   const refuse = new Refusals();
   const root = parseDocument(html, refuse);
   const head = root.kids.find((k): k is Elem => typeof k !== "string" && k.tag === "head");
@@ -2755,7 +2759,7 @@ export async function renderDocument(html: string): Promise<NativeRender> {
   // No render-time stamp: the same document makes the same PDF.
   pdf.setCreationDate(new Date(0));
   pdf.setModificationDate(new Date(0));
-  const fonts = await Fonts.load(pdf, refuse);
+  const faces = await Fonts.load(pdf, fonts, refuse);
 
   // Every image the document draws, embedded once.
   const images = new Map<string, Img>();
@@ -2792,7 +2796,7 @@ export async function renderDocument(html: string): Promise<NativeRender> {
   // `ForceLayoutForPagination`. The body's box is the page's content box (the document sets
   // `html, body { margin: 0; padding: 0 }`).
   const lay = (w: number, h: number, final: boolean, sinkFor: (p: number) => Sink) => {
-    const layout = new Layout(cascade, fonts, images, refuse, { w, h, final });
+    const layout = new Layout(cascade, faces, images, refuse, { w, h, final });
     const flow = new Flow(h, sinkFor);
     layout.block(body, 0, w, flow, sinkFor);
     return { layout, flow };
@@ -2815,8 +2819,7 @@ export async function renderDocument(html: string): Promise<NativeRender> {
   const alphaRefs = new Map<number, PDFRef>();
   for (const s of sinks) {
     const p = pdf.addPage([PAGE_W_PT, PAGE_H_PT]);
-    for (const face of s.fonts)
-      p.node.setFontDictionary(PDFName.of(face.name.replace(/-/g, "")), face.font.ref);
+    for (const face of s.fonts) p.node.setFontDictionary(PDFName.of(face.name), face.font.ref);
     for (const img of s.images) p.node.setXObject(PDFName.of(`Im${img.ref.objectNumber}`), img.ref);
     for (const a of s.alphas) {
       let ref = alphaRefs.get(a);

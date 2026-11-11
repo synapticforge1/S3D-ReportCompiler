@@ -1359,5 +1359,20 @@ reads the stored PDF as today.
 - **The 3 MB cut, native: 332 pages (Chrome 433); 280 words / 2,744 numbers, 0 missing; per-report
   1/1; styling 110,504 of 110,504; images 2 of 2 identical; lowest contrast and smallest text as
   Chrome's** -- and the same image-count failure as Chrome's, which was the verifier's (#118).
+- **Fonts embedded, 2026-11-11** (🔒 owner: "we should embed the fonts into the file that are
+  required for fidelity. and into the project for full compatibility on the usage and
+  incorporation needs"; "We need to add the dependency and make any license references for
+  compiance sake"): Liberation 2.1.5 (SIL OFL 1.1, metric-compatible with Arial / Courier New /
+  Times New Roman) shipped in `fonts/liberation/` with its licence and each file's SHA-256
+  (checked by `readRenderFonts`, `./runtime`: surface +1, floor minor); `@pdf-lib/fontkit` 1.1.1
+  (MIT) embeds them SUBSET; a character with no glyph is refused (fontkit would draw .notdef
+  silently). Both packages ship the fonts (`jsr.json`, `npm-build.ts`; `npm:prove` checks every
+  font file and the licence are packed -- PASS on Node 22.13 / 22 / 24 / 26 and Bun). Licence
+  records: THIRD-PARTY-NOTICES.md (what is redistributed, the OFL's conditions quoted from the
+  licence, the compliance summary), [licensing.md](licensing.md). `bun audit`: 0 (50 packages).
+- **The 3 MB cut, native with embedded fonts: PASS** -- 332 pages laid out in 2.3 s; 5 of 5 images
+  identical; styling 110,504 / 110,504; three faces embedded (Liberation Sans, Sans Bold, Mono:
+  33 KB of subsets; Chrome's ArialMT, Arial-BoldMT, CourierNewPSMT: 82 KB); the nine unused faces
+  swept out by the packer.
 - Next: the full report natively; the visual comparison (pages rasterised side by side, for the
-  owner); the page-count difference (orphans / widows, row heights, line breaking) measured.
+  owner); the page-count difference (332 vs Chrome's 433 on the cut) measured.

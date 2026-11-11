@@ -282,6 +282,12 @@ REQUIREMENTS
   Chrome is stopped if it has not finished in 10 minutes. For a very large set
   allow it longer, in milliseconds: S3D_CHROME_TIMEOUT_MS=1800000
 
+  TRIAL: S3D_RENDERER=native lays the reports out with this package's own
+  renderer instead of Chrome (no browser; fonts embedded from the package).
+  It draws a subset of HTML and CSS and stops, naming what it cannot draw.
+  The check after it is the same. S3D_RENDERER takes chrome (the default) or
+  native; anything else stops the build.
+
   The first run in a folder downloads maths fonts once and caches them in
   .mathjax-fonts in the folder you run it FROM, so later runs from there work
   offline. Run from another folder, it downloads them again.
@@ -3179,7 +3185,7 @@ try {
   let rendered: Uint8Array;
   if (nativeRenderer) {
     const t0 = Date.now();
-    const native = await renderDocument(combinedHtml);
+    const native = await renderDocument(combinedHtml, await rt.readRenderFonts());
     if (native.pdf === null) {
       throw new Error(
         `The native renderer (trial, roadmap task 19) refused this document:\n  - ${native.refused.join("\n  - ")}`,

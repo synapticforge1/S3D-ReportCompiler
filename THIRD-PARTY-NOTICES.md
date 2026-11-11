@@ -5,19 +5,55 @@
 This file lists the third-party software it depends on. Every entry was verified from the installed
 package's own `package.json` and `LICENSE` file, not from memory or from the registry summary.
 
-**Last verified: 2026-11-07, against the tree pinned by `bun.lock`. `bun audit`: no
-vulnerabilities (49 packages checked).** (First verified 2026-08-08 against `package-lock.json`;
+**Last verified: 2026-11-11 (`@pdf-lib/fontkit` and the Liberation fonts added; the rest as of
+2026-11-07), against the tree pinned by `bun.lock`. `bun audit`: no
+vulnerabilities (50 packages checked, 2026-11-11).** (First verified 2026-08-08 against `package-lock.json`;
 `bun.lock` replaced it on 2026-10-28; TypeScript joined the development tree since.)
 
 ## Does this package redistribute any of it?
 
-**One file is derived from third-party code.** The JSR package contains `LICENSE`,
-`THIRD-PARTY-NOTICES.md`, `README.md`, `jsr.json`, `main.ts` and `src/*.ts` (`jsr.json`
-`publish.include`), and the npm package that source compiled to JavaScript with its declarations.
-Of those, **`src/report_webp.ts` is a port of parts of libwebp** (BSD-3-Clause; see
-[libwebp](#libwebp-src-report_webpts) below): its notice is kept in that file's header and reproduced
-here. Nothing else is vendored or bundled; dependencies are declared and resolved by the consumer's
-own runtime.
+**Yes: twelve font files, unmodified, and one source file derived from third-party code.** The
+JSR package contains `LICENSE`, `THIRD-PARTY-NOTICES.md`, `README.md`, `jsr.json`, `main.ts`,
+`src/*.ts` and `fonts/liberation/*` (`jsr.json` `publish.include`), and the npm package that source
+compiled to JavaScript with its declarations, and the same fonts. Of those:
+
+- **`fonts/liberation/` — the Liberation Fonts 2.1.5** (SIL Open Font License 1.1; see
+  [Liberation Fonts](#liberation-fonts-fontsliberation) below), shipped with their licence and
+  authors beside them;
+- **`src/report_webp.ts` is a port of parts of libwebp** (BSD-3-Clause; see
+  [libwebp](#libwebp-src-report_webpts) below): its notice is kept in that file's header and
+  reproduced here.
+
+Nothing else is vendored or bundled; dependencies are declared and resolved by the consumer's own
+runtime.
+
+### Liberation Fonts (`fonts/liberation/`)
+
+The native renderer (`src/report_render.ts`) draws text in these faces and embeds them, subset to
+the glyphs printed, in each PDF it makes: Liberation Sans, Mono and Serif, regular / bold / italic /
+bold italic — metric-compatible with Arial, Courier New and Times New Roman. Taken unmodified from
+the upstream release `liberation-fonts-ttf-2.1.5.tar.gz`
+(<https://github.com/liberationfonts/liberation-fonts>); provenance and each file's SHA-256 are in
+`fonts/liberation/README.md`, and the package checks every file against its hash before using it.
+
+```
+Digitized data copyright (c) 2010 Google Corporation
+	with Reserved Font Arimo, Tinos and Cousine.
+Copyright (c) 2012 Red Hat, Inc.
+	with Reserved Font Name Liberation.
+
+This Font Software is licensed under the SIL Open Font License,
+Version 1.1.
+```
+
+The full licence text is `fonts/liberation/LICENSE`, shipped with the fonts as the OFL requires
+(its condition 2: the copyright notice and licence accompany every copy). The OFL lets the fonts be
+bundled and redistributed with any software, provided they are not sold by themselves (condition
+1); a modified font could not use the Reserved Font Names (condition 3) — these are not modified.
+**A document that embeds them is not bound by the OFL**: its condition 5, which keeps the fonts
+under the OFL, ends "The requirement for fonts to remain under this license does not apply to any
+document created using the Font Software." So a PDF this tool makes carries no font-licence
+obligation of its own.
 
 Two more places where third-party code **is** carried into an artifact are called out under
 [Redistribution](#redistribution-when-it-does-apply) below.
@@ -78,6 +114,12 @@ none of its code.)
 | `mathjax-full` | 3.2.2 | Apache-2.0 | typesets the LaTeX to CHTML at build time |
 | `pdf-lib` | 1.17.1 | MIT | repacks the PDF into object streams |
 | `pdfjs-dist` | 6.4.299 | Apache-2.0 | text and operator extraction for the verification pass |
+| `@pdf-lib/fontkit` | 1.1.1 | MIT | reads and subsets the TrueType fonts the native renderer embeds (added 2026-11-11) |
+
+⚠️ `@pdf-lib/fontkit` declares `MIT` in its `package.json` and its README's "License" section, but
+**ships no licence file** (like `mj-context-menu`, below). It is pdf-lib's fork of `fontkit`
+(foliojs, MIT). Declared and resolved by the consumer, never bundled, so the MIT notice condition
+does not reach this package.
 
 ### Transitive
 
@@ -92,7 +134,7 @@ none of its code.)
 | `wicked-good-xpath` | 1.3.0 | MIT | `speech-rule-engine` |
 | `@pdf-lib/standard-fonts` | 1.0.0 | MIT | `pdf-lib` |
 | `@pdf-lib/upng` | 1.0.1 | MIT | `pdf-lib` |
-| `pako` | 1.0.11 | MIT AND Zlib | `pdf-lib` |
+| `pako` | 1.0.11 | MIT AND Zlib | `pdf-lib`, `@pdf-lib/fontkit` |
 | `tslib` | 1.14.1 | 0BSD | `pdf-lib` |
 
 ### Development only
@@ -155,16 +197,20 @@ document is ordinary and permitted — but it does mean **a PDF produced by this
 Apache-2.0 licensed font data**, which is worth knowing if the output is issued under a client's or an
 employer's own terms.
 
+A PDF made by the native renderer (`S3D_RENDERER=native`, a trial since 2026-11-11) embeds subsets of
+the **Liberation Fonts** (SIL OFL 1.1) instead of the host's Arial / Courier New. The OFL does not
+reach the document (its condition 5, quoted [above](#liberation-fonts-fontsliberation)).
+
 ## Compliance summary
 
 | Question | Answer |
 |---|---|
-| Any copyleft (GPL/LGPL/AGPL/MPL)? | **No** |
+| Any copyleft (GPL/LGPL/AGPL/MPL)? | **No** in any code. The fonts' OFL keeps the *font files* under the OFL (condition 5) — it reaches neither this package's code nor the documents made with them |
 | Any NOTICE files requiring propagation? | **No** — none of the Apache-2.0 runtime packages ships one; the development tool that does (`typescript`) is not redistributed |
-| Any licence incompatible with releasing this as MIT? | **No** — MIT, Apache-2.0, BSD-3-Clause, 0BSD and Zlib are all compatible with an MIT release |
-| Third-party code inside the published package? | **One file, derived:** `src/report_webp.ts`, ported from libwebp (BSD-3-Clause), its notice in the file and [above](#libwebp-src-report_webpts); the rest first-party, the same source compiled on npm |
-| Known vulnerabilities? | **None** in this repository's tree — `bun audit`, 2026-11-07. A consumer's install resolves `@xmldom/xmldom` afresh (README § Requirements: the `overrides` pins hold here only) |
-| Attribution required to publish? | **Yes, for libwebp only** — its copyright notice, conditions and disclaimer must travel with the source (kept in `src/report_webp.ts`) and with any compiled copy (reproduced in this file, which both packages ship); otherwise no |
+| Any licence incompatible with releasing this as MIT? | **No** — MIT, Apache-2.0, BSD-3-Clause, 0BSD and Zlib are all compatible with an MIT release; the OFL fonts ship beside the code under their own licence, which permits bundling them with any software (condition 2) |
+| Third-party material inside the published package? | **Two:** the **Liberation Fonts** (`fonts/liberation/`, SIL OFL 1.1, unmodified, their licence and authors beside them, [above](#liberation-fonts-fontsliberation)); and **one file, derived:** `src/report_webp.ts`, ported from libwebp (BSD-3-Clause), its notice in the file and [above](#libwebp-src-report_webpts). The rest first-party, the same source compiled on npm |
+| Known vulnerabilities? | **None** in this repository's tree — `bun audit`, 2026-11-11 (50 packages). A consumer's install resolves `@xmldom/xmldom` afresh (README § Requirements: the `overrides` pins hold here only) |
+| Attribution required to publish? | **Yes, for two:** libwebp — its copyright notice, conditions and disclaimer must travel with the source (kept in `src/report_webp.ts`) and with any compiled copy (reproduced in this file, which both packages ship); and the Liberation Fonts — their copyright notice and the OFL travel with every copy (`fonts/liberation/LICENSE`, shipped in both packages; `npm:prove` fails a tarball without it). Otherwise no |
 
 Apache-2.0 carries an express patent grant that terminates on patent litigation. That is normally
 regarded as a feature, but it is the clause a legal reviewer will flag, so it is stated here.

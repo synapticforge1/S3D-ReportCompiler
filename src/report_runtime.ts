@@ -32,6 +32,8 @@
  * ```
  */
 
+import type { RenderFonts } from "./report_render.ts";
+
 /** The host this module is running on. */
 export type Runtime = "deno" | "bun" | "node" | "browser";
 
@@ -472,4 +474,109 @@ export async function findChrome(): Promise<string | null> {
     if (await fileExists(candidate)) return candidate;
   }
   return null;
+}
+
+// --------------------------------------------------------------------------
+// The native renderer's fonts
+// --------------------------------------------------------------------------
+
+/**
+ * The twelve Liberation 2.1.5 fonts the package ships in `fonts/liberation/` (SIL Open Font
+ * License 1.1, its text beside them), each with its SHA-256 -- the authority for that folder's
+ * README. Regular, bold, italic, bold italic for each family.
+ */
+const RENDER_FONT_FILES: Record<keyof RenderFonts, [string, string][]> = {
+  sans: [
+    [
+      "LiberationSans-Regular.ttf",
+      "76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8",
+    ],
+    ["LiberationSans-Bold.ttf", "788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173"],
+    [
+      "LiberationSans-Italic.ttf",
+      "e5bae5c4cde31f22142753855f4f8fb86da6ff39955ed3c0a11248b0d16948b0",
+    ],
+    [
+      "LiberationSans-BoldItalic.ttf",
+      "698da70fc191cc5f33ad4d6d3fe830fe4624b898ea2e3169955928b7c491f1ee",
+    ],
+  ],
+  mono: [
+    [
+      "LiberationMono-Regular.ttf",
+      "f2b83c763e8afd21709333370bed4774337fae82267937e2b5aea7e2fbd922c1",
+    ],
+    ["LiberationMono-Bold.ttf", "bd62a0672d0b9b6710b01df434c80ad54fa5f0835207eb7b17b7a761463067bb"],
+    [
+      "LiberationMono-Italic.ttf",
+      "605c01c711b44480a7508d349dfbf3264e81fa43d69e61cfa7d10b86e764c4d1",
+    ],
+    [
+      "LiberationMono-BoldItalic.ttf",
+      "79451f3c09fe25116098853b7a2ca6e2436220ccc11af022979adbcf195be130",
+    ],
+  ],
+  serif: [
+    [
+      "LiberationSerif-Regular.ttf",
+      "058ea80864aef09a23f45cbec2bb5400bc3dfbdea01c3f10538a21fcb497fb74",
+    ],
+    [
+      "LiberationSerif-Bold.ttf",
+      "d754ba427cfe0bca54ae052384baa8f842da5bd6550ad4da024ac441e7a7d5ce",
+    ],
+    [
+      "LiberationSerif-Italic.ttf",
+      "0e3dea9f8d613e006ccfa62201f33e265d19167bd0907725c3e145368b04fc2e",
+    ],
+    [
+      "LiberationSerif-BoldItalic.ttf",
+      "f17db8af71e24d2066b587546021d4f0b296be389512b658dec3c09affeb11a7",
+    ],
+  ],
+};
+
+/**
+ * The fonts the native renderer embeds ({@link RenderFonts}), read from the package's own
+ * `fonts/liberation/` -- from disk on Deno, Node and Bun, fetched where the package is served
+ * (a browser, or Deno running it from JSR) -- each checked against its recorded SHA-256. A font
+ * that is missing, changed or truncated throws, named: a PDF must not be drawn in a face that was
+ * not the one measured.
+ *
+ * @example
+ * ```ts
+ * import { readRenderFonts } from "@jrmarcum/s3d-reportcompiler/runtime";
+ * const fonts = await readRenderFonts();
+ * console.log(fonts.sans.length); // 4
+ * ```
+ */
+export async function readRenderFonts(): Promise<RenderFonts> {
+  const read = async (name: string, sha256: string): Promise<Uint8Array> => {
+    const url = new URL(`../fonts/liberation/${name}`, import.meta.url);
+    let bytes: Uint8Array;
+    try {
+      if (url.protocol === "file:") bytes = await readFile(await fromFileUrl(url.href));
+      else {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        bytes = new Uint8Array(await res.arrayBuffer());
+      }
+    } catch (err) {
+      throw new Error(`The renderer's font ${name} could not be read (${(err as Error).message}).`);
+    }
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource));
+    const hex = [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (hex !== sha256) {
+      throw new Error(`The renderer's font ${name} is not the one shipped (SHA-256 ${hex}).`);
+    }
+    return bytes;
+  };
+  const out = {} as Record<keyof RenderFonts, Uint8Array[]>;
+  for (const [family, files] of Object.entries(RENDER_FONT_FILES) as [
+    keyof RenderFonts,
+    [string, string][],
+  ][]) {
+    out[family] = await Promise.all(files.map(([n, h]) => read(n, h)));
+  }
+  return out as RenderFonts;
 }

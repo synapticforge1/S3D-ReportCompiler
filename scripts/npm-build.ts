@@ -16,7 +16,15 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 // The npm name lives with the registry lookups, so verify-release checks the name this publishes.
@@ -100,7 +108,15 @@ const manifest = {
   // No "./": npm 12's `npm publish` calls "./main.js" an invalid bin and DROPS it (measured
   // 2026-10-28, dry run), while `npm pack` and an install from the tarball keep it.
   bin: { "s3d-reportcompiler": "main.js" },
-  files: ["main.js", "main.d.ts", "src/", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"],
+  files: [
+    "main.js",
+    "main.d.ts",
+    "src/",
+    "fonts/",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+  ],
   dependencies: pkg.dependencies,
   engines: { node: `>=${floor}` },
   repository: { type: "git", url: `git+${REPO_URL}.git` },
@@ -115,6 +131,16 @@ writeFileSync(join(dist, "package.json"), `${JSON.stringify(manifest, null, 2)}\
 for (const f of ["README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"]) {
   if (!existsSync(join(root, f))) fail(`${f} is missing`);
   copyFileSync(join(root, f), join(dist, f));
+}
+
+// 5. The native renderer's fonts, with their licence (SIL OFL 1.1 requires it to travel with
+// them): `fonts/liberation/` beside `src/`, where `readRenderFonts` looks (`../fonts/` from
+// `src/report_runtime.js`).
+const fontDir = join(root, "fonts", "liberation");
+if (!existsSync(join(fontDir, "LICENSE"))) fail("fonts/liberation/LICENSE is missing");
+mkdirSync(join(dist, "fonts", "liberation"), { recursive: true });
+for (const f of readdirSync(fontDir)) {
+  copyFileSync(join(fontDir, f), join(dist, "fonts", "liberation", f));
 }
 
 console.log(

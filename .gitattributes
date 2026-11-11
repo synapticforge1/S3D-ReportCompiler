@@ -11,6 +11,9 @@
 # Exceptions follow the wildcard, because the last matching line wins.
 * text=auto eol=lf
 
+# Fonts are binary, never converted: the PDF embeds them byte for byte (fonts/liberation/README.md).
+*.ttf binary
+
 # The sample reports are fixtures that the conservation check reads back byte for byte. Leave
 # their line endings exactly as SkyCiv emitted them rather than letting a checkout rewrite them.
 tests/HTMLFilesToBeCompiled/*.html -text
