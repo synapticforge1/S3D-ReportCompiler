@@ -1399,7 +1399,17 @@ reads the stored PDF as today.
   rest was garbage the engine let pile up on a machine with memory to spare. **The full 36ft report:
   peak 22.4 → 16.3 → 8.2 GB, 360 → 314 s, PASS each time.** Left: ~7.5 GB of churn inside the word,
   number and style checks, ~4.5 GB in the render -- refinement, not a blocker.
-- Next: tests for the native renderer in the suite (none yet); the visual
+- ✅ **Tests for the native renderer, 2026-11-11** (owner: "yes"): (1) a report in the model
+  template's shape, made in the test (`modelReport`: collapsed tables with zebra rows and min/max
+  cells over pages, a 13-column table forcing shrink-to-fit, a bordered screenshot with an unquoted
+  src, an inline-block subheading, links, superscripts, a stray `</div>`), built natively: PASS,
+  every word styled, no pdf.js warning; in the PDF every font embedded and a Liberation face,
+  every alpha state a page uses defined; two builds byte-identical. (2) A member report refused
+  with `<svg>` named and no final PDF; a float, absolute positioning, a list, a CJK character, a
+  text-transform, a background image each refused by name through `renderDocument`. (3)
+  `S3D_RENDERER` refuses another value. Inverted: the resource-order bug (caught by the warning
+  check) and a render-time stamp ("two builds differ").
+- Next: the visual
   comparison (pages rasterised side by side, for the owner); the page-count difference (332 vs
   Chrome's 433 on the cut) measured; then the member reports (maths, SVG).
 
