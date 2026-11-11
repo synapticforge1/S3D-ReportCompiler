@@ -2517,6 +2517,139 @@ test("class B re-check 3, group A: maths' single letters and operators are count
 });
 
 test(
+  "JPEGs re-coded losslessly: the reference's entropy data, the same pixels (2026-11-11)",
+  { timeout: TIMEOUT },
+  async () => {
+    // Owner, 2026-11-11: the PDF "minimized"; the JPEG re-optimisation agreed after measuring
+    // (21.4 % of the 36ft report's screenshots). tests/jpeg/README.md says what each fixture is.
+    const { optimizeJpeg } = await import(pathToFileURL(join(ROOT, "src", "report_jpeg.ts")).href);
+    const dir = join(ROOT, "tests", "jpeg");
+    const { PDFDocument } = await import("pdf-lib");
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    /** A JPEG's pixels as pdf.js decodes it in a PDF -- the verifier's own path. */
+    const pixels = async (jpeg: Uint8Array) => {
+      const doc = await PDFDocument.create();
+      const image = await doc.embedJpg(jpeg);
+      doc
+        .addPage([image.width, image.height])
+        .drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+      const read = await pdfjs.getDocument({ data: await doc.save(), verbosity: 0 }).promise;
+      const page = await read.getPage(1);
+      const ops = await page.getOperatorList();
+      const name = ops.argsArray[ops.fnArray.indexOf(pdfjs.OPS.paintImageXObject)][0] as string;
+      return await new Promise<{ width: number; height: number; data: Uint8Array }>((r) =>
+        page.objs.get(name, r as (v: unknown) => void),
+      );
+    };
+    /** Each scan's entropy-coded data, in order. */
+    const scans = (b: Uint8Array): Buffer[] => {
+      const out: Buffer[] = [];
+      for (let i = 2; i < b.length - 1;) {
+        const m = b[i + 1];
+        if (m === 0xd9) break;
+        const len = (b[i + 2] << 8) | b[i + 3];
+        if (m !== 0xda) {
+          i += 2 + len;
+          continue;
+        }
+        let e = i + 2 + len;
+        while (
+          e < b.length - 1 &&
+          !(b[e] === 0xff && b[e + 1] !== 0 && !(b[e + 1] >= 0xd0 && b[e + 1] <= 0xd7))
+        )
+          e++;
+        out.push(Buffer.from(b.subarray(i + 2 + len, e)));
+        i = e;
+      }
+      return out;
+    };
+    const recoded = [
+      "ycc420",
+      "ycc422",
+      "ycc444",
+      "gray",
+      "restart-rows",
+      "restart-3mcu",
+      "three-scans",
+      "three-scans-restart",
+      "already-optimal",
+    ];
+    for (const name of recoded) {
+      const orig = new Uint8Array(readFileSync(join(dir, `${name}.jpg`)));
+      const ref = new Uint8Array(readFileSync(join(dir, "jpegtran", `${name}.jpg`)));
+      const ours: Uint8Array | null = optimizeJpeg(orig);
+      assert.ok(ours, `${name}: not re-coded`);
+      assert.ok(ours.length < orig.length, `${name}: ${ours.length} not under ${orig.length}`);
+      const a = scans(ours);
+      const b = scans(ref);
+      assert.equal(a.length, b.length, `${name}: scan count`);
+      for (const [k, s] of a.entries()) {
+        assert.ok(s.equals(b[k]), `${name}: scan ${k + 1} is not jpegtran's`);
+      }
+      const p = await pixels(orig);
+      const q = await pixels(ours);
+      assert.equal(`${q.width}x${q.height}`, `${p.width}x${p.height}`, `${name}: size`);
+      assert.ok(Buffer.from(q.data).equals(Buffer.from(p.data)), `${name}: pixels differ`);
+    }
+    // Shapes it does not read are left exactly as they are.
+    for (const name of ["progressive", "arithmetic"]) {
+      assert.equal(
+        optimizeJpeg(new Uint8Array(readFileSync(join(dir, `${name}.jpg`)))),
+        null,
+        name,
+      );
+    }
+    // Damaged input never throws, and is never "re-coded" into something else: cut short, a byte
+    // of the coded data changed, a stray marker, not a JPEG at all.
+    const base = new Uint8Array(readFileSync(join(dir, "ycc420.jpg")));
+    const sos = base.findIndex((v, i) => v === 0xff && base[i + 1] === 0xda);
+    const flipped = base.slice();
+    flipped[sos + 200] ^= 0x5a;
+    const marker = base.slice();
+    marker[sos + 300] = 0xff;
+    marker[sos + 301] = 0xd5;
+    for (const [what, bytes] of [
+      ["cut short", base.subarray(0, sos + 400)],
+      ["a stray marker", marker],
+      ["not a JPEG", new TextEncoder().encode("<svg/>")],
+      ["empty", new Uint8Array(0)],
+    ] as const) {
+      assert.equal(optimizeJpeg(bytes), null, what);
+    }
+    // A changed byte still decodes (to other symbols): if it is re-coded, the pixels are the
+    // damaged file's own, as pdf.js reads it.
+    const r = optimizeJpeg(flipped);
+    if (r) {
+      const p = await pixels(flipped);
+      const q = await pixels(r);
+      assert.ok(
+        Buffer.from(q.data).equals(Buffer.from(p.data)),
+        "a damaged file re-coded differently",
+      );
+    }
+
+    // Built: a sample with a JPEG in it -- re-coded in the packing, and the verifier's image check
+    // (pixel for pixel against the source) passes on the stored PDF.
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const jpeg = readFileSync(join(dir, "ycc420.jpg")).toString("base64");
+    const out = join(work, "jpeg-recoded");
+    mkdirSync(out, { recursive: true });
+    writeFileSync(
+      join(out, "member_0_report.html"),
+      sample.replace(/<\/body>/i, `<p><img src="data:image/jpeg;base64,${jpeg}"></p></body>`),
+    );
+    const built = run([MAIN, out, join(out, "out", "c.pdf")]);
+    assert.equal(built.code, 0, tail(built.out));
+    has(
+      built.out,
+      /jpeg:\s+1 image\(s\) re-coded losslessly, 4 → 3 kB/,
+      /images:\s+2 of 2 identical to their sources/,
+      /PASS/,
+    );
+  },
+);
+
+test(
   "an image whose src is not quoted is counted and compared (2026-11-11)",
   { timeout: TIMEOUT },
   async () => {

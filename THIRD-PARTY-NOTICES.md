@@ -100,6 +100,18 @@ libwebp also ships a separate `PATENTS` file: Google's additional grant of paten
 implementation of VP8, an extra permission rather than a restriction. The conformance test vectors
 used to prove the port (webm/libwebp-test-data) are not part of this repository or its packages.
 
+### Not derived: the JPEG re-coder (`src/report_jpeg.ts`)
+
+Recorded so it is not mistaken for derived code. `src/report_jpeg.ts` (2026-11-11) re-codes a JPEG's
+Huffman coding losslessly. It implements the JPEG standard's own procedures (ITU-T T.81 | ISO/IEC
+10918-1: Annex C for the codes, Annex F for the coding, Annex K.2 for optimal tables), written
+from the standard's description; it is **not a port of libjpeg or libjpeg-turbo source**, so the IJG
+licence's acknowledgement does not arise. libjpeg-turbo was used only as a **reference to test
+against**: its `jpegtran -optimize` writes the same entropy-coded data byte for byte (the same
+procedure gives the same tables), and its `cjpeg` made the test images in `tests/jpeg/` from a
+picture generated in code — that output carries no licence of the tool's, and neither tool is in
+this repository or its packages.
+
 ## Licences in the dependency tree
 
 All permissive. **No copyleft, and no NOTICE files to propagate** — none of the Apache-2.0 RUNTIME

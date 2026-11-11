@@ -56,6 +56,15 @@ licence.** Chromium is BSD-3-Clause. If this is ever packaged for redistribution
 matters — and it is a quiet argument in favour of the "fix it upstream" pitch in
 [known-issues.md](known-issues.md), since a vendor may be uncomfortable depending on it.
 
+## Written from a standard, tested against a reference: `src/report_jpeg.ts`
+
+The lossless JPEG re-coder (2026-11-11) implements ITU-T T.81 Annexes C, F and K.2 from the
+standard's description -- not ported from libjpeg / libjpeg-turbo, so no IJG acknowledgement is
+owed; THIRD-PARTY-NOTICES says so, so a reviewer does not take the byte-identical output for
+copied code. libjpeg-turbo 2.1.5 (`jpegtran`, `cjpeg`) was the measuring reference only, fetched with
+`apt-get download` into a WSL temp folder and never installed; its outputs (the test images'
+references in `tests/jpeg/jpegtran/`) carry no licence of the tool's.
+
 ## Evaluated and not adopted
 
 | Option | Licence | Why not — see [design-decisions.md](design-decisions.md) |
