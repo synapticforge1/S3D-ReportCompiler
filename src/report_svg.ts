@@ -2390,7 +2390,7 @@ const SVG_PROPS = new Set([
  * A pseudo-class (task 18 8j): structural ones by position among the element's siblings; `not`,
  * `is` and `where` over compounds; `never` for one that matches nothing in a print (`:hover`).
  */
-type Pseudo = {
+export type Pseudo = {
   kind: string;
   a?: number;
   b?: number;
@@ -2401,7 +2401,7 @@ type Pseudo = {
   node?: Node;
 };
 /** One compound selector: a tag (or any), classes, an id, attribute tests, pseudo-classes. */
-type Compound = {
+export type Compound = {
   tag: string | null;
   classes: string[];
   id: string | null;
@@ -2409,9 +2409,10 @@ type Compound = {
   attrs: [string, string | null, string | null, boolean][];
   pseudo: Pseudo[];
 };
-type Combinator = " " | ">" | "+" | "~";
+/** A combinator: descendant, child, next sibling, any later sibling. */
+export type Combinator = " " | ">" | "+" | "~";
 /** A selector: its compounds left to right, each with the combinator BEFORE it (null for the first). */
-type Selector = { parts: { c: Compound; before: Combinator | null }[]; spec: number };
+export type Selector = { parts: { c: Compound; before: Combinator | null }[]; spec: number };
 /** One stylesheet rule as this reader keeps it: a selector, its declarations, its order. */
 export type Rule = {
   sel: Selector;
