@@ -1385,8 +1385,15 @@ reads the stored PDF as today.
 - Found on the way: the H33 release test's "behind origin" case cloned origin's default branch,
   which is whatever branch ROOT had checked out -- from a branch other than main its push was
   refused quietly and the guard never reached (fixed on main too, `9b48dce`).
-- Next: the full report natively; the visual comparison (pages rasterised side by side, for the
-  owner); the page-count difference (332 vs Chrome's 433 on the cut) measured.
+- ✅ **The full 36ft report, native, VERIFIED -- 2026-11-11** (after #119's verifier indexes and
+  #120's bake containment, both on `main`): 6,969 pages laid out in 37.8 s; 24.66 MB; 308 words
+  and 16,160 numbers, 0 missing, per-report 1/1; images 5 of 5 identical; styling 2,836,333 of
+  2,836,333; PASS. 6 min in all (verification 5 min). Chrome on the same report: 33 min, no PDF.
+  ⚠️ **Peak memory 22.4 GB** (the verification holds every page's text, operators and styles at
+  once) -- the next thing to bring down; a smaller machine would fail before any time limit.
+- Next: the verifier's memory; tests for the native renderer in the suite (none yet); the visual
+  comparison (pages rasterised side by side, for the owner); the page-count difference (332 vs
+  Chrome's 433 on the cut) measured; then the member reports (maths, SVG).
 
 **Lossless JPEG re-coding, both renderers (on `main`, 2026-11-11).** 🔒 Owner: "scope the
 re-optimizing of the JPEG's entropy coding and test the actual gain or loss before we add it";
