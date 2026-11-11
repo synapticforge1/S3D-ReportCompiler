@@ -2516,6 +2516,64 @@ test("class B re-check 3, group A: maths' single letters and operators are count
   }
 });
 
+test(
+  "a report without a member heading is found by its own opening (2026-11-11)",
+  { timeout: TIMEOUT },
+  async () => {
+    // A SkyCiv model report ('36ftGatePostCheckCaseA SkyCiv Report.html') prints no "MEMBER # n
+    // DESIGN REPORT": its first page is the one that OPENS with its own first printed words.
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    const member = "<html><body><h2>MEMBER # 1 DESIGN REPORT</h2><p>Load 4.5</p></body></html>";
+    const model =
+      "<html><head><title>Not printed</title></head><body><h1>Gate Post Check Case A</h1>" +
+      "<p>File Name: GatePost 12.75</p><p>Nodal Results 3.25</p></body></html>";
+    const memberPage = "MEMBER #1 DESIGN REPORT Load 4.5";
+    const modelPages = ["Gate Post Check Case A\nFile Name: GatePost 12.75", "Nodal Results 3.25"];
+    const ok = core.compareEachReport([member, model], [memberPage, ...modelPages]);
+    assert.ok(ok.checked, ok.reason);
+    assert.deepEqual(
+      core.findReportStarts([member, model], [memberPage, ...modelPages]).starts,
+      [0, 1],
+    );
+    assert.deepEqual(
+      ok.reports.map((r: { missingWords: string[] }) => r.missingWords),
+      [[], []],
+    );
+    // Alone, too.
+    assert.deepEqual(core.findReportStarts([model], modelPages).starts, [0]);
+    // Its page lost: the model report's opening found nowhere -- not checked, named.
+    const lost = core.compareEachReport([member, model], [memberPage, modelPages[1]]);
+    assert.equal(lost.checked, false);
+    assert.match(lost.reason, /1 report heading\(s\) and 0 report opening\(s\) on 1 page\(s\)/);
+    // Its opening repeated at the top of a later page (a running title): two starts for one report.
+    const twice = core.compareEachReport([model], [modelPages[0], `${modelPages[0]} 3.25`]);
+    assert.equal(twice.checked, false);
+    // Two heading-less reports exchanged: each page opens with the OTHER's words.
+    const other = model.replace("Case A", "Case B").replace("12.75", "8.5");
+    const swapped = core.compareEachReport(
+      [model, other],
+      [
+        "Gate Post Check Case B\nFile Name: GatePost 8.5\nNodal Results 3.25",
+        "Gate Post Check Case A\nFile Name: GatePost 12.75\nNodal Results 3.25",
+      ],
+    );
+    assert.equal(swapped.checked, false);
+    assert.match(swapped.reason, /exchanged or out of order/);
+    // The head's <title> is not its opening: a page opening with it is not this report's.
+    assert.equal(core.compareEachReport([model], ["Not printed Gate Post Check"]).checked, false);
+
+    // Built: a member report and a heading-less one, every check cut at the right page.
+    const sample = readFileSync(join(SAMPLES, "member_0_report.html"), "utf8");
+    const dir = join(work, "opening-starts");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "member_0_report.html"), sample);
+    writeFileSync(join(dir, "Gate Post Check.html"), model);
+    const r = run([MAIN, dir, join(dir, "out", "c.pdf")]);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /per-report: 2\/2 reports hold all their own words and numbers/, /PASS/);
+  },
+);
+
 test("review 3, group E: every graphics and structure check can fail", async () => {
   // Two of the four checks verification.md lists had no failing case: deleting any of these lines
   // left every test green (2026-11-07 review). Each failure planted alone, on a clean observation.

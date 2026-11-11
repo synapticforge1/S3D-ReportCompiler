@@ -1198,7 +1198,21 @@ member reports (the 75-report zip) and the 36ft report on its own (a scratch cop
 never in the repo).
 
 ⏸️ **Paused 2026-11-10 (owner: "pause here for today"); resumed 2026-11-11 (owner: "lets proceed
-from where we left off yesterday").** (1) ✅ committed 2026-11-11 (above). (2) the 36ft report on
+from where we left off yesterday").** (1) ✅ committed 2026-11-11 (above). (2a) ✅ **report starts
+without the member heading, 2026-11-11:** `findReportStarts` (exported; surface +2, floor minor):
+a report printing no `MEMBER # n DESIGN REPORT` is known by the page that OPENS with its own first
+40 printed characters (spaces aside, from its body as a reader sees it -- not the head's
+`<title>`); each start must be its own source's; main.ts cuts every per-report check there (the
+image segmentation too). `sourceTally` memoised (the 36ft report: 96 s per read, read 3 times).
+Suite 96 pass, 2 skip, 0 fail. (2b) ❌ **the 36ft report alone, full size, 2026-11-11 (scratch
+copy, `S3D_CHROME_TIMEOUT_MS` 3 h):** bake 14 s (62 MB HTML, the web logo embedded), then Chrome
+rendered **33.3 min and exited 0 with NO PDF** (no reason printed; 10 processes, 15.4 GB at minute
+19). The guard held: nothing given its final name. So a longer limit alone cannot print it.
+🔒 **Owner, 2026-11-11, on the choice (split the render at the report's forced page breaks, or
+"can the transform of html to pdf be accomplished without browser interaction during the
+process? This would take a step in our checks off the table for the other browsers"): "lets test
+a scoped trial and see if we can move this forward faster."** → task 19, a native renderer
+(below). The split render is not being built. (2c) the tall image: not measured (no PDF). (2) the 36ft report on
 its own: report starts without the member heading (each report's first words as its signature),
 an over-tall image scaled to one page (measure how Chrome resolves a page height under its
 shrink-to-fit first), a render limit that grows with the document (its full-size timing was
@@ -1298,3 +1312,33 @@ Nothing is set aside without a fix. Recorded for the class it belongs to:
   the console closes — register both (measure Bun first). Then 80 tests run on Windows, none skipped.
 - Group 1's own skip, a probe case where a deletion removed the report heading, needed no fix: that
   build already fails ("report count does not match"); now pinned as a test section.
+
+---
+
+## 🟡 19. A native renderer: the baked HTML to PDF with no browser — SCOPED TRIAL (from 2026-11-11)
+
+🔒 **Owner, 2026-11-11: "lets test a scoped trial and see if we can move this forward faster"**,
+after Chrome could not print the 36ft model report (task 18, re-check 3, item 2b) and on the
+owner's own question: "can the transform of html to pdf be accomplished without browser
+interaction during the process? This would take a step in our checks off the table for the other
+browsers if this could be accomplished."
+
+**The options weighed (2026-11-11):** a layout engine has to stand in Chrome's place --
+WeasyPrint (Python: barred, no host Python), Prince (commercial, closed), wkhtmltopdf (QtWebKit,
+abandoned, a browser anyway), Paged.js / Vivliostyle (run inside a browser) -- or our own, in
+TypeScript on pdf-lib. **Chosen: our own, scoped.** What it buys: the other-browser review leaves
+the plan (what is drawn is our code's, known, not Skia's measured); the verification can know
+where each glyph came from; a 7,400-page report is bounded by our memory, not Chrome's; no
+render-time stamp. What it costs: a layout engine for SkyCiv's subset; line and page breaks will
+differ from Chrome's (the 380-page baseline re-set, judged visually by the owner); anything outside
+the subset refused by name, never approximated.
+
+**Scope, in order:** (1) the 36ft model report (tables, text, 4 images, a web logo; no maths, no
+SVG; 3.1 M cells in 200 tables; 5.3 KB of its own CSS) -- where Chrome prints nothing, so nothing
+is lost; Chrome stays for the member reports; (2) grow toward the member reports; maths last.
+
+**Shape:** `src/report_render.ts`, pure (no I/O): the SAME baked document Chrome is given in, a PDF
+out; its own HTML parser and cascade, NOT the verifier's (`report_style.ts` / `report_svg.ts`;
+design-decisions §9 -- a shared reader would make the style check a tautology); pdf-lib for the
+document, content streams written directly (millions of cells). The verification is unchanged and
+reads the stored PDF as today.

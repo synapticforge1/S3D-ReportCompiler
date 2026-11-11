@@ -105,6 +105,7 @@ import {
   buildMathRegex,
   compareAgainstPdf,
   compareEachReport,
+  findReportStarts,
   decodeReport,
   delimSignatures,
   drawnImages,
@@ -2383,8 +2384,9 @@ async function readPdf(pdfPath: string): Promise<PdfObservations & PdfDetail> {
       openDiagrams = 0;
     }
 
-    // Report headings are template-specific too, but this one fails loudly:
-    // no match means the count will not equal the number of sources.
+    // Report headings are template-specific too, but this one fails loudly: no match means the
+    // count will not equal the number of sources. The verification replaces these with the core's
+    // report starts, which also finds a report that prints no member heading (2026-11-11).
     if (/MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/i.test(text)) obs.headingPages.push(p);
   }
 
@@ -3269,6 +3271,11 @@ try {
     const filteredImages = sources.map(filteredElements);
     expected.expectedImages += filteredImages.reduce((a, b) => a + b, 0);
     const observed = await readPdf(candidatePdf);
+    // Where each report starts, by its member heading or, when it prints none, by its own opening
+    // words (2026-11-11): the core finds them, and every check below cuts the PDF there.
+    const located = findReportStarts(sources, observed.pageTexts);
+    if (located.starts) observed.headingPages = located.starts.map((p) => p + 1);
+    const perReport = compareEachReport(sources, observed.pageTexts);
     const check = compareAgainstPdf(expected, observed, entries.length);
 
     console.log(
@@ -3285,7 +3292,6 @@ try {
 
     // The set-wide check above cannot see a value lost from one report but present in another;
     // this one checks every report against its own part of the PDF (verification.md, limit 1).
-    const perReport = compareEachReport(sources, observed.pageTexts);
     const short = perReport.reports.filter((r) => r.missingWords.length || r.missingNumbers.length);
     if (!perReport.checked) {
       console.log(`  per-report: NOT checked -- ${perReport.reason}`);

@@ -2009,6 +2009,7 @@ export function resetBakeState(): void {
     bakeRemovals[key] = 0;
   }
   delimSignatures.clear();
+  tallyCache.clear();
   seenOpeners.clear();
   skippedDelims.clear();
   svgStyleWarnings.clear();
@@ -3986,7 +3987,35 @@ function revealsUnread(revealed: Set<string>): boolean {
     .some((one) => one === "" || !SIMPLE_SELECTOR.test(one));
 }
 
-function sourceTally(raw: string): {
+/** The tallies of the sources read most recently, by their raw text ({@link sourceTally}). */
+const tallyCache = new Map<string, SourceTally>();
+/** The raw characters {@link tallyCache} may hold before its oldest entries go. */
+const TALLY_CACHE_CHARS = 256 * 1024 * 1024;
+
+/**
+ * One source's tally, read once: a build asks for it three times per report (the set-wide check,
+ * the per-report check, the styles), and a 61 MB SkyCiv model report takes 96 s to read (measured
+ * 2026-11-11). Callers only read the result. The oldest entries go once the raw sources held pass
+ * {@link TALLY_CACHE_CHARS}.
+ */
+function sourceTally(raw: string): SourceTally {
+  const hit = tallyCache.get(raw);
+  if (hit) return hit;
+  const tally = readSourceTally(raw);
+  tallyCache.set(raw, tally);
+  let held = 0;
+  for (const k of tallyCache.keys()) held += k.length;
+  for (const k of tallyCache.keys()) {
+    if (held <= TALLY_CACHE_CHARS || k === raw) break;
+    held -= k.length;
+    tallyCache.delete(k);
+  }
+  return tally;
+}
+
+type SourceTally = ReturnType<typeof readSourceTally>;
+
+function readSourceTally(raw: string): {
   words: Map<string, number>;
   numbers: Map<string, number>;
   /** Each number with its neighbours ({@link neighbourTally}). */
@@ -4533,9 +4562,10 @@ export type PerReportResult = {
  *
  * {@link compareAgainstPdf} checks a set union across all reports, so a value lost from one report
  * but present in another passes it (two identical members, one with a hidden row). This closes that
- * gap. The PDF is cut into whole PAGES at the report headings — the SkyCiv template prints
- * `MEMBER # n DESIGN REPORT` once per report — and report i owns the pages from the one carrying its
- * heading up to (not including) the one carrying the next. Whole pages, not the heading's position:
+ * gap. The PDF is cut into whole PAGES at the report starts — the SkyCiv member template prints
+ * `MEMBER # n DESIGN REPORT` once per report; a report without that heading is known by the page
+ * that opens with its own first printed words (2026-11-11) — and report i owns the pages from its
+ * start up to (not including) the next report's. Whole pages, not the heading's position:
  * each report prints its tab strip and code line BEFORE its heading, and every report starts on a
  * new page (`.report-sheet { break-after: page }` in {@link assembleDocument}). Were a report ever to
  * start mid-page, the earlier report's tail would land in the next segment and the earlier report
@@ -4564,41 +4594,9 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
   const visualPages = pageTexts.map((t) =>
     t.includes(VISUAL) ? t.slice(t.indexOf(VISUAL) + 1) : t,
   );
-  const heading = /MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/gi;
-  const headingCount = pages.reduce((n, t) => n + (t.match(heading) ?? []).length, 0);
-  const starts = pages.flatMap((t, p) =>
-    /MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/i.test(t) ? [p] : [],
-  );
-  // Two headings on one page would make two reports share it: not segmentable by page.
-  if (starts.length !== sources.length || headingCount !== sources.length) {
-    return {
-      checked: false,
-      reason: `found ${headingCount} report heading(s) on ${starts.length} page(s) for ${sources.length} source(s)`,
-      reports: [],
-    };
-  }
-
-  // Each segment is its OWN source's: the heading its pages print must be the one its source
-  // carries, member number and all. Paired by position only, two reports exchanged in assembly
-  // were each compared with the other's source, and passed when the template's shared text and
-  // the member number elsewhere on the page supplied the tokens (task 18 item 7).
-  const headingOf = (text: string) =>
-    (text.match(/MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/i)?.[0] ?? "")
-      .replace(/\s+/g, "")
-      .toUpperCase();
-  for (let i = 0; i < sources.length; i++) {
-    const own = headingOf(decodeEntities(readerVisible(sources[i]).replace(SOURCE_TAG, " ")));
-    const printed = headingOf(pages[starts[i]]);
-    if (own !== printed) {
-      return {
-        checked: false,
-        reason:
-          `report ${i + 1}'s pages are headed "${printed}" but its source is "${own || "(no heading)"}" ` +
-          "-- reports exchanged or out of order",
-        reports: [],
-      };
-    }
-  }
+  const located = findReportStarts(sources, pages);
+  if (located.starts === null) return { checked: false, reason: located.reason, reports: [] };
+  const starts = located.starts;
 
   const reports = sources.map((source, i) => {
     // The first report owns every page before its heading too: a report's own content printed
@@ -4656,6 +4654,109 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
     };
   });
   return { checked: true, reason: "", reports };
+}
+
+/** Outcome of {@link findReportStarts}: each report's first page, or why it cannot be told. */
+export type ReportStarts = { starts: number[]; reason: "" } | { starts: null; reason: string };
+
+/** The heading a SkyCiv member report prints once, at its start. */
+const MEMBER_HEADING = /MEMBER\s*#?\s*\d+\s*DESIGN\s*REPORT/i;
+
+/** How many of a report's first printed characters (spaces aside) mark its first page. */
+const OPENING_CHARS = 40;
+
+/** Text as the start-of-report search compares it: normalised, every space removed. */
+function compactText(text: string): string {
+  return normalizeText(text).replace(/\s+/g, "");
+}
+
+/**
+ * How a report's first page is known: its member heading, `MEMBER # n DESIGN REPORT`, compacted
+ * and upper-cased -- or, for a report that prints none (owner, 2026-11-10: a SkyCiv model report,
+ * `36ftGatePostCheckCaseA SkyCiv Report.html`, has no member heading), its own first
+ * {@link OPENING_CHARS} printed characters, read from its body as a reader sees it
+ * ({@link readerBody}; the head's `<title>` is not printed). Spaces are left out on both sides:
+ * the PDF's text layer and the source break lines in different places. A report that opens with
+ * maths compares its TeX with the typeset text and is not found -- the loud direction.
+ */
+function reportMark(source: string): { heading: string } | { opening: string } {
+  const heading = decodeEntities(readerVisible(source).replace(SOURCE_TAG, " ")).match(
+    MEMBER_HEADING,
+  )?.[0];
+  if (heading) return { heading: heading.replace(/\s+/g, "").toUpperCase() };
+  const printed = compactText(decodeEntities(sourceTally(source).body.replace(SOURCE_TAG, " ")));
+  return { opening: [...printed].slice(0, OPENING_CHARS).join("") };
+}
+
+/**
+ * The page each report starts on (0-based), or why it cannot be told. A page starts a report when
+ * it prints a member heading, or when it OPENS with a heading-less report's own opening
+ * ({@link reportMark}). There must be exactly one such page per source, and the i-th must be the
+ * i-th source's own: its heading, member number and all, or its opening. Paired by position only,
+ * two reports exchanged in assembly were each compared with the other's source, and passed when
+ * the template's shared text supplied the tokens (task 18 item 7). Two headings on one page would
+ * make two reports share it: not segmentable by page. {@link compareEachReport} cuts the PDF here.
+ *
+ * @param sources the raw source reports, in build order
+ * @param pageTexts the extracted text of each PDF page, in page order (a CLI page text's visual
+ *   lines after U+2029 are not read)
+ * @example
+ * ```ts
+ * import { findReportStarts } from "@jrmarcum/s3d-reportcompiler";
+ * const r = findReportStarts(["<body><h1>Gate Post Check</h1></body>"], ["Gate Post Check"]);
+ * console.log(r.starts); // [0]
+ * ```
+ */
+export function findReportStarts(sources: string[], pageTexts: string[]): ReportStarts {
+  const pages = pageTexts.map((t) => t.split(String.fromCharCode(0x2029))[0]);
+  const marks = sources.map(reportMark);
+  const openings = marks.flatMap((m) => ("opening" in m ? [m.opening] : []));
+  const members = marks.length - openings.length;
+  if (openings.some((o) => o === "")) {
+    return { starts: null, reason: "a report without a member heading prints nothing to find" };
+  }
+  const compacted = pages.map(compactText);
+  const headingCount = pages.reduce(
+    (n, t) => n + (t.match(new RegExp(MEMBER_HEADING.source, "gi")) ?? []).length,
+    0,
+  );
+  const opens = (p: number) => openings.some((o) => compacted[p].startsWith(o));
+  const starts = pages.flatMap((t, p) => (MEMBER_HEADING.test(t) || opens(p) ? [p] : []));
+  if (starts.length !== sources.length || headingCount !== members) {
+    const openingPages = pages.filter((_t, p) => opens(p)).length;
+    return {
+      starts: null,
+      reason:
+        `found ${headingCount} report heading(s)` +
+        (openings.length > 0 ? ` and ${openingPages} report opening(s)` : "") +
+        ` on ${starts.length} page(s) for ${sources.length} source(s)`,
+    };
+  }
+  const headingOf = (text: string) =>
+    (text.match(MEMBER_HEADING)?.[0] ?? "").replace(/\s+/g, "").toUpperCase();
+  for (let i = 0; i < sources.length; i++) {
+    const mark = marks[i];
+    const page = starts[i];
+    if ("heading" in mark) {
+      const printed = headingOf(pages[page]);
+      if (printed === mark.heading) continue;
+      return {
+        starts: null,
+        reason:
+          `report ${i + 1}'s pages are headed "${printed || "(no heading)"}" but its source is "${mark.heading}" ` +
+          "-- reports exchanged or out of order",
+      };
+    }
+    if (compacted[page].startsWith(mark.opening)) continue;
+    const printed = [...compacted[page]].slice(0, OPENING_CHARS).join("");
+    return {
+      starts: null,
+      reason:
+        `report ${i + 1}'s pages open with "${printed}" but its source with "${mark.opening}" ` +
+        "-- reports exchanged or out of order",
+    };
+  }
+  return { starts, reason: "" };
 }
 
 /** One report as {@link findBrokenReferences} reads it: its source, and what the bake made of it. */
