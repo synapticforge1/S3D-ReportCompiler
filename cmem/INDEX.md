@@ -84,6 +84,7 @@ Workspace rules recorded here (2026-11-09; full text `../cmem/working-rules.md`)
 | [bun-migration.md](bun-migration.md) | The move off Deno (JSR kept): what was measured, the seven steps, the owner's decisions |
 | [history-purge-2026-10-26.md](history-purge-2026-10-26.md) | The H19 path purge: how, how verified, and the **old → new commit-id map** — look old ids up here |
 | [practices.md](practices.md) | ⭐ The working rules this project paid for, each with its evidence |
+| [review-process.md](review-process.md) | 🔒 **How reviews are run**: targeted agent code reviews, security reviews, hardening reviews — the floor, the rounds, the brief template, the records (owner, 2026-11-12; sent to the workspace as C46) |
 | [best-practices.md](best-practices.md) | The workspace's 28 ★ convergent rules — a stamped verbatim COPY, never edited here |
 | [process-log.md](process-log.md) | How it was built: what was tried, what was measured, which claims were wrong |
 | [../tests/controls/](../tests/controls/README.md) | The negative-control scripts, path-free, runnable from any checkout |
