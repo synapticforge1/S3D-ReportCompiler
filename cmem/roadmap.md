@@ -1362,6 +1362,46 @@ reads the stored PDF as today.
 - Next: the full report natively; the visual comparison (pages rasterised side by side, for the
   owner); the page-count difference (orphans / widows, row heights, line breaking) measured.
 
+🎯 **Target 1, 2026-11-12 (owner: "I agree. Lets proceed with target 1 that is very
+resonable").** Asked for a time frame to a viable production product, two targets were laid out:
+**target 1** -- a release using both renderers, Chrome for what the native renderer cannot draw
+yet (the member reports), the native renderer for the rest (the 36ft model report), one verified
+PDF -- about 3–4 sessions (routing and merging; hardening for release; a fresh review); **target
+2** -- native for everything (phases 1–3 above, the three real sets passing natively, review
+rounds) -- about 8–12 sessions in all, maths the main unknown; and class B re-check 3's groups
+B–F, about 2–3 sessions, needed either way. Target 1 first; target 2 as the release after.
+
+⏸️ **Paused 2026-11-11 (owner: "I need to pause here for today"). Pick up, in order:**
+1. **`main`, uncommitted: the verifier's text pieces** (`main.ts` `piecesOf`): pdf.js JOINS text
+   shows drawn edge to edge in one font into one item, and the verifier styled a whole item by
+   the show it starts in -- a black value after a blue label was judged blue (found by the native
+   renderer's member template; Chrome keeps such runs apart, so a Chrome build cannot show it:
+   the old reader passes `<span style="color:#0000ff">Zorblue</span>Zorblack` too). Each show
+   now records its glyphs' text; an item is split into pieces where each later show of its font
+   on its baseline begins. Samples unchanged (13/13, 1,277 drawings, 9,877 styled words), types
+   and lint clean; ✅ the suite finished green overnight (99 pass, 2 skip, 0 fail) and it was
+   committed 2026-11-12. Its test belongs in the trial (built natively, inverted against the old
+   reader).
+2. **`trial/native-render`, STASHED (`git stash list`: "trial: table rewrite in progress"),
+   `src/report_render.ts` only** -- phase 1 of the member reports (owner: "yes"): the table layout
+   rewritten around a slot grid (`Slot`, `Grid`, `spanOf`, `preferredWidth`, `columnWidths`):
+   `colspan` / `rowspan`, percentage columns, cell `min-width` and `height`, a row a rowspan joins
+   placed together, rows that do not fit split across pages between the pieces of each cell's own
+   flow (`Flow.breaks`, `Recorder.replaySlice`), the `<thead>` drawn again on each page, cell
+   `vertical-align` (top / middle / bottom; the UA's `td { vertical-align: inherit }`), a block's
+   own vertical-align no longer applied to its text (`onBaseline`), `::before` / `::after` boxes
+   that are only boxes (`pseudoBoxOf`, `pseudoBox`; SkyCiv's `th[rowspan]::before` frame); and the
+   parser's end tags scoped to their own table (an inner table's `</tbody>` closed the outer one).
+   `git switch trial/native-render && git stash pop`, then merge `main`. One lint finding to fix
+   (`noAssignInExpressions` in `styleOf`'s `(e.pseudo ??= []).push`). Measured before the stash:
+   the 13 samples with their maths and drawings stripped (scratch `strip.ts`) render with NO
+   refusal; the verification failed only on the label colour of item 1.
+3. Then: rerun the stripped samples; compare them with Chrome side by side (split rows, repeated
+   headers); the phase-1 tests (a nested table, spans, % columns, a split row, the repeated header,
+   the `::before` frame, the label case); the 36ft report unchanged; then phases 2 (SVG: only
+   `line`, `path`, `text`, `g`, one `<style>` and one transform in all 136 member reports) and 3
+   (maths through MathJax's SVG output, drawn as text in the embedded MathJax fonts).
+
 **Lossless JPEG re-coding, both renderers (on `main`, 2026-11-11).** 🔒 Owner: "scope the
 re-optimizing of the JPEG's entropy coding and test the actual gain or loss before we add it";
 then "I agree with the recommendation on the JPEG re-optimisation build"; and "this will need to

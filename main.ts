@@ -1608,6 +1608,8 @@ async function readPdf(
       end: number[];
       font: string;
       mode: number;
+      /** Its glyphs' text: where it begins in an item pdf.js joined from several shows. */
+      text: string;
     }[] = [];
     let fontId = "";
     // The text state: the text matrix and line matrix, the font size, the leading.
@@ -2011,6 +2013,15 @@ async function readPdf(
               end: [em[4], em[5]],
               font: fontId,
               mode: gs.mode,
+              text: Array.isArray(glyphs)
+                ? glyphs
+                    .map((g) =>
+                      typeof g === "object" && g !== null
+                        ? String((g as { unicode?: string }).unicode ?? "")
+                        : "",
+                    )
+                    .join("")
+                : "",
             });
           }
         }
@@ -2312,15 +2323,28 @@ async function readPdf(
       }
       return psName.get(id) ?? "";
     };
-    const styleOf = (font: string, t: number[]): PdfRunStyle | null => {
+    /**
+     * Each piece of a text item and the style its show draws it in. The item starts in the show
+     * of its font on whose baseline, between its start and its end, it starts: pdf.js cuts a show
+     * into items at a wide space, and trims a leading one, so an item need not start where its show
+     * does ("(Library)", measured 2026-11-10). And pdf.js JOINS shows drawn edge to edge in one font
+     * into one item: a blue "Section Name:" and the black value after it came out as one item, and
+     * the value was judged blue (2026-11-11, the native renderer's first member report; Chrome
+     * could join them as well) -- so every later show of the font that starts within the item on
+     * its baseline starts a piece of its own, where its text begins in the item's.
+     */
+    const piecesOf = (
+      font: string,
+      t: number[],
+      str: string,
+      width: number,
+    ): { at: number; style: PdfRunStyle | null }[] => {
       const [a, b, c, d, x, y] = t;
       const len = Math.hypot(a, b) || 1;
       // Its size across the baseline (a slant lengthens the up axis), and how far it leans.
       const size = Math.abs(a * d - b * c) / len;
       const skew = (a * c + b * d) / (len * (Math.hypot(c, d) || 1));
-      // The show of its font on whose baseline, between its start and its end, the item starts:
-      // pdf.js cuts a show into items at a wide space, and trims a leading one, so an item need
-      // not start where its show does ("(Library)", measured 2026-11-10).
+      const [ux, uy] = [a / len, b / len];
       let best: (typeof shows)[number] | null = null;
       let near = 0.05 * size;
       for (const s of shows) {
@@ -2336,17 +2360,40 @@ async function readPdf(
           near = d;
         }
       }
-      if (!best) return null;
-      // One object per distinct style, shared by every run drawn in it (2026-11-11: one per run,
-      // the full 36ft report's 2.3 M runs held millions of copies of a handful of styles).
-      const font2 = fontName(best.font);
-      const key = `${font2}|${best.fill.join(",")}|${best.alpha}|${best.mode}|${size}|${skew}`;
-      let shared = runStyles.get(key);
-      if (!shared) {
-        shared = { font: font2, fill: best.fill, alpha: best.alpha, mode: best.mode, size, skew };
-        runStyles.set(key, shared);
+      if (!best) return [{ at: 0, style: null }];
+      const styleOfShow = (s: (typeof shows)[number]): PdfRunStyle => {
+        // One object per distinct style, shared by every run drawn in it (2026-11-11: one per
+        // run, the full 36ft report's 2.3 M runs held millions of copies of a handful of styles).
+        const font2 = fontName(s.font);
+        const key = `${font2}|${s.fill.join(",")}|${s.alpha}|${s.mode}|${size}|${skew}`;
+        let shared = runStyles.get(key);
+        if (!shared) {
+          shared = { font: font2, fill: s.fill, alpha: s.alpha, mode: s.mode, size, skew };
+          runStyles.set(key, shared);
+        }
+        return shared;
+      };
+      const pieces = [{ at: 0, style: styleOfShow(best) as PdfRunStyle | null }];
+      // The shows after it that start within the item, on its baseline, in drawing order.
+      const startOrder = best.order;
+      const later = shows
+        .filter((s) => {
+          if (s.font !== font || s.order <= startOrder) return false;
+          const along = (s.origin[0] - x) * ux + (s.origin[1] - y) * uy;
+          const across = (s.origin[1] - y) * ux - (s.origin[0] - x) * uy;
+          return Math.abs(across) < 0.1 * size && along > 0.01 && along < width - 0.01;
+        })
+        .sort((p, q) => p.order - q.order);
+      let cursor = 1;
+      for (const s of later) {
+        const own = s.text.replace(/^\s+/, "");
+        if (own === "") continue;
+        const at = str.indexOf(own, cursor);
+        if (at < 0) break;
+        pieces.push({ at, style: styleOfShow(s) });
+        cursor = at + 1;
       }
-      return shared;
+      return pieces;
     };
     for (const raw of items) {
       const it = raw as { str?: string; transform?: number[]; width?: number; fontName?: string };
@@ -2354,7 +2401,9 @@ async function readPdf(
       const [a, b] = it.transform;
       const [x, y] = [it.transform[4], it.transform[5]];
       const size = Math.hypot(it.transform[2], it.transform[3]) || 1;
-      const style = /\S/.test(it.str) ? styleOf(String(it.fontName ?? ""), it.transform) : null;
+      const own = /\S/.test(it.str)
+        ? piecesOf(String(it.fontName ?? ""), it.transform, it.str, it.width ?? 0)
+        : [{ at: 0, style: null }];
       const len = Math.hypot(a, b) || 1;
       const [dx, dy] = [a / len, b / len];
       const inked = /\S/.test(it.str);
@@ -2376,9 +2425,12 @@ async function readPdf(
         along >= -0.1 * size &&
         along - last.width < 0.33 * size + (last.spaces ?? 0)
       ) {
-        last.pieces = [...(last.pieces ?? []), { at: last.text.length, style }];
+        last.pieces = [
+          ...(last.pieces ?? []),
+          ...own.map((q) => ({ at: last.text.length + q.at, style: q.style })),
+        ];
         last.text += it.str;
-        if (style) last.styles = [...(last.styles ?? []), style];
+        for (const q of own) if (q.style) last.styles = [...(last.styles ?? []), q.style];
         if (inked) {
           last.width = along + (it.width ?? 0);
           last.spaces = 0;
@@ -2394,8 +2446,8 @@ async function readPdf(
           dx,
           dy,
           spaces: 0,
-          styles: style ? [style] : [],
-          pieces: [{ at: 0, style }],
+          styles: own.flatMap((q) => (q.style ? [q.style] : [])),
+          pieces: own,
         });
       }
     }
