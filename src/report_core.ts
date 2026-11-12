@@ -4864,7 +4864,9 @@ export function compareEachReport(sources: string[], pageTexts: string[]): PerRe
   const visualPages = pageTexts.map((t) =>
     t.includes(VISUAL) ? t.slice(t.indexOf(VISUAL) + 1) : t,
   );
-  const located = findReportStarts(sources, pages);
+  // The page texts whole: findReportStarts reads both readings (it was given the content order
+  // alone, so a report only the visual lines find failed here while the CLI found it -- T1-3).
+  const located = findReportStarts(sources, pageTexts);
   if (located.starts === null) return { checked: false, reason: located.reason, reports: [] };
   const starts = located.starts;
 
@@ -4953,13 +4955,65 @@ function compactText(text: string): string {
  * the PDF's text layer and the source break lines in different places. A report that opens with
  * maths compares its TeX with the typeset text and is not found -- the loud direction.
  */
-function reportMark(source: string): { heading: string } | { opening: string } {
+function reportMark(source: string): { heading: string } | { opening: string; blocks: string[] } {
   const heading = decodeEntities(readerVisible(source).replace(SOURCE_TAG, " ")).match(
     MEMBER_HEADING,
   )?.[0];
   if (heading) return { heading: heading.replace(/\s+/g, "").toUpperCase() };
-  const printed = compactText(decodeEntities(sourceTally(source).body.replace(SOURCE_TAG, " ")));
-  return { opening: [...printed].slice(0, OPENING_CHARS).join("") };
+  const body = sourceTally(source).body;
+  const printed = compactText(decodeEntities(body.replace(SOURCE_TAG, " ")));
+  const opening = [...printed].slice(0, OPENING_CHARS).join("");
+  // The opening's BLOCKS (paragraphs, headings, list items, table rows...), each compacted: what
+  // a float may move as a whole (known-issues #121). Kept only while they add up to the printed
+  // text exactly; otherwise the opening is matched exactly alone.
+  const blocks: string[] = [];
+  let reach = 0;
+  for (const piece of body.split(OPENING_BLOCK_TAG)) {
+    if (reach >= [...opening].length) break;
+    const b = compactText(decodeEntities(piece.replace(SOURCE_TAG, " ")));
+    if (b === "") continue;
+    blocks.push(b);
+    reach += [...b].length;
+  }
+  return { opening, blocks: printed.startsWith(blocks.join("")) ? blocks : [] };
+}
+
+/**
+ * The tags that end one block of a report's opening and start another: what CSS lays out as its own
+ * box. A table cell is NOT one -- a row is kept whole, so a value never leaves its label.
+ */
+const OPENING_BLOCK_TAG =
+  /<\/?(?:p|div|h[1-6]|li|ul|ol|dl|dt|dd|tr|table|thead|tbody|tfoot|caption|blockquote|pre|section|article|header|footer|aside|nav|figure|figcaption|address|center|fieldset|form|hr|br)\b(?:"[^"]*"|'[^']*'|[^"'>])*>/gi;
+
+/**
+ * Whether `text` (a page's compacted reading) begins with an `opening` made of `blocks` in some
+ * order: each block whole, in its own characters' order, the last one possibly cut where the
+ * opening ends. A float moves whole blocks (known-issues #121); it never moves a value away from
+ * its label inside one, so a block changed inside -- two values swapped, a title's digits
+ * exchanged ("C1 Level 2" for "C2 Level 1") -- is not found.
+ */
+function opensWithBlocks(text: string, opening: string, blocks: string[]): boolean {
+  if (text.startsWith(opening)) return true;
+  const need = opening.length;
+  if (blocks.length < 2 || text.length < need) return false;
+  const used = new Array<boolean>(blocks.length).fill(false);
+  const fits = (at: number): boolean => {
+    if (at >= need) return true;
+    for (let k = 0; k < blocks.length; k++) {
+      if (used[k]) continue;
+      const b = blocks[k];
+      const room = need - at;
+      const whole = b.length <= room && text.startsWith(b, at);
+      const cut = b.length > room && text.startsWith(b.slice(0, room), at);
+      if (!whole && !cut) continue;
+      if (cut) return true;
+      used[k] = true;
+      if (fits(at + b.length)) return true;
+      used[k] = false;
+    }
+    return false;
+  };
+  return fits(0);
 }
 
 /**
@@ -4998,30 +5052,20 @@ export function findReportStarts(sources: string[], pageTexts: string[]): Report
   // (2026-11-12, "Wind Check · Gust factor · Design pressure" printed "Gust factor · Wind Check ·
   // Design pressure", or top to bottom "Wind Check · Design pressure · Gust factor"). So a page
   // opens with an opening when, in its content order or its visual lines (the CLI's page texts
-  // carry both), it begins with the opening's characters EXACTLY or REARRANGED -- the same
-  // characters, so the same report: another report's opening is other characters, and an exchange
-  // still fails below. A rearrangement crossing the opening's last character is not found: loud.
+  // carry both), it begins with the opening exactly, or with its source BLOCKS in another order,
+  // each whole ({@link opensWithBlocks}). Not its characters in any order: that took two values
+  // swapped inside a paragraph, or two reports whose titles are anagrams ("Column C1 Level 2" /
+  // "Column C2 Level 1") exchanged, for the right report (T1-3 review, 2026-11-12).
   const visual = readings.map((r) => (r.length > 1 ? compactText(r[1]) : null));
-  /** A text's first {@link OPENING_CHARS} characters (an opening is at most that), as an array. */
-  const head = (t: string) => [...t.slice(0, 2 * OPENING_CHARS)].slice(0, OPENING_CHARS);
-  const heads = pages.map((_t, p) =>
-    [compacted[p], visual[p]].flatMap((t) => (t === null ? [] : [{ text: t, chars: head(t) }])),
-  );
-  const sorted = (chars: string[]) => [...chars].sort().join("");
-  const openingSorted = new Map(
-    openings.map((o) => [o, { n: [...o].length, key: sorted([...o]) }]),
-  );
-  const opensWith = (p: number, o: string) =>
-    heads[p].some(({ text, chars }) => {
-      if (text.startsWith(o)) return true;
-      const want = openingSorted.get(o);
-      return want !== undefined && sorted(chars.slice(0, want.n)) === want.key;
-    });
+  type Opening = { opening: string; blocks: string[] };
+  const opensWith = (p: number, m: Opening) =>
+    [compacted[p], visual[p]].some((t) => t !== null && opensWithBlocks(t, m.opening, m.blocks));
+  const openingMarks = marks.filter((m): m is Opening => "opening" in m);
   const headingCount = pages.reduce(
     (n, t) => n + (t.match(new RegExp(MEMBER_HEADING.source, "gi")) ?? []).length,
     0,
   );
-  const opens = (p: number) => openings.some((o) => opensWith(p, o));
+  const opens = (p: number) => openingMarks.some((m) => opensWith(p, m));
   const starts = pages.flatMap((t, p) => (MEMBER_HEADING.test(t) || opens(p) ? [p] : []));
   if (starts.length !== sources.length || headingCount !== members) {
     const openingPages = pages.filter((_t, p) => opens(p)).length;
@@ -5048,7 +5092,7 @@ export function findReportStarts(sources: string[], pageTexts: string[]): Report
           "-- reports exchanged or out of order",
       };
     }
-    if (opensWith(page, mark.opening)) continue;
+    if (opensWith(page, mark)) continue;
     const printed = [...compacted[page]].slice(0, OPENING_CHARS).join("");
     return {
       starts: null,

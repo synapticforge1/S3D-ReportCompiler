@@ -234,7 +234,7 @@ THE SIMPLE WAY
   CompiledPDF folder beside them:
 
       CompiledPDF/combined_report.pdf     <- the document
-      CompiledPDF/combined_report.html    <- the baked reports, as rendered
+      CompiledPDF/combined_report.html    <- the baked reports the PDF was made from
 
   It also works one level up, from a folder containing HTMLFilesToBeCompiled/.
 
@@ -292,8 +292,9 @@ REQUIREMENTS
   either way. S3D_CHROME_NO_SANDBOX takes 1, true or yes (or 0, false, no);
   anything else stops the build, as does a CHROME_PATH that names no file.
 
-  Chrome is stopped if it has not finished in 10 minutes. For a very large set
-  allow it longer, in milliseconds: S3D_CHROME_TIMEOUT_MS=1800000
+  Each Chrome run is stopped if it has not finished in 10 minutes (a set split
+  around natively drawn reports runs Chrome once per part). For a very large
+  set allow it longer, in milliseconds: S3D_CHROME_TIMEOUT_MS=1800000
 
   Two renderers draw the reports: Chrome, and this package's own (no browser;
   fonts embedded from the package), which draws a subset of HTML and CSS --
@@ -1379,23 +1380,78 @@ function collectGarbage(): void {
  * its language, the viewer preferences -- is taken from the first part that says it. No part's
  * structure tree is carried (the packing drops each page's `StructParents` index into one, as it
  * does for Chrome's whole document). No date is written: the same parts join to the same bytes.
+ *
+ * In-page links (`href="#…"`) keep working: Chrome names each link's target in the catalog's
+ * `/Dests` (`/r1-later [page /XYZ x y zoom]`), which copying pages leaves behind -- every link of a
+ * joined Chrome part went dead (T1-3 review). Each part's destinations are carried, their page
+ * remapped to its copy; names are unique across parts (the bake prefixes every id `r{i}-`). A
+ * destination that cannot be carried -- a page outside its part, a name met twice, a name tree,
+ * a link that points at a page object itself (copying it would copy that page again) -- stops
+ * the build, named: a dead link in a certified package is not left for a reader to find.
  */
 async function joinParts(parts: Uint8Array[]): Promise<Uint8Array> {
   const out = await PDFDocument.create({ updateMetadata: false });
   out.setProducer("s3d-reportcompiler");
   out.setCreator("s3d-reportcompiler");
-  for (const bytes of parts) {
+  const dests = PDFDict.withContext(out.context);
+  for (const [n, bytes] of parts.entries()) {
     const part = await PDFDocument.load(bytes, { updateMetadata: false });
+    const copier = PDFObjectCopier.for(part.context, out.context);
     for (const key of ["Lang", "ViewerPreferences"].map((k) => PDFName.of(k))) {
       const value = part.catalog.get(key);
-      if (value !== undefined && !out.catalog.has(key)) {
-        out.catalog.set(key, PDFObjectCopier.for(part.context, out.context).copy(value));
+      if (value !== undefined && !out.catalog.has(key)) out.catalog.set(key, copier.copy(value));
+    }
+    const refuse = (what: string): never => {
+      throw new Error(`Joining the rendered parts: part ${n + 1} ${what}.`);
+    };
+    const names = part.catalog.lookup(PDFName.of("Names"));
+    if (names instanceof PDFDict && names.has(PDFName.of("Dests"))) {
+      refuse("names its link targets in a name tree, which this build does not join");
+    }
+    const srcPages = part.getPages();
+    for (const page of srcPages) {
+      const annots = page.node.lookup(PDFName.of("Annots"));
+      if (!(annots instanceof PDFArray)) continue;
+      for (const a of annots.asArray()) {
+        const annot = part.context.lookup(a);
+        if (!(annot instanceof PDFDict)) continue;
+        const action = annot.lookup(PDFName.of("A"));
+        const target =
+          annot.get(PDFName.of("Dest")) ??
+          (action instanceof PDFDict ? action.get(PDFName.of("D")) : undefined);
+        if (target instanceof PDFArray || target instanceof PDFRef) {
+          refuse("has a link that points at a page object itself");
+        }
       }
     }
-    for (const page of await out.copyPages(part, part.getPageIndices())) {
-      out.addPage(page);
+    const copied = await out.copyPages(part, part.getPageIndices());
+    const pageOf = new Map(srcPages.map((p, i) => [p.ref.toString(), copied[i].ref]));
+    const partDests = part.catalog.lookup(PDFName.of("Dests"));
+    if (partDests instanceof PDFDict) {
+      for (const [key, value] of partDests.entries()) {
+        const looked = part.context.lookup(value);
+        const array = looked instanceof PDFDict ? looked.lookup(PDFName.of("D")) : looked;
+        const page = array instanceof PDFArray ? array.get(0) : undefined;
+        const mapped = page instanceof PDFRef ? pageOf.get(page.toString()) : undefined;
+        if (!(array instanceof PDFArray) || mapped === undefined) {
+          refuse(`has a link target ${key} that is not one of its pages`);
+        }
+        if (dests.has(key)) refuse(`names the link target ${key} another part names too`);
+        dests.set(
+          key,
+          out.context.obj([
+            mapped as PDFRef,
+            ...(array as PDFArray)
+              .asArray()
+              .slice(1)
+              .map((v) => copier.copy(v)),
+          ]),
+        );
+      }
     }
+    for (const page of copied) out.addPage(page);
   }
+  if (dests.keys().length > 0) out.catalog.set(PDFName.of("Dests"), out.context.register(dests));
   return await out.save({ useObjectStreams: false });
 }
 
@@ -2790,10 +2846,9 @@ const skipped = allHtml.length - entries.length;
 
 /** How to point the build at a browser, said whenever one is needed and not found. */
 function noChromeHelp(): void {
-  console.error("One of them renders every report holding maths or a drawing, so it has to be");
-  console.error(
-    "installed. If you already have one somewhere non-standard, point at the executable:\n",
-  );
+  console.error("One of them renders every report the native renderer does not draw (maths, a");
+  console.error("drawing, or what it refuses), so it has to be installed. If you already have one");
+  console.error("somewhere non-standard, point at the executable:\n");
   console.error(`  Windows   set CHROME_PATH=C:\\Path\\To\\chrome.exe`);
   console.error(
     `  macOS     export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`,
@@ -3464,10 +3519,11 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
 }
 
 try {
-  // Both outputs live in the output directory: the baked HTML is the exact
-  // input the reports were rendered from (Chrome is given it whole when it
-  // draws every report), so keeping it next to the PDF is what makes a result
-  // reproducible and inspectable after the fact.
+  // Both outputs live in the output directory: the baked HTML holds every
+  // report exactly as rendered -- Chrome is given it whole when it draws every
+  // report; in a mixed build each part is assembled from these same bakes
+  // (assembleReports), in the temporary folder -- so keeping it next to the PDF
+  // is what makes a result reproducible and inspectable after the fact.
   const htmlPath = outputHtml;
 
   // Encode once: String.length counts UTF-16 code units, not bytes, so

@@ -1440,7 +1440,8 @@ Estimates are in working sessions like 2026-11-11's (a full day each), and are c
 
 1. ✅ **The merge is committed** (2026-11-12, owner: "lets proceed with Target 1"): `80fb480`.
 2. ✅ **T1-1 is done** (2026-11-12, below); the false FAIL it found fixed (#121). 🟡 **T1-2:
-   done locally (below); CI's half runs on the next push (owner's word). Next: T1-3, the review.**
+   done locally (below); CI's half runs on the next push (owner's word).** ✅ **T1-3 round 1
+   done (#123–#125, below). Next: a second review round on its fixes, then the push.**
 3. The stash (`git stash list`: "trial: table rewrite in progress", `src/report_render.ts` of the
    trial branch) is **target 2's** phase 1 -- leave it until target 1 ships.
 
@@ -1533,6 +1534,21 @@ packages carry the fonts and their licence (npm:prove). (e) A fresh review finds
     samples -- `487321f2…`, PASS.
   - ⏸️ **Not done, by the plan's own condition:** the verifier's memory churn (8.9 GB peak on the
     36ft report on this machine) -- "looked at if a target machine needs it"; none has been named.
+  ✅ **T1-3, 2026-11-12 (owner: "proceed to T1-3 first", before pushing T1-2) -- round 1 done.**
+  Three independent reviewers, read-only, given the code not the conclusions: (1) the routing and
+  join, (2) the native renderer's fidelity, (3) the verification on joined PDFs and #121. Every
+  finding re-checked here before acting (each confirmed by a run). Fixed, each with a test that
+  fails without it: **#123** (the native renderer drew 27 constructs wrong without refusing --
+  the hidden attribute printing a superseded "1.42 FAILS", a forced break in a cell overprinting,
+  form controls, conditional `@media`, invisible characters, EXIF orientation, a data-URI crash
+  … -- and a 2.15 pt column overlap in collapsed tables), **#124** (in-page links dead after a
+  join), **#125** (#121's rule took anagrams for the same report, and the per-report check missed
+  a late float), and the help's inexact wording (Chrome's role, the timeout per Chrome run).
+  Recorded, not fixed (older, loud or cosmetic): known-issues after #125 -- chief among them class
+  E of task 18 (a value moved to another label passes), open since before the native renderer.
+  The 36ft report hits none of the new refusals (native, 7,161 pages, PASS, 338 s).
+  ⏳ **Next:** a second round on the fixes (the project's practice: every review so far found
+  something in the round before's fixes), then the push (CI's half of T1-2), then T1-4.
 - **T1-3 A fresh review (~1–2 sessions).** The project's practice before a release: an
   adversarial reviewer on the renderer, the routing and the merge; every finding fixed with a test
   that fails without it. Budgeted because every review so far has found real defects (2026-11-11

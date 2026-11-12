@@ -199,7 +199,8 @@ you keep a clone: it builds the npm package from your working tree and installs 
   sandbox for an ordinary user, the build says so; set `S3D_CHROME_NO_SANDBOX=1` for that build
   (the build then prints `sandbox: OFF`). The reports' own code stays blocked either way.
   `CHROME_PATH` must name the browser program itself, not a script that starts it and exits.
-  Chrome is stopped if it has not finished in 10 minutes; a very large set may need more — set
+  Each Chrome run is stopped if it has not finished in 10 minutes (a set split around natively
+  drawn reports runs Chrome once per part); a very large set may need more — set
   `S3D_CHROME_TIMEOUT_MS` (milliseconds, e.g. `1800000`).
 - **The network, once.** The first build in a folder downloads MathJax's fonts (329 kB) into
   `.mathjax-fonts/`; later builds there work offline. Only complete font files are kept — a
@@ -353,25 +354,36 @@ to fit, as Chrome does.
 Everything else is **refused by name** — the report goes to Chrome under `auto`, or the build stops
 under `native`. Never approximated:
 
-- **Content:** maths, `<svg>` drawings, MathML; an image that is not embedded, or not JPEG or PNG; a
-  background image; a list item (its marker); preformatted line breaks; hidden text; a character
-  no font has (CJK, for one).
-- **Layout:** `float`, `position` other than `static` / `relative`, a relative offset,
-  `transform`; `text-indent`, `text-transform`; `white-space` other than `normal` / `pre` /
-  `nowrap`; an inline box with borders, padding or margins; a `display` other than inline inside a
-  line; a set height on a box that crosses pages; a line, or a table row, taller than a page;
-  anything past the paper's edge.
+- **Elements and attributes:** any element it does not draw — form controls (`<input>`,
+  `<select>`, `<textarea>`, `<button>`), `<details>`, `<canvas>`, `<iframe>`, `<object>`, `<q>`,
+  `<bdo>`, `<mark>`, media, among others — and any attribute it does not read, `hidden` and `dir`
+  among them.
+- **Content:** maths, `<svg>` drawings, MathML; an image that is not embedded, or not JPEG or PNG,
+  or whose data cannot be read; a JPEG turned by its EXIF orientation; a background image; a list
+  item (its marker); preformatted line breaks; hidden text; a character no font has (CJK, for
+  one); an invisible formatting character (a soft hyphen, a zero-width space or joiner).
+- **Layout:** `float`, `position` other than `static` / `relative`, a relative offset, a negative
+  margin, `transform`; `text-indent`, `text-transform`; `white-space` other than `normal` /
+  `nowrap`; `min-width`; `max-width` on anything but an image; `box-sizing: border-box` with a set
+  size; an inline box with borders, padding or margins, or inside another inline box; a `display`
+  other than inline inside a line; a forced page break inside a table cell or an inline box; a set
+  height on a box that crosses pages; a line, or a table row, taller than a page; anything past
+  the paper's edge or a page's foot.
 - **Tables:** a cell spanning columns or rows, a `<thead>` (Chrome repeats it on each page), a
   styled row group, a `<caption>`, `<colgroup>` or `<col>`, a cell width in `%`, a set cell height,
-  a background on a collapsed table.
+  `vertical-align: top` or `bottom` on a cell or its row, a background on a collapsed table.
 - **Style:** `opacity` below 1, `box-shadow`, `clip-path`, `mask`, `filter`,
   `visibility: collapse`, the `font` shorthand, a border style other than solid / inset / outset /
   none / hidden, a colour, size, weight, line height, alignment, vertical alignment or decoration
-  it cannot read, an unknown CSS property, a presentational attribute (`align=`, `bgcolor=`,
-  `border=`, `width=` … — an image's `width=` / `height=` aside), a family with no face it has.
-- **Style sheets:** `@import`, `@supports`, and any at-rule but `@media` (its print rules read),
-  `@page`, `@font-face` and `@keyframes`; a pseudo-class it does not know, a pseudo-element on an element it styles, a case-insensitive
-  attribute selector, a selector it cannot read.
+  it cannot read, a superscript or subscript inside another, the keywords `initial` / `revert`,
+  `inherit` on a property that does not inherit, an unknown CSS property, a presentational
+  attribute (`align=`, `bgcolor=`, `border=`, `width=` … — an image's numeric `width=` /
+  `height=` aside), a family with no face here, or one installed on ordinary systems (Verdana,
+  Calibri, Georgia, Symbol …: Chrome would use it).
+- **Style sheets:** `@import`, `@supports`, a `@media` rule with a condition (`(min-width: …)`;
+  `print`, `all` and other media are read), any other at-rule but `@page`, `@font-face` and
+  `@keyframes`; a pseudo-class it does not know, a pseudo-element on an element it styles, a
+  case-insensitive attribute selector, a selector it cannot read.
 - **The page:** anything but Letter with 0.5 in margins (the document the build assembles always
   is).
 

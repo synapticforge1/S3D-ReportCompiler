@@ -296,8 +296,11 @@ and the style check named every word.
 **The join** (`joinParts`, main.ts): pages copied in report order into a new document, the first
 part's `/Lang` and `/ViewerPreferences` carried, no date written. ONE part keeps its bytes as
 rendered: a member-only set's PDF is Chrome's own, as before, and a native-only build stays
-byte-reproducible. Chrome's PDFs here carry no named destinations or annotations (checked on the
-samples and the 48 set), so copying pages loses no link. The packing and the whole verification
+byte-reproducible. 🔁 **Corrected 2026-11-12 (T1-3, known-issues #124):** this said Chrome's PDFs
+here carry no named destinations -- true of the samples and the 48 set, wrong as soon as a report
+has `href="#…"`: Chrome then names each target in the catalog's `/Dests`, and copying pages left
+every such link dead. `joinParts` carries each part's destinations, remapped to the copied pages,
+and stops, named, on any form it cannot carry. The packing and the whole verification
 run on the joined file unchanged; each report's checks already run on its own pages, so parts
 with different fonts and print scales are judged each by its own.
 

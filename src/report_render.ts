@@ -598,7 +598,9 @@ function parseSheet(css: string, origin: 0 | 1, refuse: Refusals, rules: Rule[])
       const end = block(open);
       const m = /^@media\s+([^{]*)$/i.exec(prelude);
       if (m) {
-        if (mediaForPrint(m[1])) parseSheet(text.slice(open + 1, end - 1), origin, refuse, rules);
+        const applies = mediaForPrint(m[1]);
+        if (applies === null) refuse.add(`a conditional @media rule (@media ${m[1].trim()})`);
+        else if (applies) parseSheet(text.slice(open + 1, end - 1), origin, refuse, rules);
       } else if (!/^@(page|font-face|keyframes|-webkit-keyframes|supports)\b/i.test(prelude)) {
         refuse.add(`the at-rule ${prelude.split(/\s/)[0]}`);
       } else if (/^@supports/i.test(prelude)) refuse.add("an @supports rule");
@@ -620,14 +622,27 @@ function parseSheet(css: string, origin: 0 | 1, refuse: Refusals, rules: Rule[])
   }
 }
 
-function mediaForPrint(query: string): boolean {
-  return splitTop(query, ",").some((q) => {
+/**
+ * Whether a media query list applies when printing: true, false, or null when it has a condition
+ * this renderer does not evaluate (`(min-width: …)`, `print and (orientation: …)`). Such a rule was
+ * dropped as "not print", so a sheet hiding a draft under `@media (min-width:1px)` printed the
+ * draft (T1-3 review). A query naming another medium (`screen and (…)`) never applies.
+ */
+function mediaForPrint(query: string): boolean | null {
+  let unknown = false;
+  for (const q of splitTop(query, ",")) {
     const t = q.trim().toLowerCase();
-    if (/^not\b/.test(t)) return !/\bprint\b/.test(t);
-    if (/^(only\s+)?(print|all)\b/.test(t)) return !/\(/.test(t);
-    if (/^\(/.test(t)) return false;
-    return false;
-  });
+    if (/^not\b/.test(t)) {
+      if (/\(/.test(t)) unknown = true;
+      else if (!/\bprint\b/.test(t)) return true;
+      continue;
+    }
+    const medium = /^(?:only\s+)?([a-z-]+)\b/.exec(t)?.[1];
+    if (medium !== undefined && medium !== "print" && medium !== "all") continue;
+    if (/\(/.test(t)) unknown = true;
+    else return true;
+  }
+  return unknown ? null : false;
 }
 
 function parseDecls(text: string): Decl[] {
@@ -719,6 +734,8 @@ type Style = {
   breakAfter: "auto" | "page";
   avoidInside: boolean;
   verticalAlign: "baseline" | "super" | "sub" | "middle" | "top" | "bottom";
+  /** Inside a superscript or subscript, at any depth. */
+  inScript: boolean;
   /** Lines drawn through or under this element's text, propagated from its ancestors. */
   decorations: { line: "underline" | "line-through" | "overline"; color: RGBA }[];
   collapse: boolean;
@@ -850,6 +867,140 @@ const FONT_SIZES: Record<string, number> = {
 };
 
 /** Properties read but not drawn (print colour aside, they change nothing on paper here). */
+/**
+ * The properties that inherit: `inherit` on any other takes its parent's value, which this
+ * renderer does not do (it took the initial value: `background: inherit` drew nothing) -- refused.
+ */
+const INHERITED = new Set([
+  "color",
+  "font",
+  "font-family",
+  "font-size",
+  "font-style",
+  "font-weight",
+  "font-variant",
+  "line-height",
+  "text-align",
+  "white-space",
+  "visibility",
+  "letter-spacing",
+  "word-spacing",
+  "text-indent",
+  "text-transform",
+  "border-collapse",
+  "border-spacing",
+  "empty-cells",
+  "caption-side",
+  "list-style",
+  "list-style-type",
+  "quotes",
+  "cursor",
+  "direction",
+  "orphans",
+  "widows",
+  "print-color-adjust",
+  "-webkit-print-color-adjust",
+  "word-wrap",
+  "overflow-wrap",
+  "word-break",
+]);
+
+/**
+ * The elements this renderer draws, or knows draw nothing (`head`'s). Any other is refused by
+ * name: an unknown element was laid out as plain inline text, so a closed `<details>`, a
+ * `<select>`'s every option, a `<canvas>`'s fallback printed, and an `<input>`'s value was lost --
+ * each a PASS (T1-3 review).
+ */
+const DRAWN_ELEMENTS = new Set([
+  "html",
+  "head",
+  "body",
+  "title",
+  "meta",
+  "link",
+  "style",
+  "script",
+  "base",
+  "noscript",
+  "template",
+  "div",
+  "p",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "br",
+  "center",
+  "blockquote",
+  "address",
+  "header",
+  "footer",
+  "section",
+  "article",
+  "aside",
+  "nav",
+  "main",
+  "figure",
+  "figcaption",
+  "span",
+  "a",
+  "b",
+  "strong",
+  "i",
+  "em",
+  "u",
+  "ins",
+  "s",
+  "strike",
+  "del",
+  "small",
+  "big",
+  "sup",
+  "sub",
+  "code",
+  "kbd",
+  "samp",
+  "tt",
+  "cite",
+  "var",
+  "dfn",
+  "abbr",
+  "acronym",
+  "font",
+  "label",
+  "time",
+  "data",
+  "img",
+  "table",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "td",
+  "th",
+  "caption",
+  "col",
+  "colgroup",
+  "ul",
+  "ol",
+  "li",
+  "dl",
+  "dt",
+  "dd",
+  "pre",
+]);
+
+/**
+ * The attributes this renderer reads, or that draw nothing. Any other is refused by name: `hidden`
+ * printed what Chrome hides (a superseded "1.42 FAILS", T1-3 review), `dir` was ignored.
+ * Presentational ones (`align=`, `bgcolor=`, `width=` ...) are {@link presentational}'s.
+ */
+const READ_ATTRIBUTES =
+  /^(class|id|style|src|alt|href|title|name|target|rel|lang|xml:lang|xmlns(:\w+)?|charset|content|http-equiv|type|integrity|crossorigin|referrerpolicy|loading|decoding|role|tabindex|translate|spellcheck|draggable|data-[\w.-]*|aria-[\w-]*|width|height|align|valign|bgcolor|border|cellpadding|cellspacing|color|face|size|nowrap|background|colspan|rowspan|span|summary|scope|headers|abbr|start|value)$/;
+
 const HARMLESS = new Set([
   "cursor",
   "outline",
@@ -912,6 +1063,10 @@ class Cascade {
 
   /** The style of `e`, its parent's already computed. */
   styleOf(e: Elem, parent: Style | null): Style {
+    if (!DRAWN_ELEMENTS.has(e.tag)) this.refuse.add(`the element <${e.tag}>`);
+    for (const k of e.attrs?.keys() ?? []) {
+      if (!READ_ATTRIBUTES.test(k)) this.refuse.add(`the ${k} attribute on <${e.tag}>`);
+    }
     const cands: Rule[] = [];
     const add = (k: string) => {
       const l = this.byKey.get(k);
@@ -937,12 +1092,18 @@ class Cascade {
     const key = `${parent?.id ?? 0}|${e.tag}|${hit.map((r) => r.order).join(",")}|${inline}|${hints}`;
     const cached = this.cache.get(key);
     if (cached) return cached;
-    const style = this.compute(parent, hit, inline, hints);
+    const style = this.compute(parent, hit, inline, hints, e.tag);
     this.cache.set(key, style);
     return style;
   }
 
-  private compute(parent: Style | null, hit: Rule[], inline: string, hints: string): Style {
+  private compute(
+    parent: Style | null,
+    hit: Rule[],
+    inline: string,
+    hints: string,
+    tag: string,
+  ): Style {
     // Declarations in cascade order: UA, author, author inline; then the important ones.
     type D = Decl & { rank: number };
     const ds: D[] = [];
@@ -985,6 +1146,24 @@ class Cascade {
       )
         this.refuse.add("a relative offset");
       if (p === "clip-path" || p === "mask" || p === "filter") if (x !== "none") this.refuse.add(p);
+      // T1-3 review: each of these was read as something else, or not read, and drew otherwise
+      // than Chrome with no refusal.
+      if (/^(initial|revert|revert-layer)$/.test(x)) this.refuse.add(`the keyword ${x} (${p})`);
+      if (x === "inherit" && !INHERITED.has(p)) this.refuse.add(`inherit on ${p}`);
+      if (/^margin/.test(p) && /(^|\s)-\s*(\d*\.)?\d*[1-9]/.test(x))
+        this.refuse.add("a negative margin");
+      if (p === "min-width" && !/^(0(\.0+)?(px|em|%)?|auto)$/.test(x))
+        this.refuse.add(`min-width: ${x}`);
+      if (p === "max-width" && x !== "none" && tag !== "img")
+        this.refuse.add(`max-width on <${tag}>`);
+      if (
+        p === "box-sizing" &&
+        x === "border-box" &&
+        ["width", "height", "min-width", "max-width", "max-height"].some(
+          (q) => v.has(q) && !/^(auto|none)$/.test(v.get(q) as string),
+        )
+      )
+        this.refuse.add("box-sizing: border-box with a set width or height");
     }
 
     // Font size first: em lengths below are of this size.
@@ -1082,7 +1261,9 @@ class Cascade {
     const wsV = get("white-space");
     let whiteSpace = inh?.whiteSpace ?? "normal";
     if (wsV !== undefined && !inheritOf("white-space")) {
-      if (wsV === "normal" || wsV === "pre" || wsV === "nowrap") whiteSpace = wsV;
+      // `pre` is refused: runs of spaces were collapsed, so pre-aligned columns lost their places
+      // (T1-3 review: "[1  000]" printed "[1 000]").
+      if (wsV === "normal" || wsV === "nowrap") whiteSpace = wsV;
       else this.refuse.add(`white-space: ${wsV}`);
     }
     const visV = get("visibility");
@@ -1098,6 +1279,10 @@ class Cascade {
     const vaV = get("vertical-align") ?? "baseline";
     if (!/^(baseline|super|sub|middle|top|bottom)$/.test(vaV))
       this.refuse.add(`vertical-align: ${vaV}`);
+    // A superscript inside a superscript (or a subscript) shifts by its own style only, so 10²³
+    // drew the 3 BELOW the 2 (T1-3 review): refused, however deep the nesting.
+    const script = vaV === "super" || vaV === "sub";
+    if (script && inh?.inScript) this.refuse.add("a superscript or subscript inside another");
     const decorations = [...(inh?.decorations ?? [])];
     const tdV = get("text-decoration-line") ?? get("text-decoration");
     if (tdV !== undefined && tdV !== "none") {
@@ -1162,6 +1347,7 @@ class Cascade {
       breakAfter: brk("page-break-after") === "page" ? "page" : brk("break-after"),
       avoidInside: avoidV === "avoid" || avoidV === "avoid-page",
       verticalAlign: vaV as Style["verticalAlign"],
+      inScript: script || (inh?.inScript ?? false),
       decorations,
       collapse,
       spacing,
@@ -1297,6 +1483,8 @@ function presentational(e: Elem, refuse: Refusals): string {
       if (e.tag === "img") {
         const n = /^\s*(\d+(?:\.\d+)?)(%?)\s*$/.exec(v);
         if (n) out += `${k}: ${n[1]}${n[2] || "px"};`;
+        // `width="100px"` is not a number: it was ignored, the image drawn at its own size (T1-3).
+        else refuse.add(`the ${k}="${v}" attribute on <img>`);
       } else refuse.add(`the ${k}= attribute on <${e.tag}>`);
     } else if (
       /^(align|valign|bgcolor|border|cellpadding|cellspacing|color|face|size|nowrap|background|colspan|rowspan|span)$/.test(
@@ -1310,6 +1498,10 @@ function presentational(e: Elem, refuse: Refusals): string {
   return out;
 }
 
+/** Font families installed with Windows or macOS, which Chrome would use where named. */
+const INSTALLED_FAMILIES =
+  /^(verdana|tahoma|calibri|cambria|cambria math|candara|consolas|constantia|corbel|segoe ui|segoe ui symbol|segoe ui emoji|georgia|trebuchet ms|comic sans ms|impact|palatino linotype|book antiqua|palatino|lucida console|lucida sans unicode|lucida grande|lucida sans|garamond|century gothic|franklin gothic medium|gill sans|optima|futura|menlo|monaco|sf pro text|sf pro display|-apple-system|system-ui|blinkmacsystemfont|symbol|wingdings|webdings|ms gothic|ms mincho|ms sans serif|ms serif|microsoft sans serif|arial narrow|arial black|courier std)$/;
+
 function fontKey(families: string, refuse: Refusals): FontKey {
   for (const f of splitTop(families, ",")) {
     const n = f
@@ -1319,6 +1511,12 @@ function fontKey(families: string, refuse: Refusals): FontKey {
     if (/^(arial|helvetica|helvetica neue|sans-serif|liberation sans|arimo)$/.test(n))
       return "sans";
     if (/^(courier new|courier|monospace|liberation mono|cousine)$/.test(n)) return "mono";
+    // A family Chrome finds on an ordinary Windows or Mac host: passed over, the text took
+    // another face's metrics -- and Symbol's Greek drew as Latin (T1-3 review). Refused.
+    if (INSTALLED_FAMILIES.test(n)) {
+      refuse.add(`the font family "${n}" (installed on common systems; no face here matches it)`);
+      return "serif";
+    }
     if (/^(times new roman|times|serif|liberation serif|tinos)$/.test(n)) return "serif";
     // A family not on this host (Lato, Helvetica Neue on Windows): the next one, as Chrome does.
   }
@@ -1377,8 +1575,16 @@ class Face {
     let w = this.widths.get(ch);
     if (w === undefined) {
       const cp = ch.codePointAt(0) ?? 0;
+      // A character that draws nothing in Chrome (a soft hyphen, a zero-width space or joiner, a
+      // direction mark): fontkit draws the SPACE glyph for it, so "Comb&#173;ination" printed
+      // "Comb ination" (T1-3 review). Refused rather than guessed at a line's end.
+      if (isInvisible(cp)) {
+        this.refuse.add(
+          `the invisible character U+${cp.toString(16).toUpperCase().padStart(4, "0")}`,
+        );
+      }
       // fontkit would draw a missing glyph as .notdef (a box) and say nothing.
-      if (!this.glyphs.hasGlyphForCodePoint(cp)) {
+      else if (!this.glyphs.hasGlyphForCodePoint(cp)) {
         this.refuse.add(
           `the character U+${cp.toString(16).toUpperCase().padStart(4, "0")} (${ch}): no glyph in ${this.font.name}`,
         );
@@ -1655,7 +1861,20 @@ class Flow {
   clearMargins(): void {
     this.pending = [];
   }
+  /**
+   * A forced break was asked of a flow with no pages to break between (a table cell's, an inline
+   * box's): it is not taken, and the box refuses it. Taken, it started a "page" the cell's
+   * recorder never saw, and the next block printed OVER the one before (T1-3 review: "Mx 12.5"
+   * and "My 99.1" at one point, verification PASS).
+   */
+  breakInBox = false;
+  /** Something was placed past a page's foot ({@link place}). */
+  pastFoot = false;
   forceBreak(): void {
+    if (!Number.isFinite(this.height)) {
+      if (this.placed) this.breakInBox = true;
+      return;
+    }
     if (this.placed) this.breakNext = true;
   }
   newPage(forced: boolean): void {
@@ -1683,6 +1902,9 @@ class Flow {
     const at = { page: this.page, y: this.y + m };
     this.y = at.y + h;
     if (this.y > this.limit) throw new TooTall();
+    // Past the page's foot even on a page of its own (a margin kept at a forced break's top, a
+    // box taller than the page): drawn off the paper. The final pass refuses it (T1-3 review).
+    if (this.y > this.height + 0.01) this.pastFoot = true;
     this.placed = true;
     if (!this.keeping) this.hasContent = true;
     for (let k = this.open.length - 1; k >= 0 && this.open[k].start === null; k--) {
@@ -2176,7 +2398,12 @@ class Layout {
   }
 
   /** An inline-block: laid out alone, then placed in its line like an image. */
+  /** How many inline boxes the layout is inside now. */
+  private inlineBoxDepth = 0;
+
   inlineBlock(e: Elem, cbWidth: number): Piece {
+    // One inside another lost the outer box's baseline, sitting ~4 pt high (T1-3 review).
+    if (this.inlineBoxDepth > 0) this.refuse.add(`an inline box inside another (<${e.tag}>)`);
     const s = this.styled(e);
     const pad = s.padding.map((p) => px(p, cbWidth));
     const bw = s.border.map((b) => b.w);
@@ -2199,8 +2426,14 @@ class Layout {
     const top = pad[0] + bw[0];
     if (top > 0) flow.place(top);
     // Its own formatting context: its children's margins stay inside it.
-    this.blockChildren(e, bw[3] + pad[3], width, flow, () => rec);
+    this.inlineBoxDepth++;
+    try {
+      this.blockChildren(e, bw[3] + pad[3], width, flow, () => rec);
+    } finally {
+      this.inlineBoxDepth--;
+    }
     this.baselineProbe = null;
+    if (flow.breakInBox) this.refuse.add(`a forced page break inside an inline box (<${e.tag}>)`);
     flow.y += flow.collapsed();
     flow.clearMargins();
     const bottom = pad[2] + bw[2];
@@ -2605,7 +2838,7 @@ class Layout {
     const min = new Array<number>(cols).fill(0);
     const max = new Array<number>(cols).fill(0);
     const ts = this.styled(table);
-    for (const row of cells) {
+    for (const [ri, row] of cells.entries()) {
       row.forEach((c, k) => {
         const s = this.styled(c);
         let [a, b] = this.intrinsic(c.kids, c, cb);
@@ -2613,8 +2846,11 @@ class Layout {
           a = Math.max(a, s.width.v);
           b = Math.max(a, s.width.v);
         } else if (s.width !== "auto") this.refuse.add("a cell width in %");
+        // Collapsed: the WINNING edge on each side, as the row is laid out (collapsedSides). The
+        // cell's own border halves left the content narrower than the column, and at minimum
+        // width -- shrink-to-fit's -- text ran into the next column (T1-3 review: 2.1 pt).
         const edges = ts.collapse
-          ? (s.border[1].w + s.border[3].w) / 2
+          ? this.collapsedSides(row, rows[ri], k, ts).reduce((x, y) => x + y, 0)
           : s.border[1].w + s.border[3].w;
         const extra = px(s.padding[1], cb) + px(s.padding[3], cb) + edges;
         if (a + extra > min[k]) min[k] = a + extra;
@@ -2622,6 +2858,37 @@ class Layout {
       });
     }
     return { rows, cells, cols, min, max };
+  }
+
+  /**
+   * A collapsed cell's left and right border halves: on each side the winning edge of its own,
+   * its neighbour's, and -- at the row's ends -- the row's and the table's. One rule for sizing the
+   * columns and laying the row out.
+   */
+  collapsedSides(row: Elem[], rowEl: Elem, k: number, ts: Style): [number, number] {
+    const [left, right] = this.collapsedEdges(row, rowEl, k, ts);
+    return [left.w / 2, right.w / 2];
+  }
+
+  /** The winning left and right edges of a collapsed cell ({@link collapsedSides}). */
+  collapsedEdges(row: Elem[], rowEl: Elem, k: number, ts: Style): [Edge, Edge] {
+    const edgeOf = (c: Elem | undefined, side: number): Edge =>
+      c ? this.styled(c).border[side] : NO_EDGE;
+    const own = this.styled(row[k]).border;
+    const last = k === row.length - 1;
+    const left = winEdge(
+      edgeOf(row[k - 1], 1),
+      own[3],
+      k === 0 ? this.styled(rowEl).border[3] : NO_EDGE,
+      k === 0 ? ts.border[3] : NO_EDGE,
+    );
+    const right = winEdge(
+      own[1],
+      edgeOf(row[k + 1], 3),
+      last ? this.styled(rowEl).border[1] : NO_EDGE,
+      last ? ts.border[1] : NO_EDGE,
+    );
+    return [left, right];
   }
 
   /** A table: its columns sized, then row by row in the flow, each row unbreakable. */
@@ -2666,21 +2933,6 @@ class Layout {
       colX.push(cx);
       cx += w + sp;
     }
-    const edgeOf = (c: Elem | undefined, side: number): Edge =>
-      c ? this.styled(c).border[side] : NO_EDGE;
-    const rowEdge = (r: Elem, side: number): Edge => this.styled(r).border[side];
-    const win = (...es: Edge[]): Edge =>
-      es.reduce(
-        (a, b) =>
-          b.style === "hidden" || a.style === "hidden"
-            ? a.style === "hidden"
-              ? a
-              : b
-            : b.w > a.w
-              ? b
-              : a,
-        NO_EDGE,
-      );
 
     const measureRow = (ri: number): { boxes: CellBox[]; h: number } => {
       const row = g.cells[ri];
@@ -2694,20 +2946,7 @@ class Layout {
         let bt: number;
         let bb: number;
         if (collapse) {
-          bl =
-            win(
-              edgeOf(row[k - 1], 1),
-              s.border[3],
-              k === 0 ? rowEdge(g.rows[ri], 3) : NO_EDGE,
-              k === 0 ? ts.border[3] : NO_EDGE,
-            ).w / 2;
-          br =
-            win(
-              s.border[1],
-              edgeOf(row[k + 1], 3),
-              k === row.length - 1 ? rowEdge(g.rows[ri], 1) : NO_EDGE,
-              k === row.length - 1 ? ts.border[1] : NO_EDGE,
-            ).w / 2;
+          [bl, br] = this.collapsedSides(row, g.rows[ri], k, ts);
           bt = this.hEdge(g, ri, k, ts).w / 2;
           bb = this.hEdge(g, ri + 1, k, ts).w / 2;
         } else {
@@ -2717,10 +2956,17 @@ class Layout {
           bb = s.border[2].w;
         }
         const inner = widths[k] - pad[1] - pad[3] - bl - br;
+        // The content is always centred (the UA's middle): a cell, or its row, set to top or bottom
+        // put "Fy 50.0" beside the wrong line of the cell next to it (T1-3 review).
+        for (const va of [s.verticalAlign, this.styled(g.rows[ri]).verticalAlign]) {
+          if (va === "top" || va === "bottom")
+            this.refuse.add(`vertical-align: ${va} in a table cell`);
+        }
         const rec = new Recorder();
         // A cell is its own formatting context: its children's margins stay inside it.
         const f = new Flow(Number.POSITIVE_INFINITY, () => rec);
         this.blockChildren(c, 0, inner, f, () => rec);
+        if (f.breakInBox) this.refuse.add("a forced page break inside a table cell");
         f.y += f.collapsed();
         f.clearMargins();
         const ch = f.y + pad[0] + pad[2] + bt + bb;
@@ -2837,18 +3083,7 @@ class Layout {
         let bb = 0;
         if (collapse) {
           const row2 = g.cells[ri];
-          const L = win(
-            edgeOf(row2[k - 1], 1),
-            s.border[3],
-            k === 0 ? rs.border[3] : NO_EDGE,
-            k === 0 ? ts.border[3] : NO_EDGE,
-          );
-          const R = win(
-            s.border[1],
-            edgeOf(row2[k + 1], 3),
-            k === row2.length - 1 ? rs.border[1] : NO_EDGE,
-            k === row2.length - 1 ? ts.border[1] : NO_EDGE,
-          );
+          const [L, R] = this.collapsedEdges(row2, g.rows[ri], k, ts);
           const T = this.hEdge(g, ri, k, ts);
           const B = this.hEdge(g, ri + 1, k, ts);
           bl = L.w / 2;
@@ -2910,6 +3145,39 @@ class Layout {
   }
 }
 
+/** Unicode's default-ignorable characters a report might hold: drawn as nothing by Chrome. */
+const INVISIBLE_RANGES: [number, number][] = [
+  [0x00ad, 0x00ad],
+  [0x034f, 0x034f],
+  [0x061c, 0x061c],
+  [0x115f, 0x1160],
+  [0x17b4, 0x17b5],
+  [0x180b, 0x180f],
+  [0x200b, 0x200f],
+  [0x202a, 0x202e],
+  [0x2060, 0x206f],
+  [0x3164, 0x3164],
+  [0xfe00, 0xfe0f],
+  [0xfeff, 0xfeff],
+  [0xffa0, 0xffa0],
+];
+const isInvisible = (cp: number): boolean => INVISIBLE_RANGES.some(([a, b]) => cp >= a && cp <= b);
+
+/** The edge that wins a collapsed border: a hidden one over all, then the widest. */
+function winEdge(...es: Edge[]): Edge {
+  return es.reduce(
+    (a, b) =>
+      b.style === "hidden" || a.style === "hidden"
+        ? a.style === "hidden"
+          ? a
+          : b
+        : b.w > a.w
+          ? b
+          : a,
+    NO_EDGE,
+  );
+}
+
 /** An element's text, its whitespace collapsed (for naming it in a refusal). */
 function textOf(e: Elem | undefined): string {
   if (!e) return "";
@@ -2940,6 +3208,47 @@ export type NativeRender = {
   /** What the renderer could not draw, each named: any one means no PDF. */
   refused: string[];
 };
+
+/**
+ * A JPEG's EXIF orientation (1–8), or null when it has none: the APP1 `Exif` segment's TIFF
+ * header, IFD0, tag 0x0112. Anything malformed reads as none -- the decoder judges the image.
+ */
+function jpegOrientation(b: Uint8Array): number | null {
+  if (b[0] !== 0xff || b[1] !== 0xd8) return null;
+  let i = 2;
+  while (i + 4 <= b.length && b[i] === 0xff) {
+    const marker = b[i + 1];
+    const len = (b[i + 2] << 8) | b[i + 3];
+    if (marker === 0xda || marker === 0xd9 || len < 2) return null; // the image data: no EXIF
+    const s = i + 4;
+    if (
+      marker === 0xe1 &&
+      len >= 16 &&
+      String.fromCharCode(...b.subarray(s, s + 6)) === "Exif\0\0"
+    ) {
+      const t = s + 6;
+      const le = b[t] === 0x49 && b[t + 1] === 0x49;
+      if (!le && !(b[t] === 0x4d && b[t + 1] === 0x4d)) return null;
+      const u16 = (o: number) => (le ? b[o] | (b[o + 1] << 8) : (b[o] << 8) | b[o + 1]);
+      const u32 = (o: number) =>
+        le
+          ? (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0
+          : ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+      const ifd = t + u32(t + 4);
+      const end = Math.min(b.length, i + 2 + len);
+      if (ifd + 2 > end) return null;
+      const n = u16(ifd);
+      for (let k = 0; k < n; k++) {
+        const e = ifd + 2 + k * 12;
+        if (e + 12 > end) return null;
+        if (u16(e) === 0x0112) return u16(e + 8);
+      }
+      return null;
+    }
+    i += 2 + len;
+  }
+  return null;
+}
 
 /** A data URI's bytes. */
 function dataBytes(uri: string): { type: string; bytes: Uint8Array } | null {
@@ -2994,6 +3303,9 @@ export async function renderDocument(html: string, fonts: RenderFonts): Promise<
   // No render-time stamp: the same document makes the same PDF.
   pdf.setCreationDate(new Date(0));
   pdf.setModificationDate(new Date(0));
+  // The document's language, as Chrome writes it (a joined native-only PDF had none; T1-3).
+  const lang = root.attrs?.get("lang")?.trim();
+  if (lang) pdf.setLanguage(lang);
   const faces = await Fonts.load(pdf, fonts, refuse);
 
   // Every image the document draws, embedded once.
@@ -3004,12 +3316,25 @@ export async function renderDocument(html: string, fonts: RenderFonts): Promise<
       if (k.tag === "img") {
         const src = k.attrs?.get("src") ?? "";
         if (!images.has(src)) {
-          const d = dataBytes(src);
+          let d: ReturnType<typeof dataBytes>;
+          try {
+            d = dataBytes(src);
+          } catch (err) {
+            // A bare `%` in a URI, bad base64: it threw out of the render as a crash (T1-3 review).
+            refuse.add(`an image whose data cannot be read (${(err as Error).message})`);
+            continue;
+          }
           if (!d) continue; // refused where drawn
           let embedded: { ref: PDFRef; width: number; height: number } | null = null;
           try {
-            if (d.type === "image/jpeg" || d.type === "image/jpg")
-              embedded = await pdf.embedJpg(d.bytes);
+            const jpeg = d.type === "image/jpeg" || d.type === "image/jpg";
+            // Chrome turns a JPEG by its EXIF orientation; drawn as stored it lay on its side,
+            // and the pixel check (which reads the stored pixels) passed (T1-3 review).
+            const turned = jpeg ? jpegOrientation(d.bytes) : null;
+            if (turned !== null && turned !== 1) {
+              refuse.add(`a JPEG turned by its EXIF orientation (${turned})`);
+            }
+            if (jpeg) embedded = await pdf.embedJpg(d.bytes);
             else if (d.type === "image/png") embedded = await pdf.embedPng(d.bytes);
             else refuse.add(`an image of type ${d.type}`);
           } catch (err) {
@@ -3045,7 +3370,8 @@ export async function renderDocument(html: string, fonts: RenderFonts): Promise<
     return sinks[p];
   };
   sinkFor(0);
-  lay(width, CONTENT_H / scale, true, sinkFor);
+  const laid = lay(width, CONTENT_H / scale, true, sinkFor);
+  if (laid.flow.pastFoot) refuse.add("content past the foot of a page");
 
   if (refuse.list.size > 0)
     return { pdf: null, pages: sinks.length, refused: [...refuse.list], scale };

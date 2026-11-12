@@ -3000,6 +3000,271 @@ test("native renderer: what it cannot draw is refused, by name (task 19)", async
   }
 });
 
+/** A JPEG fixture with an EXIF APP1 segment carrying `orientation` (big-endian, IFD0, one tag). */
+function jpegWithOrientation(orientation: number): string {
+  const jpeg = readFileSync(join(ROOT, "tests", "jpeg", "ycc420.jpg"));
+  const tiff = Buffer.from([
+    0x4d,
+    0x4d,
+    0x00,
+    0x2a,
+    0x00,
+    0x00,
+    0x00,
+    0x08, // MM, 42, IFD0 at 8
+    0x00,
+    0x01, // one entry
+    0x01,
+    0x12,
+    0x00,
+    0x03,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x00,
+    orientation,
+    0x00,
+    0x00, // 0x0112 SHORT
+    0x00,
+    0x00,
+    0x00,
+    0x00, // no next IFD
+  ]);
+  const body = Buffer.concat([Buffer.from("Exif\0\0", "latin1"), tiff]);
+  const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, 0, body.length + 2]), body]);
+  return Buffer.concat([jpeg.subarray(0, 2), app1, jpeg.subarray(2)]).toString("base64");
+}
+
+test("native renderer: what the T1-3 review found drawn wrong is refused, by name", async () => {
+  // Each of these drew otherwise than Chrome WITHOUT a refusal, and most PASSED verification.
+  // Refused, a report goes to Chrome under auto (today's output) or stops under native.
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const { renderDocument } = await import(
+    pathToFileURL(join(ROOT, "src", "report_render.ts")).href
+  );
+  const { readRenderFonts } = await import(
+    pathToFileURL(join(ROOT, "src", "report_runtime.ts")).href
+  );
+  const fonts = await readRenderFonts();
+  const doc = (body: string, css = "") => {
+    core.resetBakeState();
+    const src = `<html lang="en"><head><style>body{font-family:Arial} ${css}</style></head><body>${body}</body></html>`;
+    return core.assembleDocument(
+      [core.bakeBody(src, "r0-")],
+      [core.bakeStyle(src, ".rs0", "r0-")],
+      "",
+    );
+  };
+  const png = `data:image/png;base64,${BLACK_PNG}`;
+  const cases: [string, string, string, RegExp][] = [
+    [
+      "the hidden attribute",
+      "<p hidden>Superseded 1.42 FAILS</p>",
+      "",
+      /the hidden attribute on <p>/,
+    ],
+    [
+      "a closed <details>",
+      "<details><summary>Show</summary><p>2.26 kN</p></details>",
+      "",
+      /the element <details>/,
+    ],
+    [
+      "a <select>",
+      "<select><option>A</option><option selected>B</option></select>",
+      "",
+      /the element <select>/,
+    ],
+    ["an <input>", '<p>Load <input value="47.25 kN"></p>', "", /the element <input>/],
+    ["a <canvas>", "<canvas>fallback 3.1</canvas>", "", /the element <canvas>/],
+    ["<bdo dir>", '<p><bdo dir="rtl">A992</bdo></p>', "", /the element <bdo>/],
+    [
+      "a conditional @media",
+      "<p class=g>Draft 98.6</p>",
+      "@media (min-width:1px){.g{display:none}}",
+      /a conditional @media rule/,
+    ],
+    ["a soft hyphen", "<p>Comb&#173;ination 12</p>", "", /the invisible character U\+00AD/],
+    ["a zero-width space", "<p>Wid&#8203;th 12</p>", "", /the invisible character U\+200B/],
+    ["white-space: pre", '<p style="white-space:pre">[1  000]</p>', "", /white-space: pre/],
+    [
+      "a forced break in a cell",
+      '<table><tr><td><div>Mx 12.5</div><div style="page-break-before:always">My 99.1</div></td></tr></table>',
+      "",
+      /a forced page break inside a table cell/,
+    ],
+    [
+      "a forced break in an inline box",
+      '<p><span style="display:inline-block"><span style="display:block">a</span><span style="display:block;page-break-before:always">b</span></span></p>',
+      "",
+      /a forced page break inside an inline box/,
+    ],
+    [
+      "a cell's vertical-align: top",
+      '<table><tr><td style="vertical-align:top"><div>Fy 50.0</div></td><td>a<br>b<br>c</td></tr></table>',
+      "",
+      /vertical-align: top in a table cell/,
+    ],
+    [
+      "a row's vertical-align: bottom",
+      '<table><tr style="vertical-align:bottom"><td>x</td></tr></table>',
+      "",
+      /vertical-align: bottom in a table cell/,
+    ],
+    [
+      "a nested superscript",
+      "<p>10<sup>2<sup>3</sup></sup></p>",
+      "",
+      /a superscript or subscript inside another/,
+    ],
+    [
+      "the keyword initial",
+      '<p><b><span style="font-weight:initial">x</span></b></p>',
+      "",
+      /the keyword initial/,
+    ],
+    [
+      "inherit on a background",
+      '<div style="background-color:#f00"><p style="background-color:inherit">x</p></div>',
+      "",
+      /inherit on background-color/,
+    ],
+    ["a negative margin", '<p style="margin-left:-20px">x</p>', "", /a negative margin/],
+    ["min-width", '<div style="min-width:300px">x</div>', "", /min-width: 300px/],
+    ["max-width on a block", '<div style="max-width:50px">x</div>', "", /max-width on <div>/],
+    [
+      "box-sizing with a width",
+      '<div style="box-sizing:border-box;width:100px;padding:10px">x</div>',
+      "",
+      /box-sizing: border-box with a set width/,
+    ],
+    [
+      "an image's width in px",
+      `<img src="${png}" width="100px">`,
+      "",
+      /the width="100px" attribute on <img>/,
+    ],
+    [
+      "an installed font family",
+      "<p class=v>x</p>",
+      ".v{font-family:Verdana, Arial}",
+      /the font family "verdana"/,
+    ],
+    [
+      "an inline box in an inline box",
+      '<p><span style="display:inline-block">a <span style="display:inline-block">b</span></span></p>',
+      "",
+      /an inline box inside another/,
+    ],
+    [
+      "content past a page's foot",
+      `<p>x</p><img src="${png}" style="display:block;page-break-before:always;margin-top:300px;width:10px;height:900px">`,
+      "",
+      /content past the foot of a page/,
+    ],
+    [
+      "an unreadable data URI",
+      '<img src="data:image/png,%E0%A4%A">',
+      "",
+      /an image whose data cannot be read/,
+    ],
+    [
+      "an EXIF-turned JPEG",
+      `<img src="data:image/jpeg;base64,${jpegWithOrientation(6)}">`,
+      "",
+      /a JPEG turned by its EXIF orientation \(6\)/,
+    ],
+  ];
+  const drawn: string[] = [];
+  for (const [what, body, css, named] of cases) {
+    let out: { pdf: Uint8Array | null; refused: string[] };
+    try {
+      out = await renderDocument(doc(body, css), fonts);
+    } catch (e) {
+      drawn.push(`${what}: threw ${(e as Error).message}`);
+      continue;
+    }
+    if (out.pdf !== null || !out.refused.some((s: string) => named.test(s))) {
+      drawn.push(`${what}: ${out.pdf ? "drawn" : out.refused.join("; ")}`);
+    }
+  }
+  assert.deepEqual(drawn, [], "not refused by name");
+
+  // Not over-refused: the same constructs written the way the renderer does draw them.
+  for (const body of [
+    `<p class=s>x</p><img src="${png}" width="100">`,
+    "<p>10<sup>2</sup> and H<sub>2</sub>O</p>",
+    "<table><tr><td><div>Fy 50.0</div></td><td>a<br>b</td></tr></table>",
+    `<img src="data:image/jpeg;base64,${jpegWithOrientation(1)}">`,
+  ]) {
+    const out = await renderDocument(
+      doc(
+        body,
+        "@media print{.s{color:#103e50}} @media screen and (max-width:9px){.s{display:none}}",
+      ),
+      fonts,
+    );
+    assert.deepEqual(out.refused, [], body.slice(0, 60));
+  }
+
+  // The language travels into the native PDF, as Chrome writes it.
+  const plain = await renderDocument(doc("<p>Load 12.5 kN</p>"), fonts);
+  const { PDFDocument, PDFName } = await import("pdf-lib");
+  const lang = (await PDFDocument.load(plain.pdf as Uint8Array)).catalog.get(PDFName.of("Lang"));
+  assert.equal(String(lang), "(en)");
+
+  // A collapsed table at its minimum width (shrink-to-fit's): no cell's text reaches the next
+  // column's (it overlapped by 2.1 pt when columns were sized from each cell's own border).
+  const row = Array.from({ length: 10 }, () => "<td>WWWWWWWk</td>").join("");
+  const wide = await renderDocument(
+    doc(
+      `<table class=t><tr>${row}</tr></table>`,
+      ".t{border-collapse:collapse;border:12px solid #000} .t td{padding:0;border:1px solid #000}",
+    ),
+    fonts,
+  );
+  assert.deepEqual(wide.refused, []);
+  // Measured from the text operators (pdf.js's text items join cells that touch): each show's start
+  // from its text matrix, its end from its glyphs' advances.
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const read = await pdfjs.getDocument({ data: wide.pdf as Uint8Array, verbosity: 0 }).promise;
+  const ops = await (await read.getPage(1)).getOperatorList();
+  const { OPS } = pdfjs;
+  let lm = [1, 0, 0, 1, 0, 0];
+  let tx = 0;
+  let size = 0;
+  const shows: { x0: number; x1: number }[] = [];
+  for (let i = 0; i < ops.fnArray.length; i++) {
+    const fn = ops.fnArray[i];
+    const args = ops.argsArray[i] as unknown[];
+    if (fn === OPS.setFont) size = args[1] as number;
+    else if (fn === OPS.setTextMatrix) {
+      lm = [...(args[0] as number[])];
+      tx = lm[4];
+    } else if (fn === OPS.moveText) {
+      lm[4] += (args[0] as number) * lm[0];
+      lm[5] += (args[1] as number) * lm[3];
+      tx = lm[4];
+    } else if (fn === OPS.showText) {
+      const x0 = tx;
+      for (const g of args[0] as (number | { width: number } | null)[]) {
+        if (typeof g === "number") tx -= (g / 1000) * size * lm[0];
+        else if (g) tx += (g.width / 1000) * size * lm[0];
+      }
+      shows.push({ x0, x1: tx });
+    }
+  }
+  shows.sort((a, b) => a.x0 - b.x0);
+  assert.equal(shows.length, 10, `${shows.length} shows`);
+  for (let k = 1; k < shows.length; k++) {
+    assert.ok(
+      shows[k - 1].x1 <= shows[k].x0 + 0.01,
+      `cell ${k} ends at ${shows[k - 1].x1.toFixed(2)}, cell ${k + 1} starts at ${shows[k].x0.toFixed(2)}`,
+    );
+  }
+});
+
 test("S3D_RENDERER takes auto, chrome or native, nothing else (task 19)", () => {
   const r = run([MAIN, join(work, "nowhere")], {
     env: { ...process.env, S3D_RENDERER: "browserless" },
@@ -3048,7 +3313,8 @@ const LIST_REPORT =
   "<html><head><style>body{font-family:Arial;font-size:14px}" +
   " .c{color:#b00000;font-weight:bold}</style></head><body><h1>Wind Check</h1>" +
   "<p class=c>Design pressure 27.4 psf on the windward wall</p>" +
-  "<ul><li>Gust factor 0.85</li></ul></body></html>";
+  '<ul><li>Gust factor 0.85</li></ul><p><a href="#wind-end">See the summary</a></p>' +
+  '<p style="page-break-before:always" id="wind-end">Summary 27.4 psf</p></body></html>';
 
 test(
   "auto: member reports by Chrome, a model report natively, joined and verified (task 19)",
@@ -3085,9 +3351,29 @@ test(
     hasNot(r.out, /Warning:/);
 
     // The joined PDF: the catalog's language carried (Chrome's part says it), the reports in order.
-    const { PDFDocument, PDFName } = await import("pdf-lib");
+    const { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef } = await import("pdf-lib");
     const doc = await PDFDocument.load(readFileSync(r.pdf));
     assert.ok(doc.catalog.get(PDFName.of("Lang")), "the language was not carried");
+    // An in-page link of a joined Chrome part still lands (T1-3 review: the catalog's /Dests was
+    // left behind and every such link went dead): its named target is a page of THIS document.
+    const pageRefs = doc.getPages().map((p) => p.ref.toString());
+    const dests = doc.catalog.lookup(PDFName.of("Dests"));
+    assert.ok(dests instanceof PDFDict, "no /Dests: the joined part's link targets were dropped");
+    const linked = doc
+      .getPages()
+      .flatMap((p) => {
+        const a = p.node.lookup(PDFName.of("Annots"));
+        return a instanceof PDFArray ? a.asArray().map((x) => doc.context.lookup(x)) : [];
+      })
+      .flatMap((a) => (a instanceof PDFDict ? [a.get(PDFName.of("Dest"))] : []))
+      .filter((d): d is typeof PDFName.prototype => d instanceof PDFName);
+    assert.ok(linked.length > 0, "the link annotation is missing");
+    for (const name of linked) {
+      const target = dests.lookup(name);
+      assert.ok(target instanceof PDFArray, `link ${name} has no target`);
+      const page = target.get(0);
+      assert.ok(page instanceof PDFRef && pageRefs.includes(page.toString()), `${name}: no page`);
+    }
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     const read = await pdfjs.getDocument({
       data: new Uint8Array(readFileSync(r.pdf)),
@@ -3103,7 +3389,9 @@ test(
     const wind = pages.findIndex((t) => t.includes("Wind Check"));
     assert.ok(members.length >= 2 && model > 0 && wind > 0, "a report is missing");
     assert.ok(
-      (members.at(-1) as number) < model && model < wind && wind === pages.length - 1,
+      (members.at(-1) as number) < model &&
+        model < wind &&
+        pages.at(-1)?.includes("Summary 27.4 psf") === true,
       `the reports are not in order: members ${members}, model ${model}, wind ${wind}`,
     );
   },
@@ -3126,9 +3414,18 @@ test(
       readFileSync(join(SAMPLES, "member_0_report.html")),
     );
     writeFileSync(join(dir, "Wind Check.html"), FLOAT_REPORT);
+    // A float AFTER the opening (T1-3 review): Chrome writes it ahead of the whole page's flow, so
+    // the content order opens with text that is not the opening at all, and only the visual lines
+    // find the report -- which the per-report check did not read.
+    writeFileSync(
+      join(dir, "Wind Check Late.html"),
+      "<html><head><style>body{font-family:Arial;font-size:14px} .f{float:left}</style></head>" +
+        "<body><h1>Snow Check</h1><p>Ground snow load for the gate post</p>" +
+        "<p>Exposure factor 0.9 thermal 1.2</p><p class=f>Importance factor 1.1</p></body></html>",
+    );
     const r = build(dir);
     assert.equal(r.code, 0, tail(r.out));
-    has(r.out, /cannot draw it: .*float: left/, /per-report: 2\/2/, /PASS/);
+    has(r.out, /cannot draw it: .*float: left/, /per-report: 3\/3/, /PASS/);
 
     // The rule itself. The same characters rearranged, in either reading of the page itself; never
     // other characters: two reports exchanged still fail, and so does another report's opening.
@@ -3147,15 +3444,41 @@ test(
         .starts,
       [0],
     );
-    // A rearrangement that crosses the opening's last character is other characters: not found
-    // (here "psf" comes into the first 40, "85" goes out) -- the loud direction.
-    assert.equal(core.findReportStarts([a], [`x${V}${pageA.split(V)[1]}`]).starts, null);
+    // Whole blocks in another order, the last cut where the opening ends ("Gust factor" of
+    // "Gust factor 0.85"): found.
+    assert.deepEqual(core.findReportStarts([a], [`x${V}${pageA.split(V)[1]}`]).starts, [0]);
     const swapped = core.findReportStarts([a, b], [pageB, pageA]);
     assert.equal(swapped.starts, null);
     assert.match(swapped.reason, /exchanged or out of order/);
-    // One character changed is another opening: not found.
-    assert.equal(core.findReportStarts([a], [pageA.replace(/0\.85/g, "0.86")]).starts, null);
+    // One character changed inside the opening is another opening: not found. (Past the opening's
+    // 40 characters it is the word and number checks', as it always was.)
+    assert.equal(core.findReportStarts([a], [pageA.replace(/Wind/g, "Wint")]).starts, null);
     assert.equal(core.findReportStarts([a], [pageB]).starts, null);
+    // Not characters in any order (T1-3 review): two values swapped INSIDE a block -- the old rule
+    // took them -- and two reports whose titles are anagrams, exchanged.
+    const ratio = "<body><p>Allowable 25.0 ksi Actual 12.0 ksi Ratio 0.48</p></body>";
+    assert.equal(
+      core.findReportStarts([ratio], ["Allowable 12.0 ksi Actual 25.0 ksi Ratio 0.48"]).starts,
+      null,
+    );
+    const col = (x: string, y: string) =>
+      `<body><p>Column C${x} Level ${y} Check</p><p>Axial load 12.5 kip, capacity 40.2 kip</p></body>`;
+    const pc = (x: string, y: string) =>
+      `Column C${x} Level ${y} Check\nAxial load 12.5 kip, capacity 40.2 kip`;
+    assert.deepEqual(
+      core.findReportStarts([col("1", "2"), col("2", "1")], [pc("1", "2"), pc("2", "1")]).starts,
+      [0, 1],
+    );
+    assert.equal(
+      core.findReportStarts([col("1", "2"), col("2", "1")], [pc("2", "1"), pc("1", "2")]).starts,
+      null,
+    );
+    // The per-report check reads the visual lines too: a report only they find is checked.
+    const late =
+      "<body><h1>Snow Check</h1><p>Ground snow load for the gate post</p><p>Importance 1.1</p></body>";
+    const latePage = `Importance 1.1\nSnow Check\nGround snow load for the gate post${V}Snow Check\nGround snow load for the gate post\nImportance 1.1`;
+    const each = core.compareEachReport([a, late], [pageA, latePage]);
+    assert.ok(each.checked, each.reason);
   },
 );
 
