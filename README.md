@@ -343,7 +343,8 @@ draw; no browser needed). Any other value stops the build.
 #### What the native renderer draws, and what it refuses
 
 It draws block and inline text, tables (collapsed or separate borders, zebra rows, header rows
-kept with the first row), embedded JPEG and PNG images, links, superscripts and subscripts,
+kept with the first row), embedded JPEG and PNG images, links (styled as links; in a natively
+drawn report they do not yet take the reader anywhere), superscripts and subscripts,
 borders and backgrounds in solid colours, and page breaks as the report asks for them (a box that
 avoids breaks moves on when it does not fit; no heading is left alone at a page's foot). Text is
 set in Arial, Helvetica or `sans-serif` → Liberation Sans; Courier, Courier New or `monospace` →
@@ -356,32 +357,40 @@ under `native`. Never approximated:
 
 - **Elements and attributes:** any element it does not draw — form controls (`<input>`,
   `<select>`, `<textarea>`, `<button>`), `<details>`, `<canvas>`, `<iframe>`, `<object>`, `<q>`,
-  `<bdo>`, `<mark>`, media, among others — and any attribute it does not read, `hidden` and `dir`
-  among them.
+  `<bdo>`, `<mark>`, lists (`<ul>`, `<ol>`, `<dl>`), `<blockquote>`, `<figure>`, `<abbr>`, media,
+  among others — and any attribute it does not read, `hidden` and `dir` among them. A
+  `<template>` never draws, whatever its CSS.
+- **Text:** a named character reference it does not know (`&ZeroWidthSpace;`). `&nbsp;` is drawn
+  as Chrome draws it: a space that never breaks a line.
 - **Content:** maths, `<svg>` drawings, MathML; an image that is not embedded, or not JPEG or PNG,
   or whose data cannot be read; a JPEG turned by its EXIF orientation; a background image; a list
   item (its marker); preformatted line breaks; hidden text; a character no font has (CJK, for
   one); an invisible formatting character (a soft hyphen, a zero-width space or joiner).
 - **Layout:** `float`, `position` other than `static` / `relative`, a relative offset, a negative
   margin, `transform`; `text-indent`, `text-transform`; `white-space` other than `normal` /
-  `nowrap`; `min-width`; `max-width` on anything but an image; `box-sizing: border-box` with a set
-  size; an inline box with borders, padding or margins, or inside another inline box; a `display`
-  other than inline inside a line; a forced page break inside a table cell or an inline box; a set
+  `nowrap`; a non-zero `min-width`; `max-width` or `max-height` on anything but an image;
+  `box-sizing: border-box` (set or inherited) with a set size; `overflow` other than visible on a
+  box with a set size (clipping), `zoom`; an inline box with borders, padding or margins, a set
+  height, or inside another inline box; a `display` other than inline inside a line; a forced page
+  break inside a table cell or an inline box, on a table row, or to a `recto` / `verso` page; a set
   height on a box that crosses pages; a line, or a table row, taller than a page; anything past
   the paper's edge or a page's foot.
 - **Tables:** a cell spanning columns or rows, a `<thead>` (Chrome repeats it on each page), a
   styled row group, a `<caption>`, `<colgroup>` or `<col>`, a cell width in `%`, a set cell height,
-  `vertical-align: top` or `bottom` on a cell or its row, a background on a collapsed table.
+  `table-layout: fixed`, a cell aligned other than `middle` (its own `vertical-align`, its row's or
+  its row group's), a hidden cell or row, a background on a collapsed table.
 - **Style:** `opacity` below 1, `box-shadow`, `clip-path`, `mask`, `filter`,
   `visibility: collapse`, the `font` shorthand, a border style other than solid / inset / outset /
   none / hidden, a colour, size, weight, line height, alignment, vertical alignment or decoration
   it cannot read, a superscript or subscript inside another, the keywords `initial` / `revert`,
   `inherit` on a property that does not inherit, an unknown CSS property, a presentational
   attribute (`align=`, `bgcolor=`, `border=`, `width=` … — an image's numeric `width=` /
-  `height=` aside), a family with no face here, or one installed on ordinary systems (Verdana,
-  Calibri, Georgia, Symbol …: Chrome would use it).
+  `height=` aside), `content` on an element, a CSS escape in a value, and **any font family it
+  has no face for** — only a web font the document cannot load (Lato) is passed over for the next
+  in the list, as Chrome passes it over, and not if the document embeds it with `@font-face`.
+  Keywords are read without regard to case (`HIDDEN` is `hidden`).
 - **Style sheets:** `@import`, `@supports`, a `@media` rule with a condition (`(min-width: …)`;
-  `print`, `all` and other media are read), any other at-rule but `@page`, `@font-face` and
+  `print`, `all`, `not …` and other media are read), any other at-rule but `@page`, `@font-face` and
   `@keyframes`; a pseudo-class it does not know, a pseudo-element on an element it styles, a
   case-insensitive attribute selector, a selector it cannot read.
 - **The page:** anything but Letter with 0.5 in margins (the document the build assembles always

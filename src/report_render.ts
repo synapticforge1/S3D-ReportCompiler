@@ -26,6 +26,20 @@ import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, PDFName, type PDFFont, type PDFRef } from "pdf-lib";
 import { decodeEntities } from "./report_core.ts";
 
+/**
+ * Text as HTML reads it, for drawing. The core's decoder serves the verification, which compares
+ * text and so reads `&nbsp;` as a space; drawn, that space BROKE a line, so "1&nbsp;000&nbsp;kN"
+ * printed "1" / "000" / "kN" (T1-3 round 2) -- here it is U+00A0, which never breaks. A named
+ * reference the decoder does not know (`&ZeroWidthSpace;`) printed as its letters: refused.
+ */
+function htmlText(raw: string, refuse: { add(what: string): void }): string {
+  const text = raw.replace(/&nbsp;?/g, " ");
+  for (const m of text.matchAll(/&[A-Za-z][A-Za-z0-9]*;/g)) {
+    if (decodeEntities(m[0]) === m[0]) refuse.add(`the character reference ${m[0]}`);
+  }
+  return decodeEntities(text);
+}
+
 // ---------------------------------------------------------------------------
 // Page geometry (CSS px; 96 px to the inch, 72 pt)
 // ---------------------------------------------------------------------------
@@ -42,6 +56,8 @@ const CONTENT_H = (PAGE_H_PT - 2 * MARGIN_PT) / PT; // 960
 /** What the renderer could not do, each named once. A non-empty list means no PDF may be trusted. */
 class Refusals {
   readonly list = new Set<string>();
+  /** The font families this document embeds with `@font-face` (lower-cased): never passed over. */
+  readonly embeddedFamilies = new Set<string>();
   add(what: string): void {
     this.list.add(what);
   }
@@ -137,7 +153,7 @@ function parseDocument(html: string, refuse: Refusals): Elem {
           stack.push(body);
         }
       }
-      const text = decodeEntities(tok);
+      const text = htmlText(tok, refuse);
       const kids = top().kids;
       if (typeof kids[kids.length - 1] === "string") kids[kids.length - 1] += text;
       else kids.push(text);
@@ -604,6 +620,19 @@ function parseSheet(css: string, origin: 0 | 1, refuse: Refusals, rules: Rule[])
       } else if (!/^@(page|font-face|keyframes|-webkit-keyframes|supports)\b/i.test(prelude)) {
         refuse.add(`the at-rule ${prelude.split(/\s/)[0]}`);
       } else if (/^@supports/i.test(prelude)) refuse.add("an @supports rule");
+      else if (/^@font-face/i.test(prelude)) {
+        // A family the document embeds is one Chrome draws in: never passed over for the next.
+        for (const d of parseDecls(text.slice(open + 1, end - 1))) {
+          if (d.prop === "font-family") {
+            refuse.embeddedFamilies.add(
+              d.value
+                .trim()
+                .replace(/^["']|["']$/g, "")
+                .toLowerCase(),
+            );
+          }
+        }
+      }
       i = end;
       continue;
     }
@@ -633,8 +662,10 @@ function mediaForPrint(query: string): boolean | null {
   for (const q of splitTop(query, ",")) {
     const t = q.trim().toLowerCase();
     if (/^not\b/.test(t)) {
+      // `not` negates the whole query: `not all` and `not print` never apply when printing --
+      // `not all` was taken to apply, and its `display:none` lost a value (round 2).
       if (/\(/.test(t)) unknown = true;
-      else if (!/\bprint\b/.test(t)) return true;
+      else if (!/^not\s+(print|all)\b/.test(t)) return true;
       continue;
     }
     const medium = /^(?:only\s+)?([a-z-]+)\b/.exec(t)?.[1];
@@ -654,6 +685,14 @@ function parseDecls(text: string): Decl[] {
     let value = d.slice(c + 1).trim();
     const important = /!\s*important\s*$/i.test(value);
     if (important) value = value.replace(/!\s*important\s*$/i, "").trim();
+    // CSS keywords are caseless: `visibility: HIDDEN` hid nothing here and printed what Chrome
+    // hides (T1-3 round 2). Lower-cased outside quoted strings and `url(…)`; generated text as is.
+    if (prop !== "content" && prop !== "quotes") {
+      value = value
+        .split(/(url\([^)]*\)|"[^"]*"|'[^']*')/i)
+        .map((s, k) => (k % 2 ? s : s.toLowerCase()))
+        .join("");
+    }
     if (prop && value) out.push({ prop, value, important });
   }
   return out;
@@ -736,6 +775,15 @@ type Style = {
   verticalAlign: "baseline" | "super" | "sub" | "middle" | "top" | "bottom";
   /** Inside a superscript or subscript, at any depth. */
   inScript: boolean;
+  /** The computed `box-sizing` (kept for children that inherit it). */
+  boxSizing: "content-box" | "border-box";
+  /**
+   * The vertical alignment a table cell's CONTENT takes: the cell's own, else its row's, else its
+   * row group's, else the UA's middle -- Chrome's `td { vertical-align: inherit }` and
+   * `tr, tbody { vertical-align: middle }`. Kept apart from {@link verticalAlign}, which places
+   * inline pieces in a line.
+   */
+  cellAlign: string;
   /** Lines drawn through or under this element's text, propagated from its ancestors. */
   decorations: { line: "underline" | "line-through" | "overline"; color: RGBA }[];
   collapse: boolean;
@@ -934,7 +982,6 @@ const DRAWN_ELEMENTS = new Set([
   "hr",
   "br",
   "center",
-  "blockquote",
   "address",
   "header",
   "footer",
@@ -943,7 +990,6 @@ const DRAWN_ELEMENTS = new Set([
   "aside",
   "nav",
   "main",
-  "figure",
   "figcaption",
   "span",
   "a",
@@ -967,8 +1013,6 @@ const DRAWN_ELEMENTS = new Set([
   "cite",
   "var",
   "dfn",
-  "abbr",
-  "acronym",
   "font",
   "label",
   "time",
@@ -984,13 +1028,10 @@ const DRAWN_ELEMENTS = new Set([
   "caption",
   "col",
   "colgroup",
-  "ul",
-  "ol",
   "li",
-  "dl",
-  "dt",
-  "dd",
   "pre",
+  // Left out (round 2): blockquote, figure, dl, dt, dd, ul, ol, abbr, acronym -- Chrome
+  // indents or underlines them, and this renderer's sheet does not; refused by name instead.
 ]);
 
 /**
@@ -1149,22 +1190,51 @@ class Cascade {
       // T1-3 review: each of these was read as something else, or not read, and drew otherwise
       // than Chrome with no refusal.
       if (/^(initial|revert|revert-layer)$/.test(x)) this.refuse.add(`the keyword ${x} (${p})`);
-      if (x === "inherit" && !INHERITED.has(p)) this.refuse.add(`inherit on ${p}`);
-      if (/^margin/.test(p) && /(^|\s)-\s*(\d*\.)?\d*[1-9]/.test(x))
-        this.refuse.add("a negative margin");
-      if (p === "min-width" && !/^(0(\.0+)?(px|em|%)?|auto)$/.test(x))
-        this.refuse.add(`min-width: ${x}`);
-      if (p === "max-width" && x !== "none" && tag !== "img")
-        this.refuse.add(`max-width on <${tag}>`);
+      // An escape (`hidd\65n`) is a keyword this reader would not recognise (round 2).
+      if (x.includes("\\")) this.refuse.add(`a CSS escape in ${p}`);
+      // Clipping and scaling (round 2): drawn whole, "Draft 2.26 kN" printed under
+      // `height:0; overflow:hidden`, and `zoom: 0.25` printed at full size.
       if (
-        p === "box-sizing" &&
-        x === "border-box" &&
-        ["width", "height", "min-width", "max-width", "max-height"].some(
+        /^overflow(-x|-y)?$/.test(p) &&
+        x !== "visible" &&
+        ["height", "width", "max-height", "max-width"].some(
           (q) => v.has(q) && !/^(auto|none)$/.test(v.get(q) as string),
         )
       )
-        this.refuse.add("box-sizing: border-box with a set width or height");
+        this.refuse.add(`${p}: ${x} on a box with a set size`);
+      if (p === "zoom" && !/^(normal|1|100%|reset)$/.test(x)) this.refuse.add(`zoom: ${x}`);
+      if (p === "table-layout" && x !== "auto") this.refuse.add(`table-layout: ${x}`);
+      if (p === "max-height" && x !== "none" && tag !== "img")
+        this.refuse.add(`max-height on <${tag}>`);
+      if (p === "content" && x !== "normal" && x !== "none") this.refuse.add(`content on <${tag}>`);
+      // `box-sizing: inherit` is resolved below (a common reset, `*{box-sizing:inherit}`, round 2).
+      if (x === "inherit" && !INHERITED.has(p) && p !== "box-sizing")
+        this.refuse.add(`inherit on ${p}`);
+      if (/^margin/.test(p) && /(^|\s)-\s*(\d*\.)?\d*[1-9]/.test(x))
+        this.refuse.add("a negative margin");
+      // Any zero is no minimum (`0pt` was refused while `0px` passed, round 2).
+      if (p === "min-width" && !/^(0(\.0+)?([a-z]+|%)?|auto)$/.test(x))
+        this.refuse.add(`min-width: ${x}`);
+      if (p === "max-width" && x !== "none" && tag !== "img")
+        this.refuse.add(`max-width on <${tag}>`);
     }
+    // The box model, inherited where asked: a border-box with a set size draws otherwise.
+    const bsV = v.get("box-sizing");
+    const boxSizing: "content-box" | "border-box" =
+      bsV === undefined || bsV === "initial" || bsV === "unset"
+        ? "content-box"
+        : bsV === "inherit"
+          ? (inh?.boxSizing ?? "content-box")
+          : bsV === "border-box"
+            ? "border-box"
+            : "content-box";
+    if (
+      boxSizing === "border-box" &&
+      ["width", "height", "min-width", "max-width", "max-height"].some(
+        (q) => v.has(q) && !/^(auto|none)$/.test(v.get(q) as string),
+      )
+    )
+      this.refuse.add("box-sizing: border-box with a set width or height");
 
     // Font size first: em lengths below are of this size.
     const pSize = inh?.fontSize ?? 16;
@@ -1221,7 +1291,9 @@ class Cascade {
       const w = wl > 0 && wl < 1 ? 1 : Math.floor(wl);
       return { w, style, color: c ?? color };
     };
-    const display = get("display") ?? "inline";
+    // A `<template>`'s content is inert, never drawn whatever its CSS: given `display:block`, its
+    // markup (read here as raw text) printed as text (round 2).
+    const display = tag === "template" ? "none" : (get("display") ?? "inline");
     const fam = get("font-family");
     const weightV = get("font-weight");
     const pWeight = inh?.weight ?? 400;
@@ -1295,6 +1367,8 @@ class Cascade {
     }
     const brk = (p: string): "auto" | "page" => {
       const x = get(p);
+      // Breaks to a left or right page by its parity: read as no break (round 2).
+      if (x === "recto" || x === "verso") this.refuse.add(`${p}: ${x}`);
       return x === "always" || x === "page" || x === "left" || x === "right" ? "page" : "auto";
     };
     const avoidV = get("page-break-inside") ?? get("break-inside");
@@ -1348,6 +1422,10 @@ class Cascade {
       avoidInside: avoidV === "avoid" || avoidV === "avoid-page",
       verticalAlign: vaV as Style["verticalAlign"],
       inScript: script || (inh?.inScript ?? false),
+      boxSizing,
+      cellAlign:
+        get("vertical-align") ??
+        (tag === "td" || tag === "th" || tag === "tr" ? (inh?.cellAlign ?? "middle") : "middle"),
       decorations,
       collapse,
       spacing,
@@ -1502,6 +1580,9 @@ function presentational(e: Elem, refuse: Refusals): string {
 const INSTALLED_FAMILIES =
   /^(verdana|tahoma|calibri|cambria|cambria math|candara|consolas|constantia|corbel|segoe ui|segoe ui symbol|segoe ui emoji|georgia|trebuchet ms|comic sans ms|impact|palatino linotype|book antiqua|palatino|lucida console|lucida sans unicode|lucida grande|lucida sans|garamond|century gothic|franklin gothic medium|gill sans|optima|futura|menlo|monaco|sf pro text|sf pro display|-apple-system|system-ui|blinkmacsystemfont|symbol|wingdings|webdings|ms gothic|ms mincho|ms sans serif|ms serif|microsoft sans serif|arial narrow|arial black|courier std)$/;
 
+/** Web fonts a report names but cannot load here or in Chrome (no `@font-face` of its own). */
+const WEB_ONLY_FAMILIES = /^(lato)$/;
+
 function fontKey(families: string, refuse: Refusals): FontKey {
   for (const f of splitTop(families, ",")) {
     const n = f
@@ -1518,7 +1599,13 @@ function fontKey(families: string, refuse: Refusals): FontKey {
       return "serif";
     }
     if (/^(times new roman|times|serif|liberation serif|tinos)$/.test(n)) return "serif";
-    // A family not on this host (Lato, Helvetica Neue on Windows): the next one, as Chrome does.
+    // A web font the document cannot load (its CSP forbids outside fonts, and it embeds none):
+    // passed over for the next, as Chrome does -- Lato, first in SkyCiv's model template.
+    if (WEB_ONLY_FAMILIES.test(n) && !refuse.embeddedFamilies.has(n)) continue;
+    // Any other family: an allow-list, not a deny-list. Installed fonts not on the old list
+    // (Segoe UI Variable, Bahnschrift, Aptos …) took Arial's metrics with no refusal (round 2).
+    refuse.add(`the font family "${n}" (no face here matches it)`);
+    return "serif";
   }
   refuse.add(`no font this renderer has in "${families}"`);
   return "serif";
@@ -1872,7 +1959,8 @@ class Flow {
   pastFoot = false;
   forceBreak(): void {
     if (!Number.isFinite(this.height)) {
-      if (this.placed) this.breakInBox = true;
+      // Before the box's first content too: Chrome breaks there, and it was skipped (round 2).
+      this.breakInBox = true;
       return;
     }
     if (this.placed) this.breakNext = true;
@@ -2199,6 +2287,8 @@ class Layout {
     flow: Flow,
     sink: (p: number) => Sink,
   ): void {
+    // A hidden box draws nothing of its own: its background and borders were drawn (round 2).
+    if (!s.visible) return;
     const bg = s.background && s.exact ? s.background : null;
     if (!bg && s.border.every((b) => b.w === 0)) return;
     for (let p = start.page; p <= end.page; p++) {
@@ -2306,6 +2396,7 @@ class Layout {
     const pt = px(s.padding[0], cb);
     const W = w + this.boxH(s, cb);
     const H = h + this.boxV(s, cb);
+    if (!s.visible) return; // nothing of a hidden image box is drawn (round 2)
     if (s.background && s.exact) out.rect(e.depth, x, y, W, H, s.background);
     if (t.w) out.rect(e.depth, x, y, W, t.w, t.color);
     if (b.w) out.rect(e.depth, x, y + H - b.w, W, b.w, b.color);
@@ -2405,6 +2496,8 @@ class Layout {
     // One inside another lost the outer box's baseline, sitting ~4 pt high (T1-3 review).
     if (this.inlineBoxDepth > 0) this.refuse.add(`an inline box inside another (<${e.tag}>)`);
     const s = this.styled(e);
+    // Its set height was ignored: the box took its content's (round 2).
+    if (s.height !== "auto") this.refuse.add(`a set height on an inline box (<${e.tag}>)`);
     const pad = s.padding.map((p) => px(p, cbWidth));
     const bw = s.border.map((b) => b.w);
     const ml = px(s.margin[3], cbWidth);
@@ -2957,11 +3050,21 @@ class Layout {
         }
         const inner = widths[k] - pad[1] - pad[3] - bl - br;
         // The content is always centred (the UA's middle): a cell, or its row, set to top or bottom
-        // put "Fy 50.0" beside the wrong line of the cell next to it (T1-3 review).
-        for (const va of [s.verticalAlign, this.styled(g.rows[ri]).verticalAlign]) {
-          if (va === "top" || va === "bottom")
-            this.refuse.add(`vertical-align: ${va} in a table cell`);
+        // put "Fy 50.0" beside the wrong line of the cell next to it (T1-3 review). Read through
+        // the row and its group, as Chrome inherits it, and any value but middle refused --
+        // `baseline` drew centred too, and a tbody's `top` reached no cell (round 2).
+        if (s.cellAlign !== "middle") {
+          this.refuse.add(`vertical-align: ${s.cellAlign} in a table cell`);
         }
+        // A row's forced break was never read: the row printed on the page before (round 2).
+        const rs0 = this.styled(g.rows[ri]);
+        if (rs0.breakBefore === "page" || rs0.breakAfter === "page") {
+          this.refuse.add("a forced page break on a table row");
+        }
+        // A hidden cell's background and borders were drawn, and how a collapsed table draws a
+        // hidden cell's edges is Chrome's own (round 2).
+        if (!s.visible || !rs0.visible)
+          this.refuse.add("visibility: hidden on a table cell or row");
         const rec = new Recorder();
         // A cell is its own formatting context: its children's margins stay inside it.
         const f = new Flow(Number.POSITIVE_INFINITY, () => rec);

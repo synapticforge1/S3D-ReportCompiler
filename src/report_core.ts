@@ -4991,26 +4991,45 @@ const OPENING_BLOCK_TAG =
  * opening ends. A float moves whole blocks (known-issues #121); it never moves a value away from
  * its label inside one, so a block changed inside -- two values swapped, a title's digits
  * exchanged ("C1 Level 2" for "C2 Level 1") -- is not found.
+ *
+ * The arrangement must hold the source's FIRST block (whole, or as the cut last piece): without
+ * it, any block of 40 characters or more could open the "opening" alone, so a table header Chrome
+ * repeats on every page counted as the report's start on each, and a correct PDF FAILED (T1-3
+ * round 2). Equal blocks are tried as one (with a count), and a failed (position, counts left) is
+ * not tried again: the plain search tried every order of equal rows -- 8 rows of "N/A" took 4 s
+ * on one page, 20 never finished (round 2).
  */
 function opensWithBlocks(text: string, opening: string, blocks: string[]): boolean {
   if (text.startsWith(opening)) return true;
   const need = opening.length;
   if (blocks.length < 2 || text.length < need) return false;
-  const used = new Array<boolean>(blocks.length).fill(false);
+  const kinds = [...new Set(blocks)];
+  const left = kinds.map((b) => blocks.filter((x) => x === b).length);
+  const first = kinds.indexOf(blocks[0]);
+  const firstCount = left[first];
+  const failed = new Set<string>();
   const fits = (at: number): boolean => {
-    if (at >= need) return true;
-    for (let k = 0; k < blocks.length; k++) {
-      if (used[k]) continue;
-      const b = blocks[k];
+    if (at >= need) return left[first] < firstCount;
+    const key = `${at}|${left.join(",")}`;
+    if (failed.has(key)) return false;
+    for (let k = 0; k < kinds.length; k++) {
+      if (left[k] === 0) continue;
+      const b = kinds[k];
       const room = need - at;
-      const whole = b.length <= room && text.startsWith(b, at);
-      const cut = b.length > room && text.startsWith(b.slice(0, room), at);
-      if (!whole && !cut) continue;
-      if (cut) return true;
-      used[k] = true;
-      if (fits(at + b.length)) return true;
-      used[k] = false;
+      if (b.length > room) {
+        // The cut last piece: the opening ends inside it. It counts as the first block's place.
+        if (text.startsWith(b.slice(0, room), at) && (left[first] < firstCount || k === first)) {
+          return true;
+        }
+        continue;
+      }
+      if (!text.startsWith(b, at)) continue;
+      left[k]--;
+      const ok = fits(at + b.length);
+      left[k]++;
+      if (ok) return true;
     }
+    failed.add(key);
     return false;
   };
   return fits(0);

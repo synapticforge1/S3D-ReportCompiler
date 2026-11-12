@@ -1554,8 +1554,16 @@ packages carry the fonts and their licence (npm:prove). (e) A fresh review finds
   Recorded, not fixed (older, loud or cosmetic): known-issues after #125 -- chief among them class
   E of task 18 (a value moved to another label passes), open since before the native renderer.
   The 36ft report hits none of the new refusals (native, 7,161 pages, PASS, 338 s).
-  ⏳ **Next:** a second round on the fixes (the project's practice: every review so far found
-  something in the round before's fixes), then the push (CI's half of T1-2), then T1-4.
+  ✅ **Round 2, 2026-11-12** (owner: "yes run round 2", then "yes" to fixing A, B and C): two
+  fresh reviewers on round 1's fixes (the renderer's refusals; the join and the start rule), 16
+  findings, every one re-run first. Fixed: **#126** (round 1's refusals bypassed -- case, escapes,
+  clipping, `&nbsp;`, row-group alignment, templates, `not all`, a font deny-list -- and its
+  over-refusals) and **#127** (#125's false FAIL on a repeated table header, its factorial
+  search, dead links named); #125's claim corrected. Recorded: B4 (native links inert) ⏸️ the
+  owner's choice, asked; B6; `<pre>`.
+  ⏳ **Next:** round 3 on round 2's fixes (🔒 owner, 2026-11-12: the review stops when a round's
+  reviewers find nothing -- review-process.md § 1.4), the owner's choice on native links, then
+  the push (CI's half of T1-2), the release's security and hardening reviews (§ 0), then T1-4.
 - **T1-3 A fresh review (~1–2 sessions).** The project's practice before a release: an
   adversarial reviewer on the renderer, the routing and the merge; every finding fixed with a test
   that fails without it. Budgeted because every review so far has found real defects (2026-11-11

@@ -1389,7 +1389,9 @@ function collectGarbage(): void {
  * a link that points at a page object itself (copying it would copy that page again) -- stops
  * the build, named: a dead link in a certified package is not left for a reader to find.
  */
-async function joinParts(parts: Uint8Array[]): Promise<Uint8Array> {
+async function joinParts(parts: Uint8Array[]): Promise<{ bytes: Uint8Array; deadLinks: string[] }> {
+  /** Every named link target a part's links use: one no part defines is a dead link (round 2). */
+  const linkNames = new Set<string>();
   const out = await PDFDocument.create({ updateMetadata: false });
   out.setProducer("s3d-reportcompiler");
   out.setCreator("s3d-reportcompiler");
@@ -1422,6 +1424,7 @@ async function joinParts(parts: Uint8Array[]): Promise<Uint8Array> {
         if (target instanceof PDFArray || target instanceof PDFRef) {
           refuse("has a link that points at a page object itself");
         }
+        if (target instanceof PDFName) linkNames.add(target.decodeText());
       }
     }
     const copied = await out.copyPages(part, part.getPageIndices());
@@ -1452,7 +1455,10 @@ async function joinParts(parts: Uint8Array[]): Promise<Uint8Array> {
     for (const page of copied) out.addPage(page);
   }
   if (dests.keys().length > 0) out.catalog.set(PDFName.of("Dests"), out.context.register(dests));
-  return await out.save({ useObjectStreams: false });
+  // A link to a target Chrome did not print (`display:none`) is as dead in Chrome's own build:
+  // said, not refused.
+  const deadLinks = [...linkNames].filter((n) => !dests.has(PDFName.of(n))).sort();
+  return { bytes: await out.save({ useObjectStreams: false }), deadLinks };
 }
 
 function dropStructureTree(pdf: PDFDocument): number {
@@ -3636,10 +3642,15 @@ try {
   }
   // One part keeps its bytes as rendered (a native-only build stays byte-reproducible); several
   // are joined in report order.
-  const rendered =
-    parts.length === 1
-      ? (parts[0].pdf as Uint8Array)
-      : await joinParts(parts.map((p) => p.pdf as Uint8Array));
+  let rendered: Uint8Array;
+  if (parts.length === 1) rendered = parts[0].pdf as Uint8Array;
+  else {
+    const joined = await joinParts(parts.map((p) => p.pdf as Uint8Array));
+    rendered = joined.bytes;
+    for (const name of joined.deadLinks) {
+      console.warn(`  warning: a link to #${name} goes nowhere (its target is not printed)`);
+    }
+  }
   if (parts.length > 1 || parts[0].renderer === "native") {
     await rt.writeFile(candidatePdf, rendered);
   }

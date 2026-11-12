@@ -3175,6 +3175,92 @@ test("native renderer: what the T1-3 review found drawn wrong is refused, by nam
       "",
       /a JPEG turned by its EXIF orientation \(6\)/,
     ],
+    // Round 2: bypasses of round 1's refusals, and what round 1 still drew wrong.
+    [
+      "an upper-case keyword",
+      '<p style="visibility:HIDDEN">Superseded 1.42</p>',
+      "",
+      /hidden text/,
+    ],
+    [
+      "BORDER-BOX in capitals",
+      '<div style="box-sizing:BORDER-BOX;width:100px;padding:9px">x</div>',
+      "",
+      /box-sizing: border-box/,
+    ],
+    ["a CSS escape", "<p class=e>x</p>", ".e{visibility:hidd\\65n}", /a CSS escape in visibility/],
+    [
+      "overflow clipping a sized box",
+      '<div style="height:0;overflow:hidden">Draft 2.26 kN</div>',
+      "",
+      /overflow: hidden on a box with a set size/,
+    ],
+    ["zoom", '<p style="zoom:0.25">Capacity 3.75</p>', "", /zoom: 0\.25/],
+    [
+      "table-layout: fixed",
+      '<table style="table-layout:fixed"><tr><td>x</td></tr></table>',
+      "",
+      /table-layout: fixed/,
+    ],
+    ["max-height on a block", '<div style="max-height:10px">x</div>', "", /max-height on <div>/],
+    ["content on an element", '<p style="content:url(x.png)">x</p>', "", /content on <p>/],
+    [
+      "a set height on an inline box",
+      '<p><span style="display:inline-block;height:0">x</span></p>',
+      "",
+      /a set height on an inline box/,
+    ],
+    [
+      "an unknown named reference",
+      "<p>Wid&ZeroWidthSpace;th 12</p>",
+      "",
+      /the character reference &ZeroWidthSpace;/,
+    ],
+    [
+      "a tbody's vertical-align",
+      "<table><tbody class=t><tr><td><div>Fy</div></td></tr></tbody></table>",
+      ".t{vertical-align:top}",
+      /vertical-align: top in a table cell/,
+    ],
+    [
+      "a cell's baseline",
+      '<table><tr><td style="vertical-align:baseline"><div>Fy</div></td></tr></table>',
+      "",
+      /vertical-align: baseline in a table cell/,
+    ],
+    [
+      "an installed family off the old list",
+      "<p class=v>x</p>",
+      ".v{font-family:'Segoe UI Variable', Arial}",
+      /the font family "segoe ui variable"/,
+    ],
+    [
+      "an embedded web font",
+      "<p class=v>x</p>",
+      "@font-face{font-family:Lato;src:url(data:font/woff2;base64,AAAA)} .v{font-family:Lato, Arial}",
+      /the font family "lato"/,
+    ],
+    [
+      "a forced break before a cell's content",
+      '<table><tr><td><div style="page-break-before:always">x</div></td></tr></table>',
+      "",
+      /a forced page break inside a table cell/,
+    ],
+    [
+      "a row's forced break",
+      '<table><tr><td>a</td></tr><tr style="break-before:page"><td>b</td></tr></table>',
+      "",
+      /a forced page break on a table row/,
+    ],
+    ["break-before: recto", '<p style="break-before:recto">x</p>', "", /break-before: recto/],
+    [
+      "a hidden cell",
+      '<table><tr><td style="visibility:hidden;background:#f00">x</td></tr></table>',
+      "",
+      /visibility: hidden on a table cell/,
+    ],
+    ["a <blockquote>", "<blockquote>x</blockquote>", "", /the element <blockquote>/],
+    ["an <abbr>", '<p><abbr title="x">kN</abbr></p>', "", /the element <abbr>/],
   ];
   const drawn: string[] = [];
   for (const [what, body, css, named] of cases) {
@@ -3197,16 +3283,67 @@ test("native renderer: what the T1-3 review found drawn wrong is refused, by nam
     "<p>10<sup>2</sup> and H<sub>2</sub>O</p>",
     "<table><tr><td><div>Fy 50.0</div></td><td>a<br>b</td></tr></table>",
     `<img src="data:image/jpeg;base64,${jpegWithOrientation(1)}">`,
+    // Round 2's over-refusals, now drawn: a box-sizing reset with no size; a zero min-width in pt;
+    // a value under `@media not all` (which never applies); an upper-case `ALWAYS` honoured.
+    '<p class=r style="min-width:0pt">x</p><p class=n>Value 9.9</p><p style="page-break-before:ALWAYS">y</p>',
   ]) {
     const out = await renderDocument(
       doc(
         body,
-        "@media print{.s{color:#103e50}} @media screen and (max-width:9px){.s{display:none}}",
+        "@media print{.s{color:#103e50}} @media screen and (max-width:9px){.s{display:none}}" +
+          " *{box-sizing:inherit} @media not all{.n{display:none}}",
       ),
       fonts,
     );
     assert.deepEqual(out.refused, [], body.slice(0, 60));
   }
+
+  // Drawn as Chrome draws them (round 2), read back from the PDF: `&nbsp;` never breaks a line
+  // ("1 000 kN" printed as three lines); a <template> prints nothing, whatever its CSS; a value
+  // under `@media not all` is printed; `ALWAYS` breaks the page.
+  const pdfjsText = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const linesOf = async (pdf: Uint8Array) => {
+    const d = await pdfjsText.getDocument({ data: pdf, verbosity: 0 }).promise;
+    const pages: { str: string; y: number }[][] = [];
+    for (let p = 1; p <= d.numPages; p++) {
+      const items = (await (await d.getPage(p)).getTextContent()).items as {
+        str: string;
+        transform: number[];
+      }[];
+      pages.push(items.filter((i) => i.str.trim()).map((i) => ({ str: i.str, y: i.transform[5] })));
+    }
+    return pages;
+  };
+  const nbsp = await renderDocument(
+    doc('<div style="width:40px">Load 1&nbsp;000&nbsp;kN</div>'),
+    fonts,
+  );
+  assert.deepEqual(nbsp.refused, []);
+  const nbspItems = (await linesOf(nbsp.pdf as Uint8Array)).flat();
+  const nbspYs = new Set(
+    nbspItems.filter((i) => /1|000|kN/.test(i.str)).map((i) => i.y.toFixed(1)),
+  );
+  assert.equal(nbspYs.size, 1, `"1 000 kN" broken over ${nbspYs.size} lines`);
+  const tpl = await renderDocument(
+    doc("<p>Kept 4.4</p><template><p>Old 1.42</p></template>", "template{display:block}"),
+    fonts,
+  );
+  const tplText = (await linesOf(tpl.pdf as Uint8Array))
+    .flat()
+    .map((i) => i.str)
+    .join(" ");
+  assert.match(tplText, /Kept 4\.4/);
+  assert.doesNotMatch(tplText, /Old|1\.42|<p>/, "the template's markup printed");
+  const notAll = await renderDocument(
+    doc(
+      "<p class=n>Value 9.9</p><p style='page-break-before:ALWAYS'>Next</p>",
+      "@media not all{.n{display:none}}",
+    ),
+    fonts,
+  );
+  const notAllPages = await linesOf(notAll.pdf as Uint8Array);
+  assert.match(notAllPages[0].map((i) => i.str).join(" "), /Value 9\.9/, "@media not all applied");
+  assert.equal(notAllPages.length, 2, "ALWAYS did not break the page");
 
   // The language travels into the native PDF, as Chrome writes it.
   const plain = await renderDocument(doc("<p>Load 12.5 kN</p>"), fonts);
@@ -3314,6 +3451,7 @@ const LIST_REPORT =
   " .c{color:#b00000;font-weight:bold}</style></head><body><h1>Wind Check</h1>" +
   "<p class=c>Design pressure 27.4 psf on the windward wall</p>" +
   '<ul><li>Gust factor 0.85</li></ul><p><a href="#wind-end">See the summary</a></p>' +
+  '<p><a href="#wind-gone">Superseded</a><span id="wind-gone" style="display:none"></span></p>' +
   '<p style="page-break-before:always" id="wind-end">Summary 27.4 psf</p></body></html>';
 
 test(
@@ -3343,6 +3481,8 @@ test(
       /chrome:\s+2 report\(s\), member_0_report\.html … member_1_report\.html -- 2 with maths/,
       /chrome:\s+1 report\(s\), Wind Check\.html -- 1 refused by the native renderer/,
       /parts:\s+3, joined in report order into one PDF/,
+      // A link whose target Chrome does not print is named (round 2), not refused.
+      /warning: a link to #r3-wind-gone goes nowhere/,
       /per-report: 4\/4/,
       /PASS/,
     );
@@ -3368,7 +3508,7 @@ test(
       .flatMap((a) => (a instanceof PDFDict ? [a.get(PDFName.of("Dest"))] : []))
       .filter((d): d is typeof PDFName.prototype => d instanceof PDFName);
     assert.ok(linked.length > 0, "the link annotation is missing");
-    for (const name of linked) {
+    for (const name of linked.filter((n) => n.decodeText() !== "r3-wind-gone")) {
       const target = dests.lookup(name);
       assert.ok(target instanceof PDFArray, `link ${name} has no target`);
       const page = target.get(0);
@@ -3479,6 +3619,29 @@ test(
     const latePage = `Importance 1.1\nSnow Check\nGround snow load for the gate post${V}Snow Check\nGround snow load for the gate post\nImportance 1.1`;
     const each = core.compareEachReport([a, late], [pageA, latePage]);
     assert.ok(each.checked, each.reason);
+    // Round 2: a short title, then a table header Chrome repeats at the top of every page. The
+    // header alone (40+ characters, cut at the opening's end) counted as the report's start on
+    // every page; the arrangement must hold the first block (the title).
+    const hdr =
+      "<tr><th>Member</th><th>Section</th><th>Axial force</th><th>Shear force</th><th>Utilization</th></tr>";
+    const framed = `<body><h1>Frame</h1><table><thead>${hdr}</thead><tr><td>M1</td><td>1.2</td></tr></table></body>`;
+    const head = "Member Section Axial force Shear force Utilization";
+    assert.deepEqual(
+      core.findReportStarts(
+        [framed],
+        [`Frame\n${head}\nM1 1.2`, `${head}\nM2 1.1`, `${head}\nM3 1.0`],
+      ).starts,
+      [0],
+    );
+    // Equal blocks are one kind: 20 rows of "OK" at a page's top end in well under a second
+    // (the plain search tried every order: 8 took 4 s, 20 did not finish).
+    const oks = `<body><h1>T</h1><table>${"<tr><td>OK</td></tr>".repeat(24)}</table></body>`;
+    const t0 = performance.now();
+    core.findReportStarts(
+      [oks, "<body><h1>Another report 1.0</h1></body>"],
+      [`T ${"OK ".repeat(24)}`, `${"OK ".repeat(20)}and then other text`],
+    );
+    assert.ok(performance.now() - t0 < 1000, `${(performance.now() - t0).toFixed(0)} ms`);
   },
 );
 
