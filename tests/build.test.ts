@@ -18,6 +18,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  appendFileSync,
   chmodSync,
   cpSync,
   existsSync,
@@ -3157,6 +3158,35 @@ test(
     assert.equal(core.findReportStarts([a], [pageB]).starts, null);
   },
 );
+
+test("an altered font stops a native build with a message, nothing deleted (T1-2)", () => {
+  // A copy of the CLI with one byte appended to a shipped font: the hash check refuses it. It
+  // crashed with a stack trace (found by npm:prove's native leg on an altered package).
+  const copy = join(work, "altered-font");
+  mkdirSync(copy, { recursive: true });
+  cpSync(join(ROOT, "main.ts"), join(copy, "main.ts"));
+  cpSync(join(ROOT, "package.json"), join(copy, "package.json"));
+  cpSync(join(ROOT, "src"), join(copy, "src"), { recursive: true });
+  cpSync(join(ROOT, "fonts"), join(copy, "fonts"), { recursive: true });
+  symlinkSync(join(ROOT, "node_modules"), join(copy, "node_modules"), "junction");
+  appendFileSync(join(copy, "fonts", "liberation", "LiberationSans-Regular.ttf"), "x");
+  const dir = join(work, "altered-font-input");
+  mkdirSync(join(dir, "out"), { recursive: true });
+  writeFileSync(join(dir, "gate_post_model.html"), modelReport(20));
+  writeFileSync(join(dir, "out", "c.pdf"), "an earlier build's");
+  const r = run([join(copy, "main.ts"), dir, join(dir, "out", "c.pdf")], {
+    env: { ...process.env, S3D_RENDERER: "native" },
+  });
+  assert.equal(r.code, 1, r.out);
+  has(
+    r.out,
+    /ERROR: the native renderer's fonts could not be read\.\s+The renderer's font LiberationSans-Regular\.ttf is not the one shipped/,
+    /Reinstall the package/,
+    /is from an earlier build/,
+  );
+  hasNot(r.out, /\bat (async )?\S+ \(|report_runtime\.ts:\d+/);
+  assert.equal(readFileSync(join(dir, "out", "c.pdf"), "utf8"), "an earlier build's", "replaced");
+});
 
 test("native: reports joined, the same bytes every build (task 19)", { timeout: TIMEOUT }, () => {
   const dir = join(work, "native-joined");

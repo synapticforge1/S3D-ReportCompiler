@@ -58,6 +58,8 @@ CompiledPDF/
 *.html
 !/tests/HTMLFilesToBeCompiled/*.html
 !/tests/browser_example.html
+# npm:prove's native leg (T1-2, 2026-11-12): the suite's synthetic modelReport(120), no client data.
+!/tests/native/gate_post_model.html
 
 # The lint canary's planted file (scripts/check-lint-canary.ts): removed when a run ends, but a run
 # killed mid-way left it, stageable (2026-11-07 review). NOT the format canary's: `bun fmt` skips

@@ -301,6 +301,10 @@ samples and the 48 set), so copying pages loses no link. The packing and the who
 run on the joined file unchanged; each report's checks already run on its own pages, so parts
 with different fonts and print scales are judged each by its own.
 
+**What it draws and refuses** is listed for users in the README ("What the native renderer
+draws, and what it refuses", 2026-11-12, read from `src/report_render.ts`'s refusals). Change the
+list with the code: a new refusal, or a construct newly drawn, updates it in the same commit.
+
 **Chrome is needed only when a report goes to it.** `S3D_RENDERER=chrome` without a browser stops
 before the bake, as before; otherwise the routing names the reports that need one. A set the
 native renderer draws whole runs with no browser installed.

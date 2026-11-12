@@ -339,6 +339,42 @@ The build names the renderer of each report, and why:
 Chrome) or `native` (every report natively — the build stops, naming each report and what it cannot
 draw; no browser needed). Any other value stops the build.
 
+#### What the native renderer draws, and what it refuses
+
+It draws block and inline text, tables (collapsed or separate borders, zebra rows, header rows
+kept with the first row), embedded JPEG and PNG images, links, superscripts and subscripts,
+borders and backgrounds in solid colours, and page breaks as the report asks for them (a box that
+avoids breaks moves on when it does not fit; no heading is left alone at a page's foot). Text is
+set in Arial, Helvetica or `sans-serif` → Liberation Sans; Courier, Courier New or `monospace` →
+Liberation Mono; Times, Times New Roman or `serif` → Liberation Serif — a family it lacks (Lato) is
+passed over for the next in the list, as a browser does. A document wider than the page is shrunk
+to fit, as Chrome does.
+
+Everything else is **refused by name** — the report goes to Chrome under `auto`, or the build stops
+under `native`. Never approximated:
+
+- **Content:** maths, `<svg>` drawings, MathML; an image that is not embedded, or not JPEG or PNG; a
+  background image; a list item (its marker); preformatted line breaks; hidden text; a character
+  no font has (CJK, for one).
+- **Layout:** `float`, `position` other than `static` / `relative`, a relative offset,
+  `transform`; `text-indent`, `text-transform`; `white-space` other than `normal` / `pre` /
+  `nowrap`; an inline box with borders, padding or margins; a `display` other than inline inside a
+  line; a set height on a box that crosses pages; a line, or a table row, taller than a page;
+  anything past the paper's edge.
+- **Tables:** a cell spanning columns or rows, a `<thead>` (Chrome repeats it on each page), a
+  styled row group, a `<caption>`, `<colgroup>` or `<col>`, a cell width in `%`, a set cell height,
+  a background on a collapsed table.
+- **Style:** `opacity` below 1, `box-shadow`, `clip-path`, `mask`, `filter`,
+  `visibility: collapse`, the `font` shorthand, a border style other than solid / inset / outset /
+  none / hidden, a colour, size, weight, line height, alignment, vertical alignment or decoration
+  it cannot read, an unknown CSS property, a presentational attribute (`align=`, `bgcolor=`,
+  `border=`, `width=` … — an image's `width=` / `height=` aside), a family with no face it has.
+- **Style sheets:** `@import`, `@supports`, and any at-rule but `@media` (its print rules read),
+  `@page`, `@font-face` and `@keyframes`; a pseudo-class it does not know, a pseudo-element on an element it styles, a case-insensitive
+  attribute selector, a selector it cannot read.
+- **The page:** anything but Letter with 0.5 in margins (the document the build assembles always
+  is).
+
 ### Straight from SkyCiv's zip (1.2.0)
 
 ```bash

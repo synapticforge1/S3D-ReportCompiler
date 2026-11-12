@@ -3131,7 +3131,26 @@ const routes: { renderer: "chrome" | "native"; why: string; pdf: Uint8Array | nu
       routes.push({ renderer: "chrome", why, pdf: null });
       continue;
     }
-    fonts ??= await rt.readRenderFonts();
+    if (fonts === null) {
+      try {
+        fonts = await rt.readRenderFonts();
+      } catch (e) {
+        // A missing or altered font file: said as a message, not a stack trace (T1-2: an
+        // installed package with one font byte changed crashed here).
+        console.error(
+          `\nERROR: the native renderer's fonts could not be read.\n  ${(e as Error).message}\n`,
+        );
+        console.error(
+          "They ship with the package (fonts/liberation/) and are checked against their",
+        );
+        console.error(
+          "recorded hashes. Reinstall the package; from a clone, restore fonts/ from git.",
+        );
+        console.error("S3D_RENDERER=chrome draws every report with Chrome instead.");
+        await noteEarlierPdf();
+        rt.exit(1);
+      }
+    }
     const t0 = Date.now();
     // On its own, under its own index: its stylesheet was scoped to `.rs{i}` when it was baked.
     const out = await renderDocument(

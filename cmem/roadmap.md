@@ -1439,7 +1439,8 @@ Estimates are in working sessions like 2026-11-11's (a full day each), and are c
 #### ▶️ Start of the next session, in order
 
 1. ✅ **The merge is committed** (2026-11-12, owner: "lets proceed with Target 1"): `80fb480`.
-2. ✅ **T1-1 is done** (2026-11-12, below). **Next: T1-2, hardening for release.**
+2. ✅ **T1-1 is done** (2026-11-12, below); the false FAIL it found fixed (#121). 🟡 **T1-2:
+   done locally (below); CI's half runs on the next push (owner's word). Next: T1-3, the review.**
 3. The stash (`git stash list`: "trial: table rewrite in progress", `src/report_render.ts` of the
    trial branch) is **target 2's** phase 1 -- leave it until target 1 ships.
 
@@ -1506,6 +1507,32 @@ packages carry the fonts and their licence (npm:prove). (e) A fresh review finds
   limits written down (what it refuses, by name); the verifier's remaining memory churn (~7.5 GB
   peak in the checks on the full 36ft report) looked at if a target machine needs it; the
   scratch-only measurements (the 36ft report, the zip) re-run as the release's evidence.
+  🟡 **T1-2, 2026-11-12 (owner: "proceed") -- everything that can be proven on this machine is;
+  CI's half waits on a push (the owner's word):**
+  - ✅ **CI already covers it -- no workflow change needed.** `checks` runs the suite under Bun
+    and `node-suite` under Node 22.18 / 24 / 26, both on `ubuntu-latest`, so every native test
+    runs on Linux at the next push; `npm` runs `npm-prove.ts --deno --install-node`, its new native
+    leg included (below), on Deno too. JSR's `deno doc --lint` / `deno check --doc` (the new
+    `assembleReports` example) and the upload check with `fonts/` run in `jsr`. ⏳ All of it first
+    runs on the next push.
+  - ✅ **Linux, locally (WSL Ubuntu, Bun 1.4.4, no Chrome, no Node):** a scratch clone, every
+    native-only test PASSES -- the fonts found and hash-checked on Linux, native builds verified,
+    joined native builds byte-identical. The mixed test fails there for the right reason: `3
+    report(s) need Chrome, and neither Chrome nor Edge was found`, each named with why.
+  - ✅ **npm:prove draws natively from the INSTALLED package** (new leg; fixture
+    `tests/native/gate_post_model.html`, the suite's `modelReport(120)`, synthetic): on Node 22.13
+    (the floor), 22, 24, 26 and Bun the installed CLI PASSES and writes the source's PDF byte for
+    byte (`f57bf134629b`). Inverted: a package with one font byte altered fails every runtime --
+    which showed the crash fixed as known-issues #122.
+  - ✅ **The native renderer's limits written down** for users: README "What the native renderer
+    draws, and what it refuses", read from the code's refusals (design-decisions §10 points there).
+  - ✅ **The release's evidence, re-run under `auto` (scratch / local; client data):** the 48 set
+    -- all Chrome, baked `da92578d…` (the reference), 380 pages, 48/48, 37,556 / 37,556 styled,
+    PASS, 48 s; the 75-report zip (a copy) -- all Chrome, 553 pages, 75/75, 54,124 / 54,124,
+    PASS, 74 s; the 36ft report -- native, 7,161 pages, PASS (twice today: 336 s, 432 s); the
+    samples -- `487321f2…`, PASS.
+  - ⏸️ **Not done, by the plan's own condition:** the verifier's memory churn (8.9 GB peak on the
+    36ft report on this machine) -- "looked at if a target machine needs it"; none has been named.
 - **T1-3 A fresh review (~1–2 sessions).** The project's practice before a release: an
   adversarial reviewer on the renderer, the routing and the merge; every finding fixed with a test
   that fails without it. Budgeted because every review so far has found real defects (2026-11-11

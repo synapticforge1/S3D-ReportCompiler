@@ -9,7 +9,9 @@
  *  3. on the manifest's Node floor, every current Node LTS line (Node's own schedule), Bun, and Deno
  *     with `--deno` (CI passes it; a developer machine has no Deno, owner 2026-10-28):
  *     import `.` and `./runtime`, and run the INSTALLED CLI on the sample reports — it must PASS and
- *     bake the same document, byte for byte, as the source does;
+ *     bake the same document, byte for byte, as the source does — and on a model report with
+ *     `S3D_RENDERER=native` (roadmap task 19, T1-2): it must PASS and write the same PDF, byte for
+ *     byte, as the source does, so the shipped fonts are found and checked from inside an install;
  *  4. `npm exec s3d-reportcompiler -- --version` prints the version;
  *  5. the shipped .d.ts type-check for a consumer;
  *  6. the export list equals JSR's own npm build of this package (an independent reference).
@@ -41,6 +43,12 @@ import { gunzipSync } from "node:zlib";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const dist = join(root, "dist");
 const samples = join(root, "tests", "HTMLFilesToBeCompiled");
+/** A report in SkyCiv's model template, made by the suite's `modelReport` (no client data). */
+const modelReports = join(root, "tests", "native");
+/** Each run's renderer, set explicitly: a developer's own `S3D_RENDERER` must not change a leg. */
+const renderer = (value: "auto" | "native") => {
+  process.env.S3D_RENDERER = value;
+};
 if (!existsSync(join(dist, "package.json"))) {
   console.error("❌ npm:prove: dist/ is not built — run `bun run npm:build` first");
   process.exit(1);
@@ -186,9 +194,18 @@ try {
 
   // The reference: the SOURCE build's baked document.
   const ref = join(work, "ref", "c.pdf");
+  renderer("auto");
   const refRun = run("bun", [join(root, "main.ts"), samples, ref], root);
   if (refRun.code !== 0) throw new Error(`the source build failed:\n${refRun.out.slice(-800)}`);
   const refHash = sha(ref.replace(/\.pdf$/, ".html"));
+  // And the native renderer's: its PDF has no render-time stamp, so the PDF itself is compared.
+  const refNative = join(work, "ref-native", "c.pdf");
+  renderer("native");
+  const refNativeRun = run("bun", [join(root, "main.ts"), modelReports, refNative], root);
+  if (refNativeRun.code !== 0) {
+    throw new Error(`the source's native build failed:\n${refNativeRun.out.slice(-800)}`);
+  }
+  const refNativeHash = sha(refNative);
 
   // 3. Every runtime: the library imports, and the INSTALLED CLI bakes the same document.
   writeFileSync(
@@ -242,6 +259,7 @@ try {
     );
     probes.add(probe);
     const out = join(work, "cli", label.replace(/\W+/g, "-"), "c.pdf");
+    renderer("auto");
     const c = exec([cli, samples, out]);
     const html = out.replace(/\.pdf$/, ".html");
     const hash = existsSync(html) ? sha(html) : "none";
@@ -252,7 +270,23 @@ try {
         ? `html ${hash} vs source ${refHash}`
         : c.out.trim().split("\n").slice(-3).join(" | "),
     );
+    // The native renderer from inside the install: its fonts found and hash-checked there.
+    const outN = join(work, "cli-native", label.replace(/\W+/g, "-"), "c.pdf");
+    renderer("native");
+    const n = exec([cli, modelReports, outN]);
+    const hashN = existsSync(outN) ? sha(outN) : "none";
+    ok(
+      n.code === 0 &&
+        /native:\s+\d+ pages laid out/.test(n.out) &&
+        /PASS: every source word and number present/.test(n.out) &&
+        hashN === refNativeHash,
+      `${label}: the installed CLI draws natively, PASSES, the source's PDF byte for byte (${hashN})`,
+      n.code === 0
+        ? `pdf ${hashN} vs source ${refNativeHash}`
+        : n.out.trim().split("\n").slice(-3).join(" | "),
+    );
   }
+  renderer("auto");
   ok(probes.size === 1, "every runtime sees the same exports", [...probes].join(" vs "));
 
   // 4. npm exec, as `npx` would. Its STDOUT only: npm 12 writes "npm notice run …" to stderr.
