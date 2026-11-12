@@ -2827,6 +2827,39 @@ const DOCUMENT_CSP =
  * neither, and it is built from user-supplied reports, whatever the bake missed.
  */
 export function assembleDocument(bodies: string[], styles: string[], mathCss: string): string {
+  return assembleReports(
+    bodies,
+    styles,
+    mathCss,
+    bodies.map((_b, i) => i),
+  );
+}
+
+/**
+ * {@link assembleDocument} for PART of a set: each body is wrapped with its report's own index in
+ * the whole set (`indices[k]`), so the stylesheet baked for it (`bakeStyle(src, ".rs" + i, …)`)
+ * still matches. With `indices` 0, 1, 2 … the document is exactly {@link assembleDocument}'s.
+ *
+ * The CLI uses it to print some reports with Chrome and draw others with its own renderer, then
+ * join the PDFs in report order (roadmap task 19).
+ *
+ * @example
+ * ```ts
+ * import { assembleReports, bakeBody, bakeStyle } from "@jrmarcum/s3d-reportcompiler";
+ * const src = "<html><body><p>Report 3</p></body></html>";
+ * // The fourth report of a set, alone: still `.rs3`, as baked.
+ * const html = assembleReports([bakeBody(src, "r3-")], [bakeStyle(src, ".rs3", "r3-")], "", [3]);
+ * ```
+ */
+export function assembleReports(
+  bodies: string[],
+  styles: string[],
+  mathCss: string,
+  indices: number[],
+): string {
+  if (indices.length !== bodies.length) {
+    throw new Error(`assembleReports: ${bodies.length} bodies but ${indices.length} indices`);
+  }
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2861,7 +2894,7 @@ ${mathCss}
 </style>
 </head>
 <body>
-${bodies.map((b, i) => `<div class="report-sheet rs${i}">${b}</div>`).join("\n")}
+${bodies.map((b, k) => `<div class="report-sheet rs${indices[k]}">${b}</div>`).join("\n")}
 </body>
 </html>
 `;

@@ -2953,8 +2953,13 @@ test("native renderer: what it cannot draw is refused, by name (task 19)", async
   );
   const r = build(dir, { env: { ...process.env, S3D_RENDERER: "native" } });
   assert.notEqual(r.code, 0, tail(r.out));
-  has(r.out, /native renderer \(trial, roadmap task 19\) refused this document/, /<svg>/);
+  has(
+    r.out,
+    /native renderer refused \(S3D_RENDERER=native\):\s+member_0_report\.html\s+- /,
+    /<svg>/,
+  );
   assert.ok(!existsSync(r.pdf), "a PDF was given its final name");
+  assert.ok(!existsSync(r.pdf.replace(/\.pdf$/, ".unverified.pdf")), "a PDF was written");
 
   // Each construct alone, through the renderer itself.
   const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
@@ -2994,12 +2999,124 @@ test("native renderer: what it cannot draw is refused, by name (task 19)", async
   }
 });
 
-test("S3D_RENDERER takes chrome or native, nothing else (task 19)", () => {
+test("S3D_RENDERER takes auto, chrome or native, nothing else (task 19)", () => {
   const r = run([MAIN, join(work, "nowhere")], {
     env: { ...process.env, S3D_RENDERER: "browserless" },
   });
   assert.equal(r.code, 1, r.out);
-  has(r.out, /S3D_RENDERER="browserless" is not "chrome" or "native"/);
+  has(r.out, /S3D_RENDERER="browserless" is not "auto", "chrome" or "native"/);
+  // Each accepted value gets past the setting (to the missing folder), in any case.
+  for (const value of ["auto", "Chrome", " native ", ""]) {
+    const ok = run([MAIN, join(work, "nowhere")], {
+      env: { ...process.env, S3D_RENDERER: value },
+    });
+    assert.equal(ok.code, 1, ok.out);
+    hasNot(ok.out, /is not "auto"/);
+  }
+});
+
+test("assembleReports keeps each report's own index (task 19, target 1)", async () => {
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const bodies = ["<p>a</p>", "<p>b</p>", "<p>c</p>"];
+  const styles = [".rs0 p{color:red}", ".rs1 p{color:green}", ".rs2 p{color:blue}"];
+  // The identity is assembleDocument, byte for byte (the reference hashes rest on it).
+  assert.equal(
+    core.assembleReports(bodies, styles, "/*m*/", [0, 1, 2]),
+    core.assembleDocument(bodies, styles, "/*m*/"),
+  );
+  const part = core.assembleReports([bodies[2]], [styles[2]], "", [2]);
+  assert.match(part, /<div class="report-sheet rs2"><p>c<\/p><\/div>/);
+  assert.doesNotMatch(part, /rs0|rs1/);
+  assert.throws(() => core.assembleReports(bodies, styles, "", [0, 1]), /3 bodies but 2 indices/);
+});
+
+/**
+ * A report the native renderer would draw but for one list (its marker): under `auto` it goes to
+ * Chrome. The list comes after the opening 40 characters, which locate the report in the PDF.
+ */
+const LIST_REPORT =
+  "<html><head><style>body{font-family:Arial;font-size:14px}" +
+  " .c{color:#b00000;font-weight:bold}</style></head><body><h1>Wind Check</h1>" +
+  "<p class=c>Design pressure 27.4 psf on the windward wall</p>" +
+  "<ul><li>Gust factor 0.85</li></ul></body></html>";
+
+test(
+  "auto: member reports by Chrome, a model report natively, joined and verified (task 19)",
+  { timeout: TIMEOUT },
+  async () => {
+    // Four reports in three parts: Chrome (members 0 and 1: maths), native (the model report),
+    // Chrome again (the list report, refused natively) -- the last a Chrome document of its own
+    // whose report is rs3, so its scoped sheet must still match it (the styling check reads its
+    // colour and weight).
+    const dir = join(work, "auto-mixed");
+    mkdirSync(dir, { recursive: true });
+    for (const n of [0, 1]) {
+      const name = `member_${n}_report.html`;
+      writeFileSync(join(dir, name), readFileSync(join(SAMPLES, name)));
+    }
+    writeFileSync(join(dir, "Gate Post Model.html"), modelReport(120));
+    writeFileSync(join(dir, "Wind Check.html"), LIST_REPORT);
+    const env = { ...process.env };
+    delete env.S3D_RENDERER; // auto is the default
+    const r = build(dir, { env });
+    assert.equal(r.code, 0, tail(r.out));
+    has(
+      r.out,
+      /native:\s+\d+ pages laid out in [\d.]+ s, no browser.* -- Gate Post Model\.html/,
+      /chrome:\s+Wind Check\.html -- the native renderer cannot draw it: .*a list item/,
+      /chrome:\s+2 report\(s\), member_0_report\.html … member_1_report\.html -- 2 with maths/,
+      /chrome:\s+1 report\(s\), Wind Check\.html -- 1 refused by the native renderer/,
+      /parts:\s+3, joined in report order into one PDF/,
+      /per-report: 4\/4/,
+      /PASS/,
+    );
+    const styled = /styling:\s+(\d+) of (\d+) word/.exec(r.out);
+    assert.ok(styled && styled[1] === styled[2], "a word not styled as its source");
+    hasNot(r.out, /Warning:/);
+
+    // The joined PDF: the catalog's language carried (Chrome's part says it), the reports in order.
+    const { PDFDocument, PDFName } = await import("pdf-lib");
+    const doc = await PDFDocument.load(readFileSync(r.pdf));
+    assert.ok(doc.catalog.get(PDFName.of("Lang")), "the language was not carried");
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const read = await pdfjs.getDocument({
+      data: new Uint8Array(readFileSync(r.pdf)),
+      verbosity: 0,
+    }).promise;
+    const pages: string[] = [];
+    for (let p = 1; p <= read.numPages; p++) {
+      const tc = await (await read.getPage(p)).getTextContent();
+      pages.push((tc.items as { str?: string }[]).map((i) => i.str ?? "").join(" "));
+    }
+    const members = pages.flatMap((t, p) => (/MEMBER\s*#/.test(t) ? [p] : []));
+    const model = pages.findIndex((t) => t.includes("Gate Post Model Check"));
+    const wind = pages.findIndex((t) => t.includes("Wind Check"));
+    assert.ok(members.length >= 2 && model > 0 && wind > 0, "a report is missing");
+    assert.ok(
+      (members.at(-1) as number) < model && model < wind && wind === pages.length - 1,
+      `the reports are not in order: members ${members}, model ${model}, wind ${wind}`,
+    );
+  },
+);
+
+test("native: reports joined, the same bytes every build (task 19)", { timeout: TIMEOUT }, () => {
+  const dir = join(work, "native-joined");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "A Model.html"), modelReport(60));
+  // Its own opening words: each report is found by them (findReportStarts).
+  writeFileSync(
+    join(dir, "B Model.html"),
+    modelReport(90).replace("Gate Post Model Check", "Fence Post Model Check"),
+  );
+  const env = { ...process.env, S3D_RENDERER: "native" };
+  const r = build(dir, { env });
+  assert.equal(r.code, 0, tail(r.out));
+  has(r.out, /parts:\s+2, joined/, /per-report: 2\/2/, /PASS/);
+  hasNot(r.out, /chrome:/);
+  const bytes = readFileSync(r.pdf);
+  const again = build(dir, { env });
+  assert.equal(again.code, 0, tail(again.out));
+  assert.ok(Buffer.from(readFileSync(again.pdf)).equals(Buffer.from(bytes)), "two builds differ");
 });
 
 test(

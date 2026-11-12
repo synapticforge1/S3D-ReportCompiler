@@ -192,8 +192,9 @@ you keep a clone: it builds the npm package from your working tree and installs 
 
 ### Requirements
 
-- **Chrome or Edge** must be installed — it is the rendering engine, not an optional accelerator.
-  Set `CHROME_PATH` if it is not in a standard location. It runs with its **sandbox on**, except
+- **Chrome or Edge** must be installed to render any report holding maths or a drawing — every
+  SkyCiv member report (see [Two renderers](#two-renderers)); a set the package's own renderer
+  draws whole needs no browser. Set `CHROME_PATH` if it is not in a standard location. It runs with its **sandbox on**, except
   as root (a container), where it cannot start with one. On a host where Chrome finds no usable
   sandbox for an ordinary user, the build says so; set `S3D_CHROME_NO_SANDBOX=1` for that build
   (the build then prints `sandbox: OFF`). The reports' own code stays blocked either way.
@@ -238,7 +239,7 @@ Put your reports in a folder and run the command from its parent:
 your-project/
   HTMLFilesToBeCompiled/     ← the reports, and nothing else
   CompiledPDF/               ← created for you, holds both outputs
-    combined_report.html     ← the baked document Chrome was given
+    combined_report.html     ← the baked document the PDF was made from
     combined_report.pdf      ← the result
 ```
 
@@ -280,7 +281,7 @@ standing in no matter where it was installed:
 | --- | --- |
 | `HTMLFilesToBeCompiled/` | the reports to compile — reports and nothing else |
 | `CompiledPDF/` | created if missing; holds **both** outputs |
-| `CompiledPDF/combined_report.html` | the baked, self-contained document handed to Chrome |
+| `CompiledPDF/combined_report.html` | the baked, self-contained document the reports are rendered from |
 | `CompiledPDF/combined_report.pdf` | the rendered, repacked result |
 
 The baked HTML is kept because it is the exact input that produced the PDF — it is what makes a
@@ -311,6 +312,32 @@ open in a viewer — close it), and when an output would overwrite one of the re
 > ⚠️ **Every `.html` file in the input folder is treated as a report.** Keep tooling, examples and
 > build output somewhere else. Input and output default to separate folders precisely so the scan
 > cannot ingest a build artifact of its own.
+
+### Two renderers
+
+Each report is drawn by one of two renderers, and the parts are joined, in report order, into one
+PDF that is verified as one — each report's checks on its own pages:
+
+- **Chrome** draws every report holding maths or a drawing (SkyCiv's member reports), all of them
+  in one document, exactly as before.
+- **The package's own renderer** draws any other report — SkyCiv's model reports, tables, text and
+  images, which Chrome cannot print once they run to thousands of pages (a 7,161-page report: 38 s
+  natively; Chrome ran 33 minutes and wrote nothing). No browser; the text is set in the
+  Liberation fonts shipped with the package (metric-compatible with Arial, Courier New and Times New
+  Roman), embedded, subset. It draws a subset of HTML and CSS and never approximates: a report
+  holding anything outside it goes to Chrome, and the build says what.
+
+The build names the renderer of each report, and why:
+
+```
+  native:   7161 pages laid out in 37.3 s, no browser (shrunk to fit: 84.7%) -- Gate Post Check.html
+  chrome:   13 report(s), member_0_report.html … member_12_report.html -- 13 with maths
+  parts:    2, joined in report order into one PDF
+```
+
+`S3D_RENDERER` chooses: `auto` (the default; the rule above), `chrome` (every report through
+Chrome) or `native` (every report natively — the build stops, naming each report and what it cannot
+draw; no browser needed). Any other value stops the build.
 
 ### Straight from SkyCiv's zip (1.2.0)
 
@@ -486,6 +513,7 @@ obscurely.
 | `bakeBody(src, prefix)` | One report's `<body>` → maths pre-rendered to CHTML, scripts stripped, spinner removed, ids namespaced |
 | `bakeStyle(src, scope, prefix)` | One report's stylesheet → every selector scoped to that report's wrapper, every id namespaced |
 | `assembleDocument(bodies, styles, mathCss)` | Many baked reports → one hermetic, printable HTML document |
+| `assembleReports(bodies, styles, mathCss, indices)` | `assembleDocument` for part of a set: each body wrapped under its own index in the whole set (`indices[k]`), so the stylesheet baked for it (`.rs{i}`) still matches. With `indices` 0, 1, 2 … it is `assembleDocument`, byte for byte |
 | `mathStyleSheet()` | The MathJax CHTML stylesheet the baked maths needs |
 | `scopeCss(css, scope, prefix)` | The scoping primitive behind `bakeStyle` — prefix every selector, namespace every id |
 | `portableSvg(html)` | Hoist an inline SVG's internal `<style>` onto presentation attributes, so it survives being merged into a shared document. A sheet it cannot hoist exactly is left as written; `bakeBody` / `bakeStyle` move such a sheet to the report's scoped stylesheet, because in HTML it applies to the whole page |
@@ -545,6 +573,7 @@ Node and browsers.
 | --- | --- |
 | `RUNTIME` / `isBrowser` | `"deno" \| "bun" \| "node" \| "browser"`. Bun is detected before Node, because Bun also sets `process.versions.node` |
 | `findChrome()` | Locate Chrome or Edge, honouring `CHROME_PATH` |
+| `readRenderFonts()` | The Liberation fonts the package ships, for the native renderer, each checked against its recorded SHA-256 → `RenderFonts` |
 | `run(cmd, argv)` | Spawn a process to completion, capturing stderr |
 | `runWithTimeout(cmd, argv, timeoutMs, signal?)` | `run`, bounded: past `timeoutMs` (1 to `MAX_TIMEOUT_MS`) or on `signal`, the process tree is killed → `TimedRunResult` with `timedOut` |
 | `cwd()`, `args()`, `env(name)`, `exit(code)` | Process access |
@@ -642,9 +671,11 @@ and each lands here with its migration.
 - **Fonts cache to `.mathjax-fonts/`** in the working directory on first run, so later builds work
   offline — one folder per MathJax version, so an upgrade starts fresh. A cache from before 1.2.0
   is adopted once, without the network.
-- **The PDF is not byte-reproducible.** Chrome stamps its own render time into `/CreationDate` and
-  `/ModDate`, so two builds of identical input differ in hash — on the same runtime. The *baked
-  HTML* is byte-identical across Deno, Node and Bun; that is the artifact worth comparing.
+- **The PDF is not byte-reproducible when Chrome draws any of it.** Chrome stamps its own render
+  time into `/CreationDate` and `/ModDate`, so two builds of identical input differ in hash — on the
+  same runtime. A set drawn wholly by the native renderer writes no date: the same reports make the
+  same PDF. The *baked HTML* is byte-identical across Deno, Node and Bun; that is the artifact worth
+  comparing.
 - **`Cannot polyfill Path2D` / `DOMMatrix`** from pdfjs should no longer appear (since pdfjs-dist 6,
   which takes both from `@napi-rs/canvas`). If it does, the optional `@napi-rs/canvas` binary for
   your platform was not installed — check that your install does not skip optional dependencies.
@@ -655,6 +686,8 @@ and each lands here with its migration.
 MIT © 2026 Jon Marcum. See [LICENSE](LICENSE).
 
 Every dependency is permissive — MIT, Apache-2.0, 0BSD, Zlib — with no copyleft and no NOTICE files
-to propagate. The published package bundles no third-party code. Full verified tree and the two
-places where third-party code *does* travel into an artifact:
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+to propagate. The published package redistributes two things of others': the **Liberation fonts
+2.1.5**, unmodified, under the SIL Open Font License 1.1, with their licence beside them
+(`fonts/liberation/`); and `src/report_webp.ts`, a port of parts of libwebp (BSD-3-Clause), its
+notice kept. Full verified tree, the fonts' conditions and every place third-party code travels
+into an artifact: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

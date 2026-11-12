@@ -1,9 +1,10 @@
 /**
- * A native renderer: the baked document to a PDF, with no browser (roadmap task 19, a scoped
- * trial; owner, 2026-11-11: "lets test a scoped trial and see if we can move this forward
- * faster").
+ * A native renderer: the baked document to a PDF, with no browser (roadmap task 19: a scoped trial
+ * from 2026-11-11, owner: "lets test a scoped trial and see if we can move this forward faster";
+ * the CLI's renderer for every report it can draw since 2026-11-12, target 1, design-decisions §10).
  *
- * It takes the SAME document Chrome is given ({@link assembleDocument}'s output) and lays it out
+ * It takes the same kind of document Chrome is given ({@link assembleDocument}'s output, or one
+ * report's alone from `assembleReports`) and lays it out
  * itself: its own HTML parser and its own cascade -- NOT the verifier's (`report_style.ts`,
  * `report_svg.ts`; design-decisions §9: a reader shared by both sides would make the verification's
  * style check a tautology) -- block, inline and table layout on Letter pages with 0.5 in margins,
@@ -11,8 +12,10 @@
  *
  * The subset is SkyCiv's model-report template first (the 36ft report: text, tables, images).
  * Anything outside it is REFUSED by name, never approximated: a refusal is returned, and the CLI
- * stops. What the subset draws differently from Chrome on purpose, and why, is said where it is
- * done (fonts: the PDF standard 14, Helvetica for Arial -- the same widths).
+ * sends that report to Chrome (or, under `S3D_RENDERER=native`, stops). What the subset draws
+ * differently from Chrome on purpose, and why, is said where it is done (fonts: the Liberation
+ * faces the package ships, embedded and subset -- metric-compatible with Arial, Courier New and
+ * Times New Roman).
  *
  * Pure: no I/O.
  *

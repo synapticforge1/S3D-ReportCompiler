@@ -95,11 +95,21 @@
 // ---------------------------------------------------------------------------
 
 import { inflateSync } from "node:zlib";
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, PDFRef, PDFStream } from "pdf-lib";
+import {
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFName,
+  PDFObjectCopier,
+  PDFRawStream,
+  PDFRef,
+  PDFStream,
+} from "pdf-lib";
 import { optimizeJpeg } from "./src/report_jpeg.ts";
 
 import {
   assembleDocument,
+  assembleReports,
   audit,
   bakeBody,
   bakeStyle,
@@ -224,7 +234,7 @@ THE SIMPLE WAY
   CompiledPDF folder beside them:
 
       CompiledPDF/combined_report.pdf     <- the document
-      CompiledPDF/combined_report.html    <- exactly what was sent to Chrome
+      CompiledPDF/combined_report.html    <- the baked reports, as rendered
 
   It also works one level up, from a folder containing HTMLFilesToBeCompiled/.
 
@@ -264,8 +274,9 @@ OPTIONS
   -h, -?, --help  print this and exit
 
 REQUIREMENTS
-  Google Chrome or Microsoft Edge must be installed -- it does the rendering.
-  If it is somewhere unusual, point at it:
+  Google Chrome or Microsoft Edge must be installed -- it renders every report
+  holding maths or a drawing (see the renderers below). If it is somewhere
+  unusual, point at it:
 
       Windows   set CHROME_PATH=C:\\Path\\To\\chrome.exe
       macOS     export CHROME_PATH=/Applications/…/Google Chrome
@@ -284,11 +295,20 @@ REQUIREMENTS
   Chrome is stopped if it has not finished in 10 minutes. For a very large set
   allow it longer, in milliseconds: S3D_CHROME_TIMEOUT_MS=1800000
 
-  TRIAL: S3D_RENDERER=native lays the reports out with this package's own
-  renderer instead of Chrome (no browser; fonts embedded from the package).
-  It draws a subset of HTML and CSS and stops, naming what it cannot draw.
-  The check after it is the same. S3D_RENDERER takes chrome (the default) or
-  native; anything else stops the build.
+  Two renderers draw the reports: Chrome, and this package's own (no browser;
+  fonts embedded from the package), which draws a subset of HTML and CSS --
+  SkyCiv's model reports, which Chrome cannot print when they are large. By
+  default (S3D_RENDERER=auto) a report holding maths or a drawing goes to
+  Chrome, any other is drawn natively, and one the native renderer cannot draw
+  goes to Chrome; the build names the renderer of each report, and why. The
+  parts are joined into one PDF and checked as one.
+
+      S3D_RENDERER=chrome   every report through Chrome
+      S3D_RENDERER=native   every report natively; stops, naming what it
+                            cannot draw (no browser needed)
+
+  Chrome is needed only when a report goes to it. S3D_RENDERER takes auto,
+  chrome or native; anything else stops the build.
 
   The first run in a folder downloads maths fonts once and caches them in
   .mathjax-fonts in the folder you run it FROM, so later runs from there work
@@ -350,14 +370,18 @@ if (!["", "0", "1", "false", "true", "no", "yes"].includes(sandboxSetting)) {
   );
 }
 const sandboxOptOut = ["1", "true", "yes"].includes(sandboxSetting);
-// 🧪 Roadmap task 19, a scoped trial (owner, 2026-11-11): S3D_RENDERER=native lays the baked
-// document out with this package's own renderer instead of Chrome. Everything after the render --
-// packing, the whole verification -- is unchanged.
+// Roadmap task 19, target 1 (owner, 2026-11-12): which renderer draws each report. `auto` (the
+// default) sends a report holding maths or a drawing to Chrome, draws any other with this
+// package's own renderer, and sends one it refuses to Chrome, named; `chrome` is the behaviour
+// before it, every report through Chrome; `native` draws every report natively or stops. Everything
+// after the render -- packing, the whole verification -- is the same for both.
 const rendererSetting = (rt.env("S3D_RENDERER") ?? "").trim().toLowerCase();
-if (!["", "chrome", "native"].includes(rendererSetting)) {
-  settingError(`S3D_RENDERER=${JSON.stringify(rendererSetting)} is not "chrome" or "native".`);
+if (!["", "auto", "chrome", "native"].includes(rendererSetting)) {
+  settingError(
+    `S3D_RENDERER=${JSON.stringify(rendererSetting)} is not "auto", "chrome" or "native".`,
+  );
 }
-const nativeRenderer = rendererSetting === "native";
+const rendererMode = (rendererSetting || "auto") as "auto" | "chrome" | "native";
 const timeoutSetting = rt.env("S3D_CHROME_TIMEOUT_MS");
 const chromeTimeoutMs =
   timeoutSetting === undefined || timeoutSetting.trim() === ""
@@ -1346,6 +1370,33 @@ function recodeJpegs(pdf: PDFDocument): { count: number; before: number; after: 
  */
 function collectGarbage(): void {
   (globalThis as { Bun?: { gc(force: boolean): void } }).Bun?.gc(true);
+}
+
+/**
+ * The parts' PDFs as one, their pages in order (roadmap task 19, target 1: Chrome's parts and the
+ * native renderer's, each report's checks then reading its own pages). Each part's shared
+ * resources are copied once (one copier per part); what the catalog says of the whole document --
+ * its language, the viewer preferences -- is taken from the first part that says it. No part's
+ * structure tree is carried (the packing drops each page's `StructParents` index into one, as it
+ * does for Chrome's whole document). No date is written: the same parts join to the same bytes.
+ */
+async function joinParts(parts: Uint8Array[]): Promise<Uint8Array> {
+  const out = await PDFDocument.create({ updateMetadata: false });
+  out.setProducer("s3d-reportcompiler");
+  out.setCreator("s3d-reportcompiler");
+  for (const bytes of parts) {
+    const part = await PDFDocument.load(bytes, { updateMetadata: false });
+    for (const key of ["Lang", "ViewerPreferences"].map((k) => PDFName.of(k))) {
+      const value = part.catalog.get(key);
+      if (value !== undefined && !out.catalog.has(key)) {
+        out.catalog.set(key, PDFObjectCopier.for(part.context, out.context).copy(value));
+      }
+    }
+    for (const page of await out.copyPages(part, part.getPageIndices())) {
+      out.addPage(page);
+    }
+  }
+  return await out.save({ useObjectStreams: false });
 }
 
 function dropStructureTree(pdf: PDFDocument): number {
@@ -2737,16 +2788,25 @@ const outputDir = outputPdf.replace(/[\\/][^\\/]*$/, "");
 
 const skipped = allHtml.length - entries.length;
 
-const chrome = await rt.findChrome();
-if (!chrome) {
-  console.error("Could not find Google Chrome or Microsoft Edge.\n");
-  console.error("One of them does the rendering, so it has to be installed. If you");
-  console.error("already have one somewhere non-standard, point at the executable:\n");
+/** How to point the build at a browser, said whenever one is needed and not found. */
+function noChromeHelp(): void {
+  console.error("One of them renders every report holding maths or a drawing, so it has to be");
+  console.error(
+    "installed. If you already have one somewhere non-standard, point at the executable:\n",
+  );
   console.error(`  Windows   set CHROME_PATH=C:\\Path\\To\\chrome.exe`);
   console.error(
     `  macOS     export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`,
   );
   console.error(`  Linux     export CHROME_PATH=/usr/bin/chromium`);
+}
+
+// Found now, needed only if a report goes to Chrome: under S3D_RENDERER=chrome every report does,
+// so its absence stops the build here, before the bake; otherwise once the reports are routed.
+const chrome = await rt.findChrome();
+if (!chrome && rendererMode === "chrome") {
+  console.error("Could not find Google Chrome or Microsoft Edge.\n");
+  noChromeHelp();
   rt.exit(1);
 }
 
@@ -3039,6 +3099,110 @@ if (externalRefs > 0 || scripts > 0) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Which renderer draws each report (roadmap task 19, target 1; owner 2026-11-12). Decided before
+// anything on disk is touched, so a refusal here deletes nothing.
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a report goes straight to Chrome under `auto`: what the native renderer cannot draw yet
+ * (maths, inline drawings), so trying it would only cost time. `<svg` is looked for anywhere in the
+ * body, an attribute's value included: a report sent to Chrome that need not be is drawn as before.
+ */
+function needsChrome(body: string): string | null {
+  if (/<mjx-/i.test(body)) return "with maths";
+  if (/<svg[\s/>]/i.test(body)) return "with a drawing";
+  return null;
+}
+
+/** Each report's renderer, why, and -- drawn natively -- its PDF. */
+const routes: { renderer: "chrome" | "native"; why: string; pdf: Uint8Array | null }[] = [];
+{
+  const nativeRefusals: string[] = [];
+  let fonts: Awaited<ReturnType<typeof rt.readRenderFonts>> | null = null;
+  for (let i = 0; i < bodies.length; i++) {
+    const why =
+      rendererMode === "chrome"
+        ? "S3D_RENDERER=chrome"
+        : rendererMode === "auto"
+          ? needsChrome(bodies[i])
+          : null;
+    if (why !== null) {
+      routes.push({ renderer: "chrome", why, pdf: null });
+      continue;
+    }
+    fonts ??= await rt.readRenderFonts();
+    const t0 = Date.now();
+    // On its own, under its own index: its stylesheet was scoped to `.rs{i}` when it was baked.
+    const out = await renderDocument(
+      assembleReports([bodies[i]], [styles[i]], mathCss, [i]),
+      fonts,
+    );
+    collectGarbage(); // the layout's working memory, before the next report
+    if (out.pdf !== null) {
+      routes.push({ renderer: "native", why: "", pdf: out.pdf });
+      console.log(
+        `  native:   ${out.pages} pages laid out in ${((Date.now() - t0) / 1000).toFixed(1)} s, no browser` +
+          (out.scale < 1 ? ` (shrunk to fit: ${(out.scale * 100).toFixed(1)}%)` : "") +
+          ` -- ${entries[i]}`,
+      );
+      continue;
+    }
+    const named = `${out.refused.slice(0, 3).join("; ")}${out.refused.length > 3 ? `; and ${out.refused.length - 3} more` : ""}`;
+    if (rendererMode === "native") {
+      nativeRefusals.push(entries[i], ...out.refused.map((r) => `  - ${r}`));
+      continue;
+    }
+    routes.push({ renderer: "chrome", why: "refused by the native renderer", pdf: null });
+    console.log(`  chrome:   ${entries[i]} -- the native renderer cannot draw it: ${named}`);
+  }
+  if (nativeRefusals.length > 0) {
+    console.error("");
+    console.error("ERROR: the native renderer refused (S3D_RENDERER=native):");
+    for (const line of nativeRefusals) console.error(`  ${line}`);
+    console.error("");
+    console.error("It draws a subset of HTML and CSS and stops rather than approximate. Leave");
+    console.error("S3D_RENDERER unset to send such a report to Chrome.");
+    await noteEarlierPdf();
+    rt.exit(1);
+  }
+}
+
+/** Consecutive reports with the same renderer: a Chrome part is ONE document, as before. */
+const parts: { renderer: "chrome" | "native"; reports: number[]; pdf: Uint8Array | null }[] = [];
+for (const [i, route] of routes.entries()) {
+  const last = parts.at(-1);
+  if (route.renderer === "chrome" && last?.renderer === "chrome") last.reports.push(i);
+  else parts.push({ renderer: route.renderer, reports: [i], pdf: route.pdf });
+}
+for (const part of parts) {
+  if (part.renderer !== "chrome") continue;
+  const whys = new Map<string, number>();
+  for (const i of part.reports) whys.set(routes[i].why, (whys.get(routes[i].why) ?? 0) + 1);
+  const first = entries[part.reports[0]];
+  const last = entries[part.reports.at(-1) as number];
+  console.log(
+    `  chrome:   ${part.reports.length} report(s), ${first}${part.reports.length > 1 ? ` … ${last}` : ""}` +
+      ` -- ${[...whys].map(([why, n]) => `${n} ${why}`).join(", ")}`,
+  );
+}
+if (parts.length > 1) {
+  console.log(`  parts:    ${parts.length}, joined in report order into one PDF`);
+}
+if (!chrome && parts.some((p) => p.renderer === "chrome")) {
+  const need = parts.filter((p) => p.renderer === "chrome").flatMap((p) => p.reports);
+  console.error("");
+  console.error(
+    `ERROR: ${need.length} report(s) need Chrome, and neither Chrome nor Edge was found:`,
+  );
+  for (const i of need.slice(0, 10)) console.error(`  ${entries[i]} (${routes[i].why})`);
+  if (need.length > 10) console.error(`  ...and ${need.length - 10} more`);
+  console.error("");
+  noChromeHelp();
+  await noteEarlierPdf();
+  rt.exit(1);
+}
+
 /** Root (uid 0) on a POSIX host: the one case Chrome needs `--no-sandbox` to start. */
 const runningAsRoot =
   typeof process !== "undefined" && typeof process.getuid === "function" && process.getuid() === 0;
@@ -3282,8 +3446,9 @@ async function addPdfToZip(zip: string, pdfPath: string, htmlPath: string): Prom
 
 try {
   // Both outputs live in the output directory: the baked HTML is the exact
-  // input Chrome was given, so keeping it next to the PDF is what makes a
-  // result reproducible and inspectable after the fact.
+  // input the reports were rendered from (Chrome is given it whole when it
+  // draws every report), so keeping it next to the PDF is what makes a result
+  // reproducible and inspectable after the fact.
   const htmlPath = outputHtml;
 
   // Encode once: String.length counts UTF-16 code units, not bytes, so
@@ -3292,26 +3457,11 @@ try {
   await rt.writeFile(htmlPath, htmlBytes);
   console.log(`  html:     ${(htmlBytes.length / 1e6).toFixed(2)} MB, self-contained`);
 
-  // The old PDF was removed, and proved gone, before the bake was written.
-  let rendered: Uint8Array;
-  if (nativeRenderer) {
-    const t0 = Date.now();
-    const native = await renderDocument(combinedHtml, await rt.readRenderFonts());
-    if (native.pdf === null) {
-      throw new Error(
-        `The native renderer (trial, roadmap task 19) refused this document:\n  - ${native.refused.join("\n  - ")}`,
-      );
-    }
-    rendered = native.pdf;
-    await rt.writeFile(candidatePdf, rendered);
-    console.log(
-      `  native:   ${native.pages} pages laid out in ${((Date.now() - t0) / 1000).toFixed(1)} s, no browser` +
-        (native.scale < 1 ? ` (shrunk to fit: ${(native.scale * 100).toFixed(1)}%)` : ""),
-    );
-  } else {
-    const htmlUrl = await rt.toFileUrl(htmlPath);
+  /** One document printed by Chrome to `pdfOut`, and its bytes; every failure thrown, named. */
+  const printWithChrome = async (html: string, pdfOut: string): Promise<Uint8Array> => {
+    const htmlUrl = await rt.toFileUrl(html);
     rendering = rt.runWithTimeout(
-      chrome,
+      chrome as string,
       [
         "--headless=new",
         "--disable-gpu",
@@ -3334,7 +3484,7 @@ try {
         `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MS}`,
         "--run-all-compositor-stages-before-draw",
         "--no-pdf-header-footer",
-        `--print-to-pdf=${candidatePdf}`,
+        `--print-to-pdf=${pdfOut}`,
         htmlUrl,
       ],
       chromeTimeoutMs,
@@ -3354,8 +3504,9 @@ try {
           `A larger document may need more: set S3D_CHROME_TIMEOUT_MS (milliseconds).`,
       );
     }
+    let printed: Uint8Array;
     try {
-      rendered = await rt.readFile(candidatePdf);
+      printed = await rt.readFile(pdfOut);
     } catch {
       // Said in plain words when the cause is the sandbox: its own message is easy to miss.
       const sandboxHint = /no usable sandbox|sandbox/i.test(result.stderr)
@@ -3381,6 +3532,41 @@ try {
           result.stderr.trim(),
       );
     }
+    return printed;
+  };
+
+  // The old PDF was removed, and proved gone, before the bake was written. Each Chrome part is
+  // printed now (the native ones were drawn when the reports were routed). A Chrome part holding
+  // every report prints the kept document itself, exactly as before routing existed; any other is
+  // its own document in the temporary folder, its reports under their own indices.
+  for (const [k, part] of parts.entries()) {
+    if (part.renderer !== "chrome") continue;
+    if (parts.length === 1) {
+      part.pdf = await printWithChrome(htmlPath, candidatePdf);
+      continue;
+    }
+    const partHtml = rt.joinPath(workDir, `part-${k + 1}.html`);
+    await rt.writeFile(
+      partHtml,
+      new TextEncoder().encode(
+        assembleReports(
+          part.reports.map((i) => bodies[i]),
+          part.reports.map((i) => styles[i]),
+          mathCss,
+          part.reports,
+        ),
+      ),
+    );
+    part.pdf = await printWithChrome(partHtml, rt.joinPath(workDir, `part-${k + 1}.pdf`));
+  }
+  // One part keeps its bytes as rendered (a native-only build stays byte-reproducible); several
+  // are joined in report order.
+  const rendered =
+    parts.length === 1
+      ? (parts[0].pdf as Uint8Array)
+      : await joinParts(parts.map((p) => p.pdf as Uint8Array));
+  if (parts.length > 1 || parts[0].renderer === "native") {
+    await rt.writeFile(candidatePdf, rendered);
   }
 
   console.log(`  rendered: ${(rendered.length / 1e6).toFixed(2)} MB`);
@@ -3761,7 +3947,7 @@ try {
       for (const f of check.failures) console.error(`  - ${f}`);
       console.error("");
       console.error("The PDF does not faithfully reproduce its sources. It was NOT given its");
-      console.error("final name; it is kept for inspection, with the baked HTML Chrome was given:");
+      console.error("final name; it is kept for inspection, with the baked HTML it was made from:");
       console.error(`  ${candidatePdf}`);
       console.error(`  ${htmlPath}`);
       if (zipPath !== null) console.error(`The zip is unchanged.`);

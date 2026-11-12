@@ -219,6 +219,10 @@ function surface(root: string): string[] {
   // broke every script that set it, and passed this gate as a patch (2026-11-07 review).
   for (const m of help.out.matchAll(/\b(CHROME_PATH|S3D_[A-Z0-9_]+)\b/g))
     lines.push(`cli-env\t${m[1]}`);
+  // And the named values it documents (`S3D_RENDERER=native`): a script that sets one breaks if
+  // it goes (task 19, target 1). Words only -- `S3D_CHROME_TIMEOUT_MS=1800000` is an example.
+  for (const m of help.out.matchAll(/\b(S3D_[A-Z0-9_]+)=([a-z]+)\b/g))
+    lines.push(`cli-env\t${m[1]}=${m[2]}`);
   return [...new Set(lines)].sort();
 }
 
