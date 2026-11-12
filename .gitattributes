@@ -11,6 +11,9 @@
 # Exceptions follow the wildcard, because the last matching line wins.
 * text=auto eol=lf
 
+# Fonts are binary, never converted: the PDF embeds them byte for byte (fonts/liberation/README.md).
+*.ttf binary
+
 # JPEG fixtures (tests/jpeg/) are compared byte for byte.
 *.jpg binary
 

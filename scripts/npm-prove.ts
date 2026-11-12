@@ -28,6 +28,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -133,6 +134,8 @@ try {
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",
     "README.md",
+    // The native renderer's fonts and their licence (SIL OFL 1.1: it travels with them).
+    ...readdirSync(join(root, "fonts", "liberation")).map((f) => `fonts/liberation/${f}`),
   ].map((p) => String(p).replace(/^\.\//, ""));
   const absent = named.filter((p) => !files.includes(p));
   ok(absent.length === 0, "every path the manifest names is in the tarball", absent.join(", "));

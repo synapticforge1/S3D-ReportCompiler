@@ -16,7 +16,7 @@ out of `INDEX.md` and `CLAUDE.md` on 2026-10-26).
 | Runtimes | Deno, Node, Bun — **byte-identical baked HTML** (sha256 `a19e5ad1…6277` on all three); browser bakes and prints (2026-08-08). 🔁 **Reference hashes since 2026-11-06:** the document carries one CSP `<meta>` line (#55, widened by #60, its font source narrowed to MathJax's folder by #65) — client set `ae70d5e0…`, samples `37792fe3…` (earlier the same day `a3a6a2af…`/`cc563a15…`, `7d5664f6…`/`cbdd3221…`); without that line both hash to the old values (`a19e5ad1…`, `7f283563…`) |
 | Published | **1.5.0 on JSR and npm, both with provenance** (2026-11-10). Every version — what changed, how it was released, what was read back — is in [release.md](release.md) § "Release History" (🔒 the one place for release records, owner 2026-11-10). 🔒 One push of a bump commit releases both |
 | Latest release | **1.5.0** (2026-11-10, owner: "push then release"; minor), tag `v1.5.0` made by CI on `3be72b4`, after two refusals by CI (a docs lint; a cancelled run) — nothing tagged or published until CI was green. Group 9 (#115–#117). The record: [release.md](release.md) |
-| Unreleased on `main` | **Nothing: everything below shipped in 1.5.0 (2026-11-10)**; its record (`aa44b55`) ✅ pushed 2026-11-10 (owner: "push"; with this memory commit). Next: the fresh class-B re-check (task 18). Before it: 🟡 **Group 9b (#117, `readerBody` added; `a36cf12`, surface `885188d`)** ✅ **pushed 2026-11-10** (owner: "push then release"; `80c6117..` this memory commit). Before it, **group 9a (#115) and 9a part 2 (#116, `drawnSvgAncestors` added: the next release is a MINOR)** ✅ **pushed 2026-11-10** (owner: "push"; `2138fa8..80c6117`, with the 1.4.0 record `8940f0f` and the surface re-baseline `0052e68`). Group 9 done; next: the fresh class-B re-check (task 18). Before it, **everything shipped in 1.4.0 (2026-11-10).** The record of what went into 1.4.0: 🟡 **H33, 2026-11-10 (owner: "review workspace for items needing this project's attention and make the requested fixes"):** the release process converged on the workspace's twelve slots in the owner's order — `bump.ts` (level required, clean tree incl. untracked, commits `bump to vX.Y.Z`), `publish.ts` (guards, pushes `main` only, `--dry-run`), `publish.yml` (checks → tag → release → jsr → npm-build → npm on a push to main; tools sha256-pinned; both read-backs fatal), `github-api.ts` (`tag`, 30 s per request), `verify-release.ts` (the tag is the record), [release.md](release.md); rehearsed against a scratch origin. ✅ **Pushed 2026-11-10 with everything since `266a956`** (owner: "push then release, then start group 9 items"; 8f–8k parts 3–5, 7b, the thin-strip test, H34's memory, H33, and this memory commit). Before it: 🟡 **Class B, task 18, resumed 2026-11-09:** groups 1–8c (#89–#98) and the workspace's H30 / H32 (`0156918`, `73d7b47`: GitHub's REST API from Bun, never `gh`; the Release page by the recipe) ✅ **pushed 2026-11-09** (owner: "push"; `7690981..73d7b47`); groups 8d (#99) and 8e (#100) ✅ **pushed 2026-11-09** (owner: "push then proceed"; `..dbd1fa8`); 8f–8h (#101–#103) ✅ **pushed 2026-11-09** (owner: "push then proceed with 8i"; `..bde4a37`); 8i (#104) ✅ **pushed 2026-11-09** (owner: "push then proceed with the next step"; `..ef8cfb5`); 8j (#105), 8k parts 1–2 (#106, #107) and linked images (#108, API surface `863ea15`: four additions, a minor) ✅ **pushed 2026-11-09** (owner: "update the project memory files, commit and push, then work on the remaining open items"; `ef8cfb5..266a956`); the rest pushed 2026-11-10 (above). Not released. Before it: `3555326`, `8b5a113`; ✅ **pushed 2026-11-08** (owner: "commit and push"; `3a6b62f..7690981`, with the memory commits `9285f4f`, `7690981`), CI run 42515756466 green in all 7 jobs, so class B's tests have run on Linux and Node 22.18 / 24 / 26; not released; the agreed plan and the next step are in task 18. Before it: 🔁 **The fifth full-project review, 2026-11-07/08** (owner: "I agree fix all"; paused; then "fix D first, then do E and C"; known-issues #82–#86): A `eb56708` (the core: selector weight restored, and nine more), B `ef8a70d` (the CLI: interrupts held to the end and named, SIGHUP/SIGQUIT, more report names refused, the old font cache kept), D `5d1d7b1` (the release path: an attempted upload followed through, npm's numbers checked before JSR, the Deno pin validated, the shipped npm package proven, a stricter workflow test), E `11719c6` (tests and docs), C `95d25d5` (the redactor and the sanitizer); then design-decisions §6 brought up to date (`b882744`), and the one limit C left documented fixed on request (owner, 2026-11-08: "fix the last item noted also"; `7459673`: the redactor learns spaced folder names from the file and from the disk). **The baked HTML changed for the first time in a review** — by A's weight-only `:is(…, *)` selectors alone (identical once removed), the PDFs carrying the same text at the same positions on every page; new reference hashes samples `487321f2…`, the 48 set `da92578d…`, the zip `f0922226…`; six runtimes bake `487321f24fb9`. The suite 63 → **68 tests**: on Windows 66 pass and the 2 POSIX ones skip (passing in WSL); each new case inverted against the commit before it. `api-surface.txt` unchanged (a PATCH by the gate). ✅ **Pushed 2026-11-08** (owner: "commit and push"; `624c12f..446f41d`, 15 commits, reviews 4 and 5) — CI run 42506913778 green in all 7 jobs (types/format/lint/compat/build, the suite on Node 22.18 / 24 / 26, the runtime matrix, JSR checks, the npm proof), so the review-5 tests have now run on Linux and Node too. `publish.yml`'s review-5 changes run first in the next real release. Not released. Before it: 🔁 **The fourth full-project review, 2026-11-07** (owner: "A-E"; known-issues #77–#81): A+B `36a3e4e`, C `39533d8`, D `5476818`, E `eb42d38`, then tests for what E had left reasoned only `fdb676c` (owner: "yes"; testing.md § the fourth review). Baked HTML byte-identical on all three real sets; the suite 59 → **63 tests, all passing on Bun** (one POSIX-only, skipped on Windows, passing in WSL); each new case inverted against the commit before it; `api-surface.txt` unchanged (a PATCH by the gate). Not pushed, not released. Before it, **nothing: everything below shipped in 1.3.0 (2026-11-07).** The record of what went into it: 🔁 **The third full-project review, 2026-11-07** (owner: "Fix all in the order you showed from A - E"; known-issues #72–#76): five groups, each its own commit, two API re-baselines in their own commits (`decodeReport`; the CLI's `cli-env` lines). Baked HTML byte-identical on all three real sets after every group; the suite 52 → **59 tests, all passing on Bun** (2026-11-07); each new test inverted against the commit before it. Released as the MINOR it gated to, **1.3.0** — `compat` vs v1.2.0: 0 removed, 0 changed, 4 added. ✅ The reworked `publish.yml` (#75) and the pinned actions in `ci.yml` ran green on their first runs (Latest release row). Before it, **nothing: everything below shipped in 1.2.0 (2026-11-06).** The record of what went into it: the fourth code review's seven fixes (2026-11-06, owner: "yes"; ledger #31–#37 in [known-issues.md](known-issues.md)): a stale PDF that cannot be deleted refuses the build; a third positional argument is an error; SVG sheets hoisted only where an attribute can say the same, the rest confined to their own `<svg>`; body sheets scoped; `html body` / `body.x` / `:not(a, b)` selectors mapped right; `id=` inside an attribute's value is text (bake AND reference guard); the verification decodes hex and named entities. Baked HTML byte-identical on the samples and the client set; 31/31 tests on Bun and Node 24.21 / 22.18; `compat` → patch. **Then the review of `scripts/` and the workflows** (same day, owner: "fix all"; ledger #38–#43): releases only from `main` (script and workflow), the sanitizer refuses filled fields it does not scrub and short values, `verify-release --npm` (the release passes it), a provenance grace under `--wait`, no CI cancellation on `main`, unknown `verify-release` flags refused; 34/34 tests. **Then a cold review of those fixes** (same day, owner: "yes fix all"; #44–#47): kept SVG sheets confined in `:where()` (no added specificity), the sanitizer's guard refuses a template it cannot read, `html`/`body` attribute qualifiers settled, the redactor redacts email addresses; baked HTML still byte-identical, 34/34. **Then a fourth pass** (#48–#51): the npm-fence test made able to fail, HTML's caseless attributes honoured when settling qualifiers, an empty path argument refused, a control generator guarded; 35/35. **Then a fifth pass** (#52–#54): `resetBakeState()` and `findBrokenReferences()` exported (the browser example uses both), `cmem/local/` ignored; 37/37. **Then a sixth** (#55): the render runs no report code — handlers and `javascript:` URLs stripped, a CSP in the document, the Chrome sandbox kept except as root; baked hashes change by that one line; 38/38. **Then a seventh** (#56–#58): the font cache per MathJax version (the old flat one adopted), only real fonts kept, `S3D_CHROME_NO_SANDBOX=1` for hosts with no usable sandbox; 39/39. ✅ **The sandbox on CI's Linux runners, checked 2026-11-06** (#58): run 42306618122 on the throwaway branch `ci/sandbox-check` (`1b1e498`), all four jobs green, every Chrome render with the sandbox on. `main` was pushed later the same day (owner: "commit and push"; `57b2e23..39f2f16`, 27 commits). **Then an eighth pass** (#59, #60): fonts checked by their header's recorded length too; the document's CSP forbids every outside load (0 requests during the render, measured; 5 before), `<meta>`/`<base>` leave report bodies; 40/40. **Then the full-project review** (four reviewers; groups A–E, #61–#65; commits `4d44dc4`…`bfa5e32`, API re-baselines `c348731`, `319a5bb`): 44/44 on Bun and Node 26.12 / 24.21 / 22.18, the suite now in CI on Node 22.18, 24 and 26 (`0bbdabb`); `api-surface.txt` 81 lines, 12 added vs v1.1.7 → still 1.2.0. **Then zip input** (task 16, owner: "Build it now"; `2734a34`, surface `c6ffaf5`): `s3d-reportcompiler <reports.zip>`, the verified PDF added into the zip; 48/48 on Bun and Node 26.12 / 24.21 / 22.18. **Then the real 75-report export** (on a copy) found #66: the verification expected TeX settings (`\color{blue}`) in the PDF; fixed as the class (`a41961f`), 49/49, and the export PASSES. 🔼 **The next release is therefore a MINOR, 1.2.0** (`bun run bump minor`): `compat` → 19 added vs v1.1.7, `api-surface.txt` 88 lines. **Then the second full-project review** (owner: "All, in order A→E"; #67–#71; `dd0e22e` … `9be2626`, surface re-baselines `c9b90a8`, `d77f4ae`): 52/52 on Bun and Node 26.12 / 24.21 / 22.18; all three real sets byte-identical; unpushed. ✅ The old `release/v*` and merged work branches deleted (owner, 2026-11-06; known-issues #70): only `main` remains, tags kept; `compat.ts release 1.2.0` allows the minor. ✅ **Pushed 2026-11-06** (`39f2f16`; CI run 42327019979 green, all 7 jobs, so `ci.yml`'s changes have now run). ⚠️ `publish.yml`'s changes are first exercised by the next real release. Not released — nothing is, unless the owner says so |
+| Unreleased on `main` | ▶️ **2026-11-12: see task 19, "Production plan" -- start there.** Since 1.5.0 (all additions, a MINOR by the gate): #118–#120, lossless JPEG re-coding, the verifier's indexes and memory, report starts without a member heading, member reports first, the verifier's text pieces; the native renderer (opt-in, `S3D_RENDERER=native`) merging in (staged, uncommitted at 2026-11-12's pause). Before that, **nothing: everything below shipped in 1.5.0 (2026-11-10)**; its record (`aa44b55`) ✅ pushed 2026-11-10 (owner: "push"; with this memory commit). Next: the fresh class-B re-check (task 18). Before it: 🟡 **Group 9b (#117, `readerBody` added; `a36cf12`, surface `885188d`)** ✅ **pushed 2026-11-10** (owner: "push then release"; `80c6117..` this memory commit). Before it, **group 9a (#115) and 9a part 2 (#116, `drawnSvgAncestors` added: the next release is a MINOR)** ✅ **pushed 2026-11-10** (owner: "push"; `2138fa8..80c6117`, with the 1.4.0 record `8940f0f` and the surface re-baseline `0052e68`). Group 9 done; next: the fresh class-B re-check (task 18). Before it, **everything shipped in 1.4.0 (2026-11-10).** The record of what went into 1.4.0: 🟡 **H33, 2026-11-10 (owner: "review workspace for items needing this project's attention and make the requested fixes"):** the release process converged on the workspace's twelve slots in the owner's order — `bump.ts` (level required, clean tree incl. untracked, commits `bump to vX.Y.Z`), `publish.ts` (guards, pushes `main` only, `--dry-run`), `publish.yml` (checks → tag → release → jsr → npm-build → npm on a push to main; tools sha256-pinned; both read-backs fatal), `github-api.ts` (`tag`, 30 s per request), `verify-release.ts` (the tag is the record), [release.md](release.md); rehearsed against a scratch origin. ✅ **Pushed 2026-11-10 with everything since `266a956`** (owner: "push then release, then start group 9 items"; 8f–8k parts 3–5, 7b, the thin-strip test, H34's memory, H33, and this memory commit). Before it: 🟡 **Class B, task 18, resumed 2026-11-09:** groups 1–8c (#89–#98) and the workspace's H30 / H32 (`0156918`, `73d7b47`: GitHub's REST API from Bun, never `gh`; the Release page by the recipe) ✅ **pushed 2026-11-09** (owner: "push"; `7690981..73d7b47`); groups 8d (#99) and 8e (#100) ✅ **pushed 2026-11-09** (owner: "push then proceed"; `..dbd1fa8`); 8f–8h (#101–#103) ✅ **pushed 2026-11-09** (owner: "push then proceed with 8i"; `..bde4a37`); 8i (#104) ✅ **pushed 2026-11-09** (owner: "push then proceed with the next step"; `..ef8cfb5`); 8j (#105), 8k parts 1–2 (#106, #107) and linked images (#108, API surface `863ea15`: four additions, a minor) ✅ **pushed 2026-11-09** (owner: "update the project memory files, commit and push, then work on the remaining open items"; `ef8cfb5..266a956`); the rest pushed 2026-11-10 (above). Not released. Before it: `3555326`, `8b5a113`; ✅ **pushed 2026-11-08** (owner: "commit and push"; `3a6b62f..7690981`, with the memory commits `9285f4f`, `7690981`), CI run 42515756466 green in all 7 jobs, so class B's tests have run on Linux and Node 22.18 / 24 / 26; not released; the agreed plan and the next step are in task 18. Before it: 🔁 **The fifth full-project review, 2026-11-07/08** (owner: "I agree fix all"; paused; then "fix D first, then do E and C"; known-issues #82–#86): A `eb56708` (the core: selector weight restored, and nine more), B `ef8a70d` (the CLI: interrupts held to the end and named, SIGHUP/SIGQUIT, more report names refused, the old font cache kept), D `5d1d7b1` (the release path: an attempted upload followed through, npm's numbers checked before JSR, the Deno pin validated, the shipped npm package proven, a stricter workflow test), E `11719c6` (tests and docs), C `95d25d5` (the redactor and the sanitizer); then design-decisions §6 brought up to date (`b882744`), and the one limit C left documented fixed on request (owner, 2026-11-08: "fix the last item noted also"; `7459673`: the redactor learns spaced folder names from the file and from the disk). **The baked HTML changed for the first time in a review** — by A's weight-only `:is(…, *)` selectors alone (identical once removed), the PDFs carrying the same text at the same positions on every page; new reference hashes samples `487321f2…`, the 48 set `da92578d…`, the zip `f0922226…`; six runtimes bake `487321f24fb9`. The suite 63 → **68 tests**: on Windows 66 pass and the 2 POSIX ones skip (passing in WSL); each new case inverted against the commit before it. `api-surface.txt` unchanged (a PATCH by the gate). ✅ **Pushed 2026-11-08** (owner: "commit and push"; `624c12f..446f41d`, 15 commits, reviews 4 and 5) — CI run 42506913778 green in all 7 jobs (types/format/lint/compat/build, the suite on Node 22.18 / 24 / 26, the runtime matrix, JSR checks, the npm proof), so the review-5 tests have now run on Linux and Node too. `publish.yml`'s review-5 changes run first in the next real release. Not released. Before it: 🔁 **The fourth full-project review, 2026-11-07** (owner: "A-E"; known-issues #77–#81): A+B `36a3e4e`, C `39533d8`, D `5476818`, E `eb42d38`, then tests for what E had left reasoned only `fdb676c` (owner: "yes"; testing.md § the fourth review). Baked HTML byte-identical on all three real sets; the suite 59 → **63 tests, all passing on Bun** (one POSIX-only, skipped on Windows, passing in WSL); each new case inverted against the commit before it; `api-surface.txt` unchanged (a PATCH by the gate). Not pushed, not released. Before it, **nothing: everything below shipped in 1.3.0 (2026-11-07).** The record of what went into it: 🔁 **The third full-project review, 2026-11-07** (owner: "Fix all in the order you showed from A - E"; known-issues #72–#76): five groups, each its own commit, two API re-baselines in their own commits (`decodeReport`; the CLI's `cli-env` lines). Baked HTML byte-identical on all three real sets after every group; the suite 52 → **59 tests, all passing on Bun** (2026-11-07); each new test inverted against the commit before it. Released as the MINOR it gated to, **1.3.0** — `compat` vs v1.2.0: 0 removed, 0 changed, 4 added. ✅ The reworked `publish.yml` (#75) and the pinned actions in `ci.yml` ran green on their first runs (Latest release row). Before it, **nothing: everything below shipped in 1.2.0 (2026-11-06).** The record of what went into it: the fourth code review's seven fixes (2026-11-06, owner: "yes"; ledger #31–#37 in [known-issues.md](known-issues.md)): a stale PDF that cannot be deleted refuses the build; a third positional argument is an error; SVG sheets hoisted only where an attribute can say the same, the rest confined to their own `<svg>`; body sheets scoped; `html body` / `body.x` / `:not(a, b)` selectors mapped right; `id=` inside an attribute's value is text (bake AND reference guard); the verification decodes hex and named entities. Baked HTML byte-identical on the samples and the client set; 31/31 tests on Bun and Node 24.21 / 22.18; `compat` → patch. **Then the review of `scripts/` and the workflows** (same day, owner: "fix all"; ledger #38–#43): releases only from `main` (script and workflow), the sanitizer refuses filled fields it does not scrub and short values, `verify-release --npm` (the release passes it), a provenance grace under `--wait`, no CI cancellation on `main`, unknown `verify-release` flags refused; 34/34 tests. **Then a cold review of those fixes** (same day, owner: "yes fix all"; #44–#47): kept SVG sheets confined in `:where()` (no added specificity), the sanitizer's guard refuses a template it cannot read, `html`/`body` attribute qualifiers settled, the redactor redacts email addresses; baked HTML still byte-identical, 34/34. **Then a fourth pass** (#48–#51): the npm-fence test made able to fail, HTML's caseless attributes honoured when settling qualifiers, an empty path argument refused, a control generator guarded; 35/35. **Then a fifth pass** (#52–#54): `resetBakeState()` and `findBrokenReferences()` exported (the browser example uses both), `cmem/local/` ignored; 37/37. **Then a sixth** (#55): the render runs no report code — handlers and `javascript:` URLs stripped, a CSP in the document, the Chrome sandbox kept except as root; baked hashes change by that one line; 38/38. **Then a seventh** (#56–#58): the font cache per MathJax version (the old flat one adopted), only real fonts kept, `S3D_CHROME_NO_SANDBOX=1` for hosts with no usable sandbox; 39/39. ✅ **The sandbox on CI's Linux runners, checked 2026-11-06** (#58): run 42306618122 on the throwaway branch `ci/sandbox-check` (`1b1e498`), all four jobs green, every Chrome render with the sandbox on. `main` was pushed later the same day (owner: "commit and push"; `57b2e23..39f2f16`, 27 commits). **Then an eighth pass** (#59, #60): fonts checked by their header's recorded length too; the document's CSP forbids every outside load (0 requests during the render, measured; 5 before), `<meta>`/`<base>` leave report bodies; 40/40. **Then the full-project review** (four reviewers; groups A–E, #61–#65; commits `4d44dc4`…`bfa5e32`, API re-baselines `c348731`, `319a5bb`): 44/44 on Bun and Node 26.12 / 24.21 / 22.18, the suite now in CI on Node 22.18, 24 and 26 (`0bbdabb`); `api-surface.txt` 81 lines, 12 added vs v1.1.7 → still 1.2.0. **Then zip input** (task 16, owner: "Build it now"; `2734a34`, surface `c6ffaf5`): `s3d-reportcompiler <reports.zip>`, the verified PDF added into the zip; 48/48 on Bun and Node 26.12 / 24.21 / 22.18. **Then the real 75-report export** (on a copy) found #66: the verification expected TeX settings (`\color{blue}`) in the PDF; fixed as the class (`a41961f`), 49/49, and the export PASSES. 🔼 **The next release is therefore a MINOR, 1.2.0** (`bun run bump minor`): `compat` → 19 added vs v1.1.7, `api-surface.txt` 88 lines. **Then the second full-project review** (owner: "All, in order A→E"; #67–#71; `dd0e22e` … `9be2626`, surface re-baselines `c9b90a8`, `d77f4ae`): 52/52 on Bun and Node 26.12 / 24.21 / 22.18; all three real sets byte-identical; unpushed. ✅ The old `release/v*` and merged work branches deleted (owner, 2026-11-06; known-issues #70): only `main` remains, tags kept; `compat.ts release 1.2.0` allows the minor. ✅ **Pushed 2026-11-06** (`39f2f16`; CI run 42327019979 green, all 7 jobs, so `ci.yml`'s changes have now run). ⚠️ `publish.yml`'s changes are first exercised by the next real release. Not released — nothing is, unless the owner says so |
 | Attestation | per version in [release.md](release.md): 1.0.2 and 1.0.3 ❌ (workstation `deno publish`, #26), every Actions release ✅ (1.5.0: Rekor `3797459486`); npm provenance from 1.1.4. Since 2026-11-10 `publish.yml` reads both back itself, fatally |
 | Tags | `v1.0.0` `8192c39d1`, `v1.0.1` `befc61fe8`, `v1.0.4` `9cdf0b06f` on `origin` (their `release/v*` branches, and 1.1.x's, deleted 2026-11-06 — each named its tag's commit; known-issues #70) — moved by the [2026-10-26 history purge](history-purge-2026-10-26.md); JSR's provenance names the pre-purge ids |
 | Repository | `github.com/synapticforge1/S3D-ReportCompiler` (moved from `jrmarcum/`, which 301s); JSR's GitHub link names the org (2026-10-26) |
@@ -1359,48 +1359,178 @@ reads the stored PDF as today.
 - **The 3 MB cut, native: 332 pages (Chrome 433); 280 words / 2,744 numbers, 0 missing; per-report
   1/1; styling 110,504 of 110,504; images 2 of 2 identical; lowest contrast and smallest text as
   Chrome's** -- and the same image-count failure as Chrome's, which was the verifier's (#118).
-- Next: the full report natively; the visual comparison (pages rasterised side by side, for the
-  owner); the page-count difference (orphans / widows, row heights, line breaking) measured.
+- **Fonts embedded, 2026-11-11** (🔒 owner: "we should embed the fonts into the file that are
+  required for fidelity. and into the project for full compatibility on the usage and
+  incorporation needs"; "We need to add the dependency and make any license references for
+  compiance sake"): Liberation 2.1.5 (SIL OFL 1.1, metric-compatible with Arial / Courier New /
+  Times New Roman) shipped in `fonts/liberation/` with its licence and each file's SHA-256
+  (checked by `readRenderFonts`, `./runtime`: surface +1, floor minor); `@pdf-lib/fontkit` 1.1.1
+  (MIT) embeds them SUBSET; a character with no glyph is refused (fontkit would draw .notdef
+  silently). Both packages ship the fonts (`jsr.json`, `npm-build.ts`; `npm:prove` checks every
+  font file and the licence are packed -- PASS on Node 22.13 / 22 / 24 / 26 and Bun). Licence
+  records: THIRD-PARTY-NOTICES.md (what is redistributed, the OFL's conditions quoted from the
+  licence, the compliance summary), [licensing.md](licensing.md). `bun audit`: 0 (50 packages).
+- **The 3 MB cut, native with embedded fonts: PASS** -- 332 pages laid out in 2.3 s; 5 of 5 images
+  identical; styling 110,504 / 110,504; three faces embedded (Liberation Sans, Sans Bold, Mono:
+  33 KB of subsets; Chrome's ArialMT, Arial-BoldMT, CourierNewPSMT: 82 KB); the nine unused faces
+  swept out by the packer.
+- 🔒 **Owner, 2026-11-11: "The package growing by 6mb is not an issue, as long as the resulting
+  pdf is minimized."** Images: carried as the source's own bytes (the pixel check requires it; a
+  lossy re-encode is ruled out); the one lossless gain left there is a JPEG's entropy coding
+  re-optimised (estimated ~5–15 %; measured 21.4 % on the 36ft report and built on `main`, below).
+  The page content was the lever: written
+  compactly (one text object, state set only when it changes, a line's pieces in one string,
+  0.01 pt) and collapsed table borders drawn as a grid, each line once. **The 3 MB cut: 3.19 →
+  1.74 MB (Chrome 3.12), page content 2.28 → 0.84 MB; a table page's 848 fills → 88; still PASS.**
+- Found on the way: the H33 release test's "behind origin" case cloned origin's default branch,
+  which is whatever branch ROOT had checked out -- from a branch other than main its push was
+  refused quietly and the guard never reached (fixed on main too, `9b48dce`).
+- ✅ **The full 36ft report, native, VERIFIED -- 2026-11-11** (after #119's verifier indexes and
+  #120's bake containment, both on `main`): 6,969 pages laid out in 37.8 s; 24.66 MB; 308 words
+  and 16,160 numbers, 0 missing, per-report 1/1; images 5 of 5 identical; styling 2,836,333 of
+  2,836,333; PASS. 6 min in all (verification 5 min). Chrome on the same report: 33 min, no PDF.
+  ⚠️ **Peak memory 22.4 GB** (the verification holds every page's text, operators and styles at
+  once) -- the next thing to bring down; a smaller machine would fail before any time limit.
+- ✅ **The verifier's memory, 2026-11-11** (owner: "yes"; on `main`: `573ccf6`, `43d9470`): pdf.js's
+  page caches released per page (`page.cleanup()`); painted paths kept only when a report has a
+  drawing (their one reader); run styles shared; a full collection at the phase boundaries where
+  the runtime offers one (`Bun.gc`). **Measured with a full collection at each phase: the
+  verification never holds more than 1.5 GB live** (0.38 / 0.54 / 1.52 / 1.49 / 1.42 GB) -- the
+  rest was garbage the engine let pile up on a machine with memory to spare. **The full 36ft report:
+  peak 22.4 → 16.3 → 8.2 GB, 360 → 314 s, PASS each time.** Left: ~7.5 GB of churn inside the word,
+  number and style checks, ~4.5 GB in the render -- refinement, not a blocker.
+- ✅ **Tests for the native renderer, 2026-11-11** (owner: "yes"): (1) a report in the model
+  template's shape, made in the test (`modelReport`: collapsed tables with zebra rows and min/max
+  cells over pages, a 13-column table forcing shrink-to-fit, a bordered screenshot with an unquoted
+  src, an inline-block subheading, links, superscripts, a stray `</div>`), built natively: PASS,
+  every word styled, no pdf.js warning; in the PDF every font embedded and a Liberation face,
+  every alpha state a page uses defined; two builds byte-identical. (2) A member report refused
+  with `<svg>` named and no final PDF; a float, absolute positioning, a list, a CJK character, a
+  text-transform, a background image each refused by name through `renderDocument`. (3)
+  `S3D_RENDERER` refuses another value. Inverted: the resource-order bug (caught by the warning
+  check) and a render-time stamp ("two builds differ").
+- ✅ **Visual review and page breaks, 2026-11-11.** Matching pages of the 3 MB cut rendered side
+  by side (a local page in the session's scratch -- client data, never published). Seen: title,
+  tables, zebra rows, superscripts, and the shrink-to-fit (column widths and wrapping) the same;
+  the number columns heavier (Liberation Mono's stroke against Courier New's thin one). Different:
+  breaks around boxes with `break-inside: avoid` -- Chrome moves such a box on when it does not
+  fit the room left (Blink's rule), stranding headings (60 pages of the cut hold only a heading);
+  the renderer moved one only if it fit a page, and split a table's two header rows. 🔒 **Owner,
+  given A (Chrome's rule exactly) or B (that rule, and no heading left alone): "I agree with B".**
+  Built: Blink's rule; `h1`–`h6` with their `<hr>`, and the opening text of a box that avoids
+  breaks (SkyCiv's `<span class="subheading">`), kept with what follows (`Flow.keeping` /
+  `hasContent`: a box is not moved off a page holding only its own heading); a table's header rows
+  (all `th`) kept with its first row. **The cut: 371 pages (Chrome 433; 332 before), no page holding
+  only a heading, PASS.** The full report: 7,161 pages (6,969 before), 24.68 MB, PASS in 328 s,
+  peak 8.9 GB. Tests: the model report (no lone heading; the subheading with its header
+  rows and first row; no page ending in a header row) and the header rows at the lengths that
+  force them; each rule's mutant caught.
+- Next: the visual
+  comparison (pages rasterised side by side, for the owner); the page-count difference (332 vs
+  Chrome's 433 on the cut) measured; then the member reports (maths, SVG).
 
-🎯 **Target 1, 2026-11-12 (owner: "I agree. Lets proceed with target 1 that is very
-resonable").** Asked for a time frame to a viable production product, two targets were laid out:
-**target 1** -- a release using both renderers, Chrome for what the native renderer cannot draw
-yet (the member reports), the native renderer for the rest (the 36ft model report), one verified
-PDF -- about 3–4 sessions (routing and merging; hardening for release; a fresh review); **target
-2** -- native for everything (phases 1–3 above, the three real sets passing natively, review
-rounds) -- about 8–12 sessions in all, maths the main unknown; and class B re-check 3's groups
-B–F, about 2–3 sessions, needed either way. Target 1 first; target 2 as the release after.
+### 🎯 Production plan (owner, 2026-11-12): target 1, then target 2
 
-⏸️ **Paused 2026-11-11 (owner: "I need to pause here for today"). Pick up, in order:**
-1. **`main`, uncommitted: the verifier's text pieces** (`main.ts` `piecesOf`): pdf.js JOINS text
-   shows drawn edge to edge in one font into one item, and the verifier styled a whole item by
-   the show it starts in -- a black value after a blue label was judged blue (found by the native
-   renderer's member template; Chrome keeps such runs apart, so a Chrome build cannot show it:
-   the old reader passes `<span style="color:#0000ff">Zorblue</span>Zorblack` too). Each show
-   now records its glyphs' text; an item is split into pieces where each later show of its font
-   on its baseline begins. Samples unchanged (13/13, 1,277 drawings, 9,877 styled words), types
-   and lint clean; ✅ the suite finished green overnight (99 pass, 2 skip, 0 fail) and it was
-   committed 2026-11-12. Its test belongs in the trial (built natively, inverted against the old
-   reader).
-2. **`trial/native-render`, STASHED (`git stash list`: "trial: table rewrite in progress"),
-   `src/report_render.ts` only** -- phase 1 of the member reports (owner: "yes"): the table layout
-   rewritten around a slot grid (`Slot`, `Grid`, `spanOf`, `preferredWidth`, `columnWidths`):
-   `colspan` / `rowspan`, percentage columns, cell `min-width` and `height`, a row a rowspan joins
-   placed together, rows that do not fit split across pages between the pieces of each cell's own
-   flow (`Flow.breaks`, `Recorder.replaySlice`), the `<thead>` drawn again on each page, cell
-   `vertical-align` (top / middle / bottom; the UA's `td { vertical-align: inherit }`), a block's
-   own vertical-align no longer applied to its text (`onBaseline`), `::before` / `::after` boxes
-   that are only boxes (`pseudoBoxOf`, `pseudoBox`; SkyCiv's `th[rowspan]::before` frame); and the
-   parser's end tags scoped to their own table (an inner table's `</tbody>` closed the outer one).
-   `git switch trial/native-render && git stash pop`, then merge `main`. One lint finding to fix
-   (`noAssignInExpressions` in `styleOf`'s `(e.pseudo ??= []).push`). Measured before the stash:
-   the 13 samples with their maths and drawings stripped (scratch `strip.ts`) render with NO
-   refusal; the verification failed only on the label colour of item 1.
-3. Then: rerun the stripped samples; compare them with Chrome side by side (split rows, repeated
-   headers); the phase-1 tests (a nested table, spans, % columns, a split row, the repeated header,
-   the `::before` frame, the label case); the 36ft report unchanged; then phases 2 (SVG: only
-   `line`, `path`, `text`, `g`, one `<style>` and one transform in all 136 member reports) and 3
-   (maths through MathJax's SVG output, drawn as text in the embedded MathJax fonts).
+Asked "how much longer … to have a viable product for production use?", two targets were laid
+out; 🔒 **owner: "I agree. Lets proceed with target 1 that is very resonable"**, then "Please
+update all of this and scope the Target 1 versus Target 2 so we can start a new session."
+Estimates are in working sessions like 2026-11-11's (a full day each), and are claims with a date.
+
+#### ▶️ Start of the next session, in order
+
+1. **`main` is MID-MERGE** (2026-11-12): `git merge --no-commit trial/native-render` -- clean, no
+   conflicts; types, lint, format and the surface (105 lines) pass on the merged tree, and ✅ **the
+   full suite passed on it: 103 pass, 2 skip (POSIX), 0 fail** (2026-11-12; only this roadmap text
+   changed since). So: `git commit` the merge
+   (message: brings the native renderer, the Liberation fonts and their licence records,
+   `@pdf-lib/fontkit`, B's page breaks and the renderer tests; still opt-in). If a test fails, the
+   fault is in the combination of 2026-11-11's two lines -- fix it on `main` before going on.
+2. **Then target 1, step T1-1 (below).**
+3. The stash (`git stash list`: "trial: table rewrite in progress", `src/report_render.ts` of the
+   trial branch) is **target 2's** phase 1 -- leave it until target 1 ships.
+
+#### Target 1 -- a production release using both renderers (~3–4 sessions)
+
+**What it is.** Every report the tool meets prints, verified, in ONE PDF: the native renderer for
+what it can draw (the 36ft-style model reports, which Chrome cannot print at all), Chrome for the
+rest (the member reports: maths, drawings, their template) -- exactly as Chrome prints them today.
+
+**Acceptance.** (a) A member-report-only set gives the SAME baked HTML and the same PDF as today
+(the reference hashes hold: samples `487321f2…`). (b) The 36ft report alone PASSES natively, as on
+2026-11-11 (7,161 pages, 24.67 MB). (c) A mixed set -- member reports and a model report --
+builds into one PDF that PASSES, each report's checks on its own pages, the output naming which
+renderer drew each report and why. (d) CI green on Linux and every Node line; the npm and JSR
+packages carry the fonts and their licence (npm:prove). (e) A fresh review finds nothing open.
+(f) Released only on the owner's word ("release"), through the release process (H33).
+
+**Steps.**
+- **T1-1 Routing and merging (~1 session).** `S3D_RENDERER` = `auto` (the new default) | `chrome`
+  (everything through Chrome: today's behaviour) | `native` (everything native; refused if it
+  cannot). In `auto`, per report: one holding maths (`<mjx-…>` in its bake) or an inline `<svg>`
+  goes to Chrome directly (the native renderer refuses them today; trying costs time); any other is
+  laid out natively ON ITS OWN, and a refusal sends it to Chrome, named. Consecutive reports with
+  the same renderer form a group; a Chrome group is ONE document as today (its wrappers keep their
+  report's index: `report-sheet rs{i}`, the scoped sheets' `.rs{i}` -- `assembleDocument` is public
+  API, so its signature does not change); native reports use their own PDFs. The parts are merged
+  in report order (pdf-lib `copyPages`), then packed (JPEG re-coding; the structure tree dropped)
+  and verified as one PDF -- each report's checks already run on its own pages, so mixed fonts and
+  print scales are fine. A single group keeps its bytes as rendered (no merge: a native-only
+  build stays byte-reproducible). Tests: (a), (b), (c) above; the setting's values; a refusal routed
+  to Chrome and named. `--help`, README, the API surface (a `cli-env` value) and `design-decisions`
+  (the render strategy -- read before changing it) updated.
+- **T1-2 Hardening for release (~1 session).** CI (`.github/workflows/ci.yml`) runs the native
+  tests on Linux and Node 22.18 / 24 / 26; the Linux font path and the `readRenderFonts` hash
+  check proven there; `npm:prove` and JSR's upload check with `fonts/`; the native renderer's
+  limits written down (what it refuses, by name); the verifier's remaining memory churn (~7.5 GB
+  peak in the checks on the full 36ft report) looked at if a target machine needs it; the
+  scratch-only measurements (the 36ft report, the zip) re-run as the release's evidence.
+- **T1-3 A fresh review (~1–2 sessions).** The project's practice before a release: an
+  adversarial reviewer on the renderer, the routing and the merge; every finding fixed with a test
+  that fails without it. Budgeted because every review so far has found real defects (2026-11-11
+  alone: #118–#120).
+- **T1-4 Release** -- a MINOR by the gate (additions only so far), on the owner's word.
+
+#### Target 2 -- native for everything, Chrome no longer needed (~5–8 sessions after target 1)
+
+**What it is.** The member reports drawn natively too: no browser anywhere, every platform
+(owner, 2026-11-11: "linux, mac, windows, web, ios and android"), and the other-browser review
+(Firefox / WebKit) taken off the plan for good.
+
+**Acceptance.** The 13 samples, the 48-report set and the 75-report zip each PASS natively, every
+check (words, numbers, images, drawings, styles, maths); the owner's side-by-side visual review of
+each kind of page; the refusal list for every real report empty.
+
+**Steps.**
+- **Phase 1, the member template (~1–2 sessions; half done, in the stash).** Pop the stash on the
+  trial branch: the slot-grid tables (spans, % columns, split rows, the repeated `<thead>`,
+  vertical-align, cell heights, `::before` boxes) and the parser's table-scoped end tags. Fix its
+  one lint finding; rerun the stripped samples (scratch `strip.ts`: maths and drawings removed);
+  compare with Chrome side by side; tests for each feature and the blue-label case (the verifier's
+  text pieces, which must fail against the old reader).
+- **Phase 2, SVG drawings (~1 session).** All 136 real member reports use only `line`, `path`,
+  `text`, `g`, one `<style>` and one transform per drawing (measured 2026-11-11): paths, strokes,
+  dashes, text labels in PDF; the verifier's drawing check (proven against Chrome) judges them.
+- **Phase 3, maths (~2–4 sessions; the main unknown).** MathJax's own layout, from its SVG
+  output, each glyph drawn as TEXT in the embedded MathJax fonts (searchable: "equations must stay
+  text, not vector outlines"); the fonts' licence read and recorded as Liberation's was; the
+  verifier's maths checks (tuned on Chrome's CHTML) re-measured on the new output.
+- **The three real sets natively, the owner's visual sign-off, review rounds (~2 sessions).**
+
+#### Needed either way -- class B re-check 3, groups B–F (~2–3 sessions)
+
+Image placement (B), orientation (C), cover / overprint / decoration (D), values against their
+cells (E), per-occurrence styles and the two false FAILs (F) -- listed under task 18. Some are
+simpler with the native renderer, which knows where it put everything. Before target 2's release
+at the latest; the owner decides whether before target 1's.
+
+#### Where things stand (2026-11-12)
+
+- `main`: everything of 2026-11-11 committed and green, plus `8615dc5` (the verifier's text
+  pieces); the merge of the trial branch staged (above).
+- The 36ft report: native, VERIFIED (7,161 pages, 24.67 MB, 328 s, peak 8.9 GB); in the session's
+  scratch only -- client data.
+- The member reports: Chrome, verified as before.
+- Nothing pushed; nothing released since 1.5.0.
 
 **Lossless JPEG re-coding, both renderers (on `main`, 2026-11-11).** 🔒 Owner: "scope the
 re-optimizing of the JPEG's entropy coding and test the actual gain or loss before we add it";

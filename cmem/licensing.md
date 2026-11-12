@@ -11,6 +11,22 @@ commercially.
 | `mathjax-full` | 3.2.2 | **Apache-2.0** | typesets the maths at build time |
 | `pdf-lib` | 1.17.1 | **MIT** | object-stream repack |
 | `pdfjs-dist` | 6.4.299 | **Apache-2.0** | text/operator extraction for verification (4.6.82 until 2026-10-28) |
+| `@pdf-lib/fontkit` | 1.1.1 | **MIT** | the native renderer's font embedding (task 19; added 2026-11-11, owner: "We need to add the dependency and make any license references for compiance sake"). Declared in `package.json` and its README; **ships no licence file** -- recorded in THIRD-PARTY-NOTICES |
+
+## Shipped with the package: the Liberation Fonts 2.1.5 (SIL OFL 1.1)
+
+🔒 Owner, 2026-11-11: "we should embed the fonts into the file that are required for fidelity. and
+into the project for full compatibility on the usage and incorporation needs." `fonts/liberation/`
+holds the twelve TTFs, unmodified, with `LICENSE` (the OFL) and `AUTHORS`; its README records the
+upstream release, the tarball's and each file's SHA-256, and `readRenderFonts`
+(`src/report_runtime.ts`) refuses a file whose hash differs. Both packages ship the folder
+(`jsr.json` `publish.include`; `scripts/npm-build.ts`), and `npm:prove` fails a tarball missing any
+of it. What the OFL asks, read from the licence itself (2026-11-11): not sold by itself (cond. 1);
+the copyright notice and licence with every copy (cond. 2 -- the LICENSE file beside them); no
+Reserved Font Name on a modified version (cond. 3 -- not modified); the fonts stay OFL (cond. 5),
+which "does not apply to any document created using the Font Software" -- so the PDFs carry no
+font-licence obligation. **This ended "the published package bundles nothing"** (below): it now
+redistributes third-party files, under their own licence, alongside the MIT code.
 | `@napi-rs/canvas` (+ one platform binary) | 1.0.11 | **MIT** | optional dependency of `pdfjs-dist` 6; licence files read 2026-10-28 |
 | `@xmldom/xmldom` (transitive) | 0.9.12 | MIT | overridden from 0.9.10 (roadmap task 13) |
 | `@types/node` | 22.20.1 (dev) | MIT | type checking only |
@@ -83,10 +99,14 @@ Compatible with the whole dependency set: MIT, Apache-2.0, 0BSD and Zlib impose 
 
 ### Obligations, checked before the first publish
 
-- **The published package bundles nothing.** It is six first-party files; dependencies are declared
-  and resolved by the consumer. No attribution obligation is triggered by publishing it.
+- ~~**The published package bundles nothing.**~~ True at the first publish (six first-party files);
+  🔁 **no longer:** `src/report_webp.ts` is ported from libwebp (BSD-3-Clause, 2026-11-10, its notice
+  kept), and since 2026-11-11 `fonts/liberation/` ships the Liberation Fonts (SIL OFL 1.1, above).
+  Both carry attribution obligations, met in the files themselves and in THIRD-PARTY-NOTICES, which
+  both packages ship. Dependencies are still declared and resolved by the consumer.
 - **No NOTICE files to propagate.** None of the Apache-2.0 packages in the tree ships one, so
   Apache-2.0 §4(d) imposes nothing.
 - **Two artifacts do carry third-party code**, neither of them committed: the browser bundle, which
-  bundles MathJax, and the output PDF, which embeds MathJax's Apache-2.0 fonts as data URIs. See
+  bundles MathJax, and the output PDF, which embeds MathJax's Apache-2.0 fonts as data URIs (and,
+  rendered natively, subsets of the Liberation Fonts, which the OFL does not reach). See
   [../THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).

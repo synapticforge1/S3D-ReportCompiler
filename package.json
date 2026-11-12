@@ -33,6 +33,7 @@
     "serve": "npx --yes serve@14.2.4 ."
   },
   "dependencies": {
+    "@pdf-lib/fontkit": "1.1.1",
     "mathjax-full": "3.2.2",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "6.4.299"
