@@ -31,6 +31,12 @@ as true vectors (verified: 110 paths, 107 strokes, 146 text ops). But it consume
 model, so a converter would be transcribing the reports by hand — and it **cannot place an SVG inline
 within a line of text**, which is fatal for the 87 inline expressions per report that sit mid-sentence.
 
+🔁 **Qualified 2026-11-12 (§10):** Chrome stays the renderer of every report it can print — all
+of them holding maths or a drawing. A report outside that (SkyCiv's model template: tables, text,
+images) is drawn by the package's own renderer, because Chrome could not print the large one at
+all (33 min, no PDF). The ladder above still ranks fidelity; §10 is about a report Chrome cannot
+deliver.
+
 **Typst was considered and rejected for this job.** It would likely produce a smaller file (~1–1.5 MB
 estimated, never measured) and has first-class inline maths, but it does not read HTML/CSS either, so it
 is the same transcription problem with better typography. It is the *right* tool if SkyCiv ever
@@ -77,6 +83,13 @@ All 48 reports share one section image; a single pass lets the engine embed it o
 content is near-identical between the two (2.57 vs 2.53 MB) — the difference is entirely duplication.
 
 **This is only possible because the bake step makes the documents concatenable** (see §5).
+
+🔁 **One exception since 2026-11-12 (§10): parts drawn by DIFFERENT renderers are joined.** Every
+run of consecutive Chrome reports is still ONE Chrome document (a member-only set is exactly the
+single pass above, same baked HTML, same PDF); only a native report between them splits it. The
+duplication this section measured is per part — a part's fonts and images are copied once
+(`copyPages` with one copier per part) — so a mixed set pays one more copy of what two parts
+share, not one per report.
 
 ---
 
@@ -252,3 +265,46 @@ rule out. See [verification.md](verification.md).
 
 When this principle was quietly violated — the verifier deriving its image count by re-removing the
 spinner with its own regex — it was treated as a defect and fixed, even though it worked.
+
+---
+
+## 10. Two renderers, chosen per report; the parts joined, then verified as one (2026-11-12)
+
+🔒 Owner, 2026-11-12: target 1 of the production plan ([roadmap.md](roadmap.md) task 19). Read
+before changing the routing, the join, or what goes to which renderer.
+
+**The rule (`S3D_RENDERER=auto`, the default).** A report whose bake holds maths (`<mjx-`) or a
+drawing (`<svg`) goes straight to Chrome: the native renderer refuses both today, so trying costs
+only time. Any other report is laid out natively ON ITS OWN; a refusal sends it to Chrome, and
+the build prints the report and the first refusals. `chrome` sends everything to Chrome (the
+behaviour before); `native` draws everything natively or stops, naming each report and what it
+refused. The `<svg` test looks anywhere in the body, attribute values included: a false hit
+sends a report to Chrome, which is the behaviour before routing — the safe direction.
+
+**Why per report, not per set.** The native renderer's refusal is all-or-nothing per document,
+and Chrome's shrink-to-fit is per document too: one model report with a wide table would shrink
+every member report printed with it. Each native report is therefore its own document (its own
+scale: the 36ft report at 84.7 %); each RUN of consecutive Chrome reports one document.
+
+**Each report keeps its index.** `bakeStyle` scoped each sheet to `.rs{i}` at bake time, so a
+document holding part of the set must wrap report `i` as `rs{i}`, not by its position:
+`assembleReports(bodies, styles, mathCss, indices)` (core, exported; `assembleDocument` is it with
+0, 1, 2 …, byte for byte, so its signature and the reference hashes stand). Measured by mutation
+(2026-11-12): wrapping by position left the native report and a separate Chrome document unstyled,
+and the style check named every word.
+
+**The join** (`joinParts`, main.ts): pages copied in report order into a new document, the first
+part's `/Lang` and `/ViewerPreferences` carried, no date written. ONE part keeps its bytes as
+rendered: a member-only set's PDF is Chrome's own, as before, and a native-only build stays
+byte-reproducible. Chrome's PDFs here carry no named destinations or annotations (checked on the
+samples and the 48 set), so copying pages loses no link. The packing and the whole verification
+run on the joined file unchanged; each report's checks already run on its own pages, so parts
+with different fonts and print scales are judged each by its own.
+
+**Chrome is needed only when a report goes to it.** `S3D_RENDERER=chrome` without a browser stops
+before the bake, as before; otherwise the routing names the reports that need one. A set the
+native renderer draws whole runs with no browser installed.
+
+**Measured 2026-11-12:** the 13 samples under `auto` — all to Chrome (13 with maths), baked hash
+`487321f2…` unchanged, 100 pages, PASS; the 36ft report under `auto` (no setting) — native, 7,161
+pages in 37.3 s, 24.68 MB, PASS in 336 s, as on 2026-11-11.
