@@ -15,6 +15,11 @@ process.** Nothing is bumped, pushed or released unless the owner says so.
 release page from the tag, then publish the package to the registry."** No tag is made on a
 machine any more.
 
+🔒 **Before every release, a security review and a hardening review (owner, 2026-11-12;
+[review-process.md](review-process.md) § 0)**, each run on everything since the last release until
+a round's reviewers find nothing, and recorded in that release's entry below before `bun run bump`.
+A release whose two reviews are not recorded is not ready.
+
 ```bash
 bun run bump patch | minor | major    # the level is required; refuses a dirty tree (untracked
                                       # files count) and a level below the compatibility floor;

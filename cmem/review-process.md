@@ -7,9 +7,29 @@ process in this repo for the 'targeted agent code reviews', 'the security review
 2026-11-12), not from a plan; each rule names the evidence that put it here. It sits beside the
 workspace's "commit", "push" and "release" (INDEX § Owner commands; `../cmem/release-process.md`).
 
-**For the workspace** (correspondence row C46): §§ 1–5 are written to be lifted into any repo as
+**For the workspace** (correspondence row C46): §§ 0–5 are written to be lifted into any repo as
 they stand. What is THIS repo's -- its reference sets, its hashes, its threat surface -- is marked
 **[S3D]**; another repo substitutes its own.
+
+---
+
+## 0. The owner's words, and when each review is required
+
+🔒 **Owner, 2026-11-12** (on reviewing this text): "the review kinds shall have 'review', 'security
+review' and 'hardening review' as the section mapping commands"; "the reviewers should report
+their findings, then if nothing is found the review process is stopped"; "security and hardening
+reviews should be required before every release". When the owner says:
+
+- **"review"** — a targeted agent code review (§ 2), in rounds (§ 1.4).
+- **"security review"** — a security review (§ 3), in rounds.
+- **"hardening review"** — a hardening review (§ 4), in rounds.
+
+Each runs the floor (§ 1) and stops when a round's reviewers find nothing. None of them commits,
+pushes or releases: those stay the owner's "commit", "push", "release" (INDEX § Owner commands).
+
+**Before every release, a security review and a hardening review are required**, each run to its
+empty round, on everything since the last release. "release" does not start until both are done
+and recorded (§ 6); a release whose two reviews are not recorded is not ready.
 
 ---
 
@@ -67,10 +87,11 @@ everything **[S3D: a dropped or changed value in a certified calculation that st
 **After fixing, the fixes are reviewed again, by fresh reviewers, as new code** (practices §16).
 Every round here found something in the round before's fixes: 2026-11-06 ran eight rounds (7, 6, 4,
 4, 3, 1, 3, 2 findings; most of rounds 3–4's were in fixes written hours earlier); the fifth
-full-project review found two wrong-PASS defects in code a review had just cleared. **Stop when a
-round finds nothing in the previous round's fixes and nothing silent anywhere** — not after a
-fixed number. Two empty rounds in a row on the same axes mean the axes are stale, not that the code
-is clean (workspace 5.12): change the axes before declaring it done.
+full-project review found two wrong-PASS defects in code a review had just cleared. 🔒 **The
+reviewers report their findings; when a round's reviewers find nothing, the review stops**
+(owner, 2026-11-12) — not after a fixed number of rounds. Each new round is briefed fresh on the
+previous round's fixes and on axes the earlier rounds did not cover (§ 2.1), so an empty round
+means its reviewers looked and found nothing, not that they re-ran an earlier brief.
 
 ### 1.5 Who decides
 
@@ -83,6 +104,8 @@ has **[S3D: `ci.yml`'s 7 jobs]**.
 ---
 
 ## 2. Targeted agent code review
+
+**The owner's word: "review".**
 
 **What:** a review aimed at a defined change or area, by agents, in rounds (§ 1.4). The default
 kind, run:
@@ -116,6 +139,8 @@ kind, run:
 ---
 
 ## 3. Security review
+
+**The owner's word: "security review". Required before every release** (§ 0).
 
 **What:** a review of what an untrusted input, a hostile environment or a compromised step could do
 — run as its own pass, by reviewers briefed on the threat surface below, because a functional
@@ -161,9 +186,12 @@ review asks whether the output is right, not what the input can make the tool do
 
 ## 4. Hardening review
 
+**The owner's word: "hardening review". Required before every release** (§ 0).
+
 **What:** making a working feature fit for release: every environment it will run in, every way it
 can fail, every limit written down, the shipped artifact proven. **A lens, not a task** (workspace
-5.12): run it on each feature before its release, and whenever the environments change.
+5.12): run it on everything since the last release before each release, and whenever the
+environments change.
 
 ### 4.1 The axes (T1-2, 2026-11-12, is the worked example)
 
@@ -220,6 +248,7 @@ correct work > cosmetic), confidence. Say what you checked and found sound. Unde
 | what was found and NOT fixed (older, loud or cosmetic), with why | known-issues.md, "Recorded, not fixed" after the round's rows |
 | a claim found wrong (in memory, docs or a commit) | corrected where it stands, marked 🔁 with the date and the row that found it |
 | the round: reviewers, scope, counts, what is next | [roadmap.md](roadmap.md), under the task |
+| the release's security and hardening reviews (§ 0): the rounds, the empty round that ended each | [release.md](release.md), in the release's entry, before it is released |
 | the test runs and their numbers | [testing.md](testing.md) |
 | what was believed against what was measured | [process-log.md](process-log.md) |
 | a lesson that changes how work is done | [practices.md](practices.md) |
