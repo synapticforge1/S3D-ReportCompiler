@@ -626,6 +626,13 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
    this machine, and INDEX § Workspace carries the same instruction for clones.
 
 **Correspondence this repo opened** (`../cmem/workspace-correspondence.md`):
+- **C46 🟡 open 2026-11-12** — the review process (targeted agent code reviews, security reviews,
+  hardening reviews) offered to the workspace for every project (🔒 owner: "pass it back to the
+  workspace for inclusion in each project"). Held for the owner's review first, then amended by
+  the owner: the words "review" / "security review" / "hardening review"; a round that finds
+  nothing stops the review; security and hardening reviews before every release. Full text
+  [review-process.md](review-process.md) at `cfab945`. This repo closes the row once the
+  workspace's adoption is readable.
 - **C20 ✅ closed 2026-10-28** — `--config jsr.json` corrupts a package with dependencies: binaryang's
   `jsr-deno-exit-guide.md` F1 / § 4 carry the caveat (`39c127def`, was `a846dc68f`, on its `origin/main`); wasmtk's
   `deno-exit-plan.md` P1 must prove its upload (`67686067a60`). Verified read-only by this repo.
