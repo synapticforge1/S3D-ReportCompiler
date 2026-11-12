@@ -1492,9 +1492,11 @@ packages carry the fonts and their licence (npm:prove). (e) A fresh review finds
   tests; the style check names every word), the parts joined in reverse (the verifier: "reports
   exchanged or out of order"), `/Lang` not carried. One line removed for having no test that could
   see it: deleting each copied page's `StructParents` (the packing drops them anyway).
-  ⚠️ **Found on the way, for the review (T1-3) or class B:** a report whose float paints before its
-  heading (Chrome reads "Gust factor 0.85 | Wind Check | …") is not FOUND by its opening words, so
-  the per-report check cannot run and the build fails -- safe, but a false FAIL for such a report.
+  ⚠️ **Found on the way:** a report whose float paints before its heading (Chrome reads "Gust
+  factor 0.85 | Wind Check | …") was not FOUND by its opening words, so the per-report check could
+  not run and a correct PDF FAILED. ✅ **Fixed 2026-11-12 before T1-2** (owner: "Lets fix it now
+  before we proceed to T1-2"): known-issues #121 -- the opening found in either reading of the
+  page, exactly or with its characters rearranged.
   🔔 **For the release notes:** `auto` changes what draws a report with no maths and no drawing
   (Chrome before, native now) -- different fonts (Liberation for Arial, metric-compatible), line
   and page breaks, its own print scale. No member report is affected (all hold maths).

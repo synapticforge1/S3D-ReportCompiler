@@ -3031,6 +3031,15 @@ test("assembleReports keeps each report's own index (task 19, target 1)", async 
 });
 
 /**
+ * A report whose float the native renderer refuses (so Chrome draws it under `auto`), and which
+ * Chrome paints before the heading above it: content order reads "Gust factor 0.85 | Wind Check".
+ */
+const FLOAT_REPORT =
+  "<html><head><style>body{font-family:Arial;font-size:14px} .f{float:left}" +
+  " .c{color:#b00000;font-weight:bold}</style></head><body><h1>Wind Check</h1>" +
+  "<p class=f>Gust factor 0.85</p><p class=c>Design pressure 27.4 psf</p></body></html>";
+
+/**
  * A report the native renderer would draw but for one list (its marker): under `auto` it goes to
  * Chrome. The list comes after the opening 40 characters, which locate the report in the PDF.
  */
@@ -3096,6 +3105,56 @@ test(
       (members.at(-1) as number) < model && model < wind && wind === pages.length - 1,
       `the reports are not in order: members ${members}, model ${model}, wind ${wind}`,
     );
+  },
+);
+
+test(
+  "a report whose float paints before its heading is still found by its opening (2026-11-12)",
+  { timeout: TIMEOUT },
+  async () => {
+    // CSS paints a float before the flow's inline text, so Chrome writes "Gust factor 0.85" ahead
+    // of the heading above it -- and draws it below the paragraph beside it, so top to bottom the
+    // page reads "Wind Check · Design pressure · Gust factor": in neither order its source does.
+    // The opening was looked for exactly: the per-report check could not run, and a correct PDF
+    // FAILED. Now the same characters rearranged count. (The native renderer refuses the float, so
+    // Chrome draws it under auto.)
+    const dir = join(work, "float-opening");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "member_0_report.html"),
+      readFileSync(join(SAMPLES, "member_0_report.html")),
+    );
+    writeFileSync(join(dir, "Wind Check.html"), FLOAT_REPORT);
+    const r = build(dir);
+    assert.equal(r.code, 0, tail(r.out));
+    has(r.out, /cannot draw it: .*float: left/, /per-report: 2\/2/, /PASS/);
+
+    // The rule itself. The same characters rearranged, in either reading of the page itself; never
+    // other characters: two reports exchanged still fail, and so does another report's opening.
+    const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+    const V = String.fromCharCode(0x2029);
+    const a =
+      "<body><h1>Wind Check</h1><p>Gust factor 0.85</p><p>Design pressure 27.4 psf</p></body>";
+    const b = "<body><h1>Snow Check</h1><p>Ground load 30 psf</p><p>Exposure factor 0.9</p></body>";
+    const pageA = `Gust factor 0.85 Wind Check Design pressure 27.4 psf${V}Wind Check\nDesign pressure 27.4 psf Gust factor 0.85`;
+    const pageB = `Snow Check Ground load 30 psf Exposure factor 0.9${V}Snow Check\nGround load 30 psf Exposure factor 0.9`;
+    assert.deepEqual(core.findReportStarts([a, b], [pageA, pageB]).starts, [0, 1]);
+    // Content order alone, and visual lines alone (the content order made unreadable).
+    assert.deepEqual(core.findReportStarts([a], [pageA.split(V)[0]]).starts, [0]);
+    assert.deepEqual(
+      core.findReportStarts([a], [`x${V}Wind Check\nGust factor 0.85 Design pressure 27.4 psf`])
+        .starts,
+      [0],
+    );
+    // A rearrangement that crosses the opening's last character is other characters: not found
+    // (here "psf" comes into the first 40, "85" goes out) -- the loud direction.
+    assert.equal(core.findReportStarts([a], [`x${V}${pageA.split(V)[1]}`]).starts, null);
+    const swapped = core.findReportStarts([a, b], [pageB, pageA]);
+    assert.equal(swapped.starts, null);
+    assert.match(swapped.reason, /exchanged or out of order/);
+    // One character changed is another opening: not found.
+    assert.equal(core.findReportStarts([a], [pageA.replace(/0\.85/g, "0.86")]).starts, null);
+    assert.equal(core.findReportStarts([a], [pageB]).starts, null);
   },
 );
 

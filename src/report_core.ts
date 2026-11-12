@@ -4972,8 +4972,9 @@ function reportMark(source: string): { heading: string } | { opening: string } {
  * make two reports share it: not segmentable by page. {@link compareEachReport} cuts the PDF here.
  *
  * @param sources the raw source reports, in build order
- * @param pageTexts the extracted text of each PDF page, in page order (a CLI page text's visual
- *   lines after U+2029 are not read)
+ * @param pageTexts the extracted text of each PDF page, in page order. A page text may carry the
+ *   same page in visual lines after a U+2029 (the CLI's do): an opening is then found in either
+ *   reading, so a float painted before the heading above it does not hide its report
  * @example
  * ```ts
  * import { findReportStarts } from "@jrmarcum/s3d-reportcompiler";
@@ -4982,7 +4983,8 @@ function reportMark(source: string): { heading: string } | { opening: string } {
  * ```
  */
 export function findReportStarts(sources: string[], pageTexts: string[]): ReportStarts {
-  const pages = pageTexts.map((t) => t.split(String.fromCharCode(0x2029))[0]);
+  const readings = pageTexts.map((t) => t.split(String.fromCharCode(0x2029)));
+  const pages = readings.map((r) => r[0]);
   const marks = sources.map(reportMark);
   const openings = marks.flatMap((m) => ("opening" in m ? [m.opening] : []));
   const members = marks.length - openings.length;
@@ -4990,11 +4992,36 @@ export function findReportStarts(sources: string[], pageTexts: string[]): Report
     return { starts: null, reason: "a report without a member heading prints nothing to find" };
   }
   const compacted = pages.map(compactText);
+  // A float moves its text: CSS paints it before the flow's inline text, so Chrome wrote a floated
+  // paragraph under the heading FIRST, and drew it below the text beside it -- the page read in
+  // neither order its source does, its report was never found, and a correct PDF failed
+  // (2026-11-12, "Wind Check · Gust factor · Design pressure" printed "Gust factor · Wind Check ·
+  // Design pressure", or top to bottom "Wind Check · Design pressure · Gust factor"). So a page
+  // opens with an opening when, in its content order or its visual lines (the CLI's page texts
+  // carry both), it begins with the opening's characters EXACTLY or REARRANGED -- the same
+  // characters, so the same report: another report's opening is other characters, and an exchange
+  // still fails below. A rearrangement crossing the opening's last character is not found: loud.
+  const visual = readings.map((r) => (r.length > 1 ? compactText(r[1]) : null));
+  /** A text's first {@link OPENING_CHARS} characters (an opening is at most that), as an array. */
+  const head = (t: string) => [...t.slice(0, 2 * OPENING_CHARS)].slice(0, OPENING_CHARS);
+  const heads = pages.map((_t, p) =>
+    [compacted[p], visual[p]].flatMap((t) => (t === null ? [] : [{ text: t, chars: head(t) }])),
+  );
+  const sorted = (chars: string[]) => [...chars].sort().join("");
+  const openingSorted = new Map(
+    openings.map((o) => [o, { n: [...o].length, key: sorted([...o]) }]),
+  );
+  const opensWith = (p: number, o: string) =>
+    heads[p].some(({ text, chars }) => {
+      if (text.startsWith(o)) return true;
+      const want = openingSorted.get(o);
+      return want !== undefined && sorted(chars.slice(0, want.n)) === want.key;
+    });
   const headingCount = pages.reduce(
     (n, t) => n + (t.match(new RegExp(MEMBER_HEADING.source, "gi")) ?? []).length,
     0,
   );
-  const opens = (p: number) => openings.some((o) => compacted[p].startsWith(o));
+  const opens = (p: number) => openings.some((o) => opensWith(p, o));
   const starts = pages.flatMap((t, p) => (MEMBER_HEADING.test(t) || opens(p) ? [p] : []));
   if (starts.length !== sources.length || headingCount !== members) {
     const openingPages = pages.filter((_t, p) => opens(p)).length;
@@ -5021,7 +5048,7 @@ export function findReportStarts(sources: string[], pageTexts: string[]): Report
           "-- reports exchanged or out of order",
       };
     }
-    if (compacted[page].startsWith(mark.opening)) continue;
+    if (opensWith(page, mark.opening)) continue;
     const printed = [...compacted[page]].slice(0, OPENING_CHARS).join("");
     return {
       starts: null,
