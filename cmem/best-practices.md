@@ -8,8 +8,9 @@ without reading each other — so the method travels with a clone and can be cit
 
 **Copied from synapticforge1/cmem/best-practices.md on 2026-10-26** (workspace letters H6, H24,
 H26, H27; the stamp wording is the one `memory-conventions.md` prescribes). **Source:** the
-workspace's `cmem/best-practices.md` (`../../cmem/best-practices.md` from this folder, when the
-repo sits in the workspace). **28 rules**, every bullet the source marks ★, copied VERBATIM under
+workspace's `cmem/best-practices.md` (`../../workspace/cmem/best-practices.md` from this folder
+since 2026-11-19, letter H42; sections 5–8 are now in `best-practices-5-8.md`, rule numbers
+unchanged). **28 rules**, every bullet the source marks ★, copied VERBATIM under
 the source's `§` headings, origin tags and all. A ★ rule is changed in the source and re-copied,
 never edited here. Checked on 2026-10-26 by a one-time script comparing the number and the
 whitespace-normalized text of each rule against the source: 28 = 28, 0 differences; the check was

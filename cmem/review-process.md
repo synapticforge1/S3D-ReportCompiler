@@ -5,7 +5,9 @@ would like to pass it back to the workspace for inclusion in each project … in
 process in this repo for the 'targeted agent code reviews', 'the security reviews' and the
 'hardening reviews'." This file is that process, written from what was RUN here (2026-11-06 →
 2026-11-12), not from a plan; each rule names the evidence that put it here. It sits beside the
-workspace's "commit", "push" and "release" (INDEX § Owner commands; `../cmem/release-process.md`).
+workspace's "commit", "push" and "release" (INDEX § Owner commands;
+`../workspace/cmem/release-process.md`). ⚠️ Superseded as the workspace standard by letter H37
+(2026-11-17, `../workspace/cmem/review-process.md`); this file is rewritten from it in H37 item (a).
 
 **For the workspace** (correspondence row C46): §§ 0–5 are written to be lifted into any repo as
 they stand. What is THIS repo's -- its reference sets, its hashes, its threat surface -- is marked
@@ -49,6 +51,9 @@ and recorded (§ 6); a release whose two reviews are not recorded is not ready.
   only, own scratch folder, no client data), and the report's shape. Never the author's verdict.
 - **Read-only.** A reviewer never edits the repository, commits, pushes or tags; experiments live in
   its own scratch folder. It never reads client data **[S3D: `local/`]**.
+- **Scratch is cleaned at triage (H43, Tooling rule 15).** A reviewer's folder sits under the main
+  session's scratchpad; when the round is triaged the main session deletes it — clones and mutants
+  first, the largest items seen — after moving anything worth keeping into the project.
 
 ### 1.2 What a finding must carry
 
@@ -219,7 +224,8 @@ environments change.
 ```
 You are an adversarial <kind> reviewer for <repo> at <path> (<platform>; <runtime>).
 Find real defects. Do NOT modify any file in the repository; do not commit, push or tag. Work in
-your own scratch folder under the system temp folder. Never read <client-data paths>.
+your own folder, <main session's scratchpad>/<reviewer name>; the main session deletes it at triage.
+Never read <client-data paths>.
 
 WHAT THE TOOL IS, and what failure costs: <two lines; the worst outcome named>.
 Read first: <the repo's pointer file>, <the design records for this area>.

@@ -5,7 +5,7 @@
 were spread over [roadmap.md](roadmap.md) (the "Latest release" and "Attestation" rows, task 5,
 task 15) are gathered here; those places now point here.
 
-The workspace process this follows: `../cmem/release-process.md` §§ 5–8 (the twelve slots
+The workspace process this follows: `../workspace/cmem/release-process.md` §§ 5–8 (the twelve slots
 U1–U12, the owner's order D1). The owner's words (letter H34): **"release" = "push", then this
 process.** Nothing is bumped, pushed or released unless the owner says so.
 

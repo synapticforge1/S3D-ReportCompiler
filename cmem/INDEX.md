@@ -43,14 +43,31 @@ reviewed in a diff. If it is worth remembering, it goes in a topic file here and
 
 ## Workspace
 
-This repo is one of the sibling repos reviewed by the workspace one folder up (since 2026-10-26).
-**At session start, read `../cmem/workspace-correspondence.md`, then the letters in
-`../cmem/handoffs.md` addressed to this repo.** The workspace rules (`../cmem/working-rules.md`) are
-the common floor; this folder governs inside the repo. Nothing is written into a sibling repo from
-here. The triggers "update the project memory" (audit for stale live claims, not just edit) and
-"look for code issues" (silent fall-throughs first) are the workspace's, `../cmem/INDEX.md`.
+This repo is one of the sibling repos reviewed by the workspace (since 2026-10-26). Its memory is
+the `workspace` repository beside this one, `../workspace/cmem/` (since 2026-11-19, letter H42; it
+was `../cmem/`), and that repository is PUBLIC.
+**At session start, read `../workspace/cmem/workspace-correspondence.md` (one line per open item),
+then only the items addressed to this repo, `../workspace/cmem/letters/<ID>.md`** (letter H41).
+Answer by appending ONE bullet under `## Answers` in the item's file —
+`- **S3D-ReportCompiler, <date>:** <what was done, the commit, the check>` — the one write this repo
+makes outside itself; the workspace session commits it. Only an item's creator closes it. Closed
+items: `../workspace/cmem/archive/`. The workspace rules (`../workspace/cmem/working-rules.md`, the
+tooling rules in `tooling-rules.md`, same numbers) are the common floor; this folder governs inside
+the repo. The triggers "update the project memory" (audit for stale live claims, not just edit) and
+"look for code issues" (silent fall-throughs first) are the workspace's, `../workspace/cmem/INDEX.md`.
 
-Workspace rules recorded here (2026-11-09; full text `../cmem/working-rules.md`):
+Workspace rules recorded here (2026-11-09; full text `../workspace/cmem/tooling-rules.md`):
+- 🔒 **Scratch space is bounded; project data stays in the project (H43, Tooling rule 15,
+  2026-11-19).** Use only this session's own scratchpad folder, never another temp location or
+  another session's folder, and never write its path into a tracked file. Delete what an item used
+  once it is cleared: a one-time script after its run, a reproducer, clone or build output when its
+  finding is fixed and verified, a reviewer's folder when its round is triaged. Nothing lives only in
+  scratch: move what is worth keeping into the project first. Budget 200 MB per session folder;
+  announce anything larger first and remove it when the step is done. "commit" ends with an empty
+  scratchpad (delete what this session wrote there before the memory update). Sub-agents work under
+  the main session's scratchpad and the main session removes their folders. Project notes never go
+  to the assistant's per-project memory folder (checked empty 2026-11-19). Other sessions' folders
+  are not swept from here.
 - 🔒 **No `gh`, in CI too (H30, Tooling rule 9).** Check the repo instead (`git ls-remote`, the
   repo's files, registry APIs); the release workflow calls GitHub's REST API through
   `scripts/github-api.ts` (Bun, `GITHUB_TOKEN`); a GitHub web-UI task is an owner item.

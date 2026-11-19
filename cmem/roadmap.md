@@ -603,8 +603,8 @@ See [known-issues.md](known-issues.md) and [design-decisions.md](design-decision
 
 ## 🟡 11. Workspace floor (letter H26) — one owner action left: the GitHub Support request (item 2)
 
-Since 2026-10-26 this repo sits under the workspace's common rules (`../cmem/working-rules.md`,
-`memory-conventions.md`). Done in-repo on 2026-10-26: `origin` reset to the org, the stale links
+Since 2026-10-26 this repo sits under the workspace's common rules (`../workspace/cmem/working-rules.md`
+since 2026-11-19, letter H42; `../cmem/` before). Done in-repo on 2026-10-26: `origin` reset to the org, the stale links
 fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ block copied
 ([best-practices.md](best-practices.md)), the privacy rule recorded ([INDEX.md](INDEX.md) § Privacy),
 `.gitattributes` made wildcard-first, the status line moved here. Then, the same day:
@@ -625,8 +625,28 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
    letters in `../cmem/handoffs.md` addressed to this repo") is in the gitignored `CLAUDE.md` on
    this machine, and INDEX § Workspace carries the same instruction for clones.
 
-**Correspondence this repo opened** (`../cmem/workspace-correspondence.md`):
-- **C46 🟡 open 2026-11-12** — the review process (targeted agent code reviews, security reviews,
+6. ✅ **The workspace memory moved (H41, H42, 2026-11-19)**: now `../workspace/cmem/`, one file per
+   item in `letters/`; the pull line in `CLAUDE.md` and INDEX § Workspace updated; Tooling rule 15
+   (H43, scratch) recorded in INDEX § Workspace and the reviewer brief. Answered in H41/H42/H43.
+7. 🔴 **Open, scoped 2026-11-19 (owner agreed the order): three workspace letters, not started.**
+   (a) **H38** memory migration first — `check-cmem` (`../workspace/tools/check-cmem.ts --summary
+   cmem`): 847 problems (no STATE.md, INDEX > 3 KB, 835 lines > 200 chars, 10 files > 25 KB;
+   known-issues 151 KB, roadmap 138 KB, testing 64 KB). ⚠️ STATE.md takes over the status line
+   from this file. (b) **H37** items (a)–(g): `review-process.md` from the final standard;
+   `cmem/review-issues.md` gitignored + a privacy gate; open known-issues moved there; a review
+   step in `publish.ts`; `ci.yml`'s test jobs removed and `publish.yml`'s "ci.yml passed" check
+   replaced (a changed release job: rehearse first, never mid-release); the review words in Owner
+   commands; `cmem/platforms.md`; a `Tested on:` line. (c) **H39** `host.ts`: `report_runtime.ts`
+   already holds every OS call — rename or re-export (the `./runtime` export: the gate decides), a
+   `check-host` gate, `--self-check`, arm64 rows `runtime`; baked hashes must not move. (b) and (c)
+   come before the next release; neither touches task 19.
+
+**Correspondence this repo opened** (`../workspace/cmem/workspace-correspondence.md`; the ledger
+before 2026-11-19 is `../workspace/cmem/archive/workspace-correspondence-to-2026-11-19.md`):
+- **C46 ✅ closed from this end 2026-11-19** (owner: "leave C46 for the workspace to close") —
+  adopted by the workspace 2026-11-12 (letter H35), then replaced by the final standard, letter H37
+  (2026-11-17); nothing more is asked of it here. The workspace session sets the status and moves
+  `letters/C46.md` and its index line to `archive/`. Was: the review process (targeted agent code reviews, security reviews,
   hardening reviews) offered to the workspace for every project (🔒 owner: "pass it back to the
   workspace for inclusion in each project"). Held for the owner's review first, then amended by
   the owner: the words "review" / "security review" / "hardening review"; a round that finds
@@ -647,7 +667,8 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
 **Correspondence addressed TO this repo:**
 - **binaryang's C26 (2026-10-28) — ANSWERED 2026-10-28** (owner: "proceed with items 4 and 5"):
   binaryang rewrote its history a second time, so quoted binaryang ids went stale; translated
-  through the table in `../cmem/handoffs.md` (the C26 bullet). Measured with a one-time read-only
+  through the table in the workspace's handoffs (the C26 bullet; since 2026-11-19
+  `../workspace/cmem/archive/handoffs-to-2026-11-19.md`). Measured with a one-time read-only
   scan of every TRACKED file here for binaryang commit ids: **three were stale and are translated**
   — `a846dc68f` → `39c127def` (bun-migration.md, C20 above), `a3d338e8e` → `97c2c0375` (C21
   above), and `899b3fa5d` → `54cc098ea` (quoted only in this paragraph's earlier text); the old ids
