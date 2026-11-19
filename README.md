@@ -463,6 +463,16 @@ Their Project Name, Designer and Project Notes fields are replaced with syntheti
 [`scripts/sanitize-report.ts`](scripts/sanitize-report.ts); the calculations are untouched, so the
 samples exercise the real pipeline rather than a toy one.
 
+### Tested on
+
+The latest release, 1.5.0, was tested on:
+
+- Tested on: Windows 11 (win-x64)
+- Tested on: Ubuntu, GitHub's `ubuntu-latest` runner (linux-x64)
+
+Other platforms (macOS, and arm64 Windows and Linux): not yet tested. The package is plain TypeScript, so
+nothing in it is built per platform; what differs by OS is finding Chrome and starting it.
+
 ### Supported runtimes
 
 The same clone runs on any of them — only the launcher differs:

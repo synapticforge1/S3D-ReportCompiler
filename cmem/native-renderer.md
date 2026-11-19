@@ -130,6 +130,11 @@ packages carry the fonts and their licence (npm:prove). (e) A fresh review finds
   scratch-only measurements (the 36ft report, the zip) re-run as the release's evidence.
   🟡 **T1-2, 2026-11-12 (owner: "proceed") -- everything that can be proven on this machine is;
   CI's half waits on a push (the owner's word):**
+  - ✅ **CI's half, read 2026-11-19** (the pushes of `1b2dfe3`, `82417bf`, `e6fcbd5`): every TEST job
+    green on Linux — the suite on Bun and on Node 22.18 / 24 / 26, the runtime matrix, `npm-prove`
+    with Deno and the native leg. The JSR job failed (#129, a JSDoc example; then #130, the upload
+    check and `fonts/liberation/*`): both fixed the same day. `ci.yml` was retired the same day
+    (H37); Linux runs are WSL's from now on ([platforms.md](platforms.md)).
   - ✅ **CI already covers it -- no workflow change needed.** `checks` runs the suite under Bun
     and `node-suite` under Node 22.18 / 24 / 26, both on `ubuntu-latest`, so every native test
     runs on Linux at the next push; `npm` runs `npm-prove.ts --deno --install-node`, its new native

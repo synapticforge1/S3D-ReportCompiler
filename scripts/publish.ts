@@ -28,19 +28,26 @@
  *   2. HEAD is on main, tracking origin/main, and after a fetch HEAD^ IS origin/main: exactly one
  *      new commit (1.0.1 was released one commit behind the fix it existed to ship)
  *   3. that commit is `bump to vX.Y.Z` for jsr.json's version, touches only the three version
- *      files and only their version lines (known-issues #30: other edits once went out as a
- *      "bump"), and the three agree
+ *      files and `npm-dist.sha256` and only their version / digest lines (known-issues #30: other
+ *      edits once went out as a "bump"), records the digest, and the three versions agree
  *   4. the tag vX.Y.Z exists neither here nor on origin
+ *   4b. the review set (H37 (d), the release's first step): `Review complete: <commit>` in the
+ *      git-ignored cmem/review-issues.md, an ancestor of HEAD, and only bump / memory files
+ *      changed since it (scripts/review-gate.ts)
  *   5. JSR answers 404 for the version and npm can still take the number; a registry that cannot
  *      answer refuses (no test hook may stand in for one, except under --dry-run)
- *   6. the cold gate: the compatibility gate in release mode, the type check (the JSR upload
- *      check needs Deno, so CI runs it)
+ *   6. every gate, locally (H37 (e): CI only publishes): compat, types, format, lint, privacy,
+ *      memory size, the suite on Bun and on each Node line, the runtime matrix, the npm package
+ *      built, matched to the digest bump recorded, and proven; the suite in WSL (linux-x64) when
+ *      it is set up. It prints the release's "Tested on:" lines.
  * Then `git push origin main` (never forced) and a read-back with `git ls-remote`.
  */
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { release as osRelease } from "node:os";
 import { lookupNpmTaken, lookupVersion, NPM_NAME, testHooksSet, usingTestApi } from "./jsr-api.ts";
+import { BUMP_FILES, ISSUES_FILE, reviewedCommit, unreviewedFiles } from "./review-gate.ts";
 
 const manifest = JSON.parse(readFileSync(new URL("../jsr.json", import.meta.url), "utf8")) as {
   name: string;
@@ -66,8 +73,11 @@ const tag = `v${version}`;
 /** This same runtime, with its own flags — how the release runs its sibling scripts. */
 const self = [process.execPath, ...process.execArgv];
 
-/** The three files a version bump touches — the only ones the bump commit may hold. */
-const VERSION_FILES = ["jsr.json", "package.json", "src/report_core.ts"];
+/**
+ * What the bump commit holds: the three version files and `npm-dist.sha256`, the digest of the npm
+ * package bump built (CI publishes only a build with that digest; scripts/npm-digest.ts).
+ */
+const VERSION_FILES = BUMP_FILES;
 
 /** stdout of a command, trimmed, and its status. */
 function sh(cmd: string[]): { code: number; out: string } {
@@ -94,6 +104,31 @@ function refuse(why: string, ...more: string[]): never {
   console.error(`\nNothing was pushed.`);
   process.exit(1);
 }
+
+/** This machine's platform ID (workspace platforms.md: the six IDs). */
+function platformId(): string {
+  const os = { win32: "win", darwin: "mac", linux: "linux" }[process.platform as string];
+  const arch = { x64: "x64", arm64: "arm64" }[process.arch as string];
+  return os && arch ? `${os}-${arch}` : `${process.platform}-${process.arch}`;
+}
+
+/** The OS and its version, for the release's "Tested on:" line. */
+function osName(): string {
+  const release = osRelease();
+  if (process.platform === "win32") {
+    const build = Number(release.split(".")[2] ?? 0);
+    return `Windows ${build >= 22000 ? "11" : "10"} (build ${build})`;
+  }
+  return `${process.platform === "darwin" ? "macOS (Darwin" : "Linux (kernel"} ${release})`;
+}
+
+/** WSL is ready for the suite: Bun where publish.yml's pin put it, and a Chrome on its PATH. */
+const WSL_PROBE =
+  'test -x ~/.bun/bin/bun || { echo "no Bun at ~/.bun/bin"; exit 0; }; ' +
+  "for c in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge; do " +
+  'command -v "$c" >/dev/null && { echo ready; exit 0; }; done; echo "no Chrome on its PATH"';
+/** The WSL distro and version, as its os-release names it. */
+const WSL_OS = '. /etc/os-release && echo "$PRETTY_NAME"';
 
 console.log(`Releasing ${tag}${dryRun ? " (dry run: nothing is pushed)" : ""} …`);
 
@@ -172,10 +207,17 @@ console.log(`Releasing ${tag}${dryRun ? " (dry run: nothing is pushed)" : ""} �
       `Commit those on their own, then bump again.`,
     );
   }
+  if (!files.includes("npm-dist.sha256")) {
+    refuse(
+      `"bump to ${tag}" does not record the npm package's digest (npm-dist.sha256).`,
+      `bun run bump writes it; re-make the bump.`,
+    );
+  }
   const VERSION_LINE: Record<string, RegExp> = {
     "jsr.json": /^"version"\s*:\s*"[^"]*",?$/,
     "package.json": /^"version"\s*:\s*"[^"]*",?$/,
     "src/report_core.ts": /^export const VERSION = "[^"]*";$/,
+    "npm-dist.sha256": /^[0-9a-f]{64}$/,
   };
   for (const [file, ok] of Object.entries(VERSION_LINE)) {
     const diff = sh(["git", "diff", "HEAD^", "HEAD", "--unified=0", "--", file]).out;
@@ -226,6 +268,48 @@ console.log(`Releasing ${tag}${dryRun ? " (dry run: nothing is pushed)" : ""} �
   }
 }
 
+// 4b. The review set -- the release's first step once the tree is known to be the bump (workspace
+//    review standard § 9, letter H37 (d)). The five required reviews are agent work: this reads
+//    their RESULT, `Review complete: <commit>` in the git-ignored cmem/review-issues.md, and
+//    refuses when there is none, when that commit is not in this branch, or when code the review
+//    did not read changed since (only the bump's files and cmem/ may). See scripts/review-gate.ts.
+{
+  let text: string;
+  try {
+    text = readFileSync(new URL(`../${ISSUES_FILE}`, import.meta.url), "utf8");
+  } catch {
+    refuse(
+      `No ${ISSUES_FILE}: no review of this code is recorded.`,
+      `Run the review ("review": the five required classes); it ends with "Review complete: <commit>".`,
+    );
+  }
+  const reviewed = reviewedCommit(text);
+  if ("refusal" in reviewed) {
+    refuse(`The review gate refused ${tag}: ${reviewed.refusal}.`, `Run the review, then release.`);
+  }
+  const full = sh(["git", "rev-parse", "--verify", "--quiet", `${reviewed.commit}^{commit}`]);
+  if (full.code !== 0) refuse(`The reviewed commit ${reviewed.commit} is not in this repository.`);
+  if (sh(["git", "merge-base", "--is-ancestor", full.out, "HEAD"]).code !== 0) {
+    refuse(
+      `The reviewed commit ${reviewed.commit} is not an ancestor of HEAD: another line of work.`,
+    );
+  }
+  const changed = must(["git", "diff", "--name-only", full.out, "HEAD"], "git diff")
+    .split("\n")
+    .filter(Boolean);
+  const unreviewed = unreviewedFiles(changed);
+  if (unreviewed.length > 0) {
+    refuse(
+      `Code changed since the review (${reviewed.commit}) — the review did not read:`,
+      ...unreviewed.slice(0, 10),
+      `Re-review those changes, then update "Review complete:".`,
+    );
+  }
+  console.log(
+    `  review:  complete at ${reviewed.commit}; since then only ${changed.length} bump/memory file(s)`,
+  );
+}
+
 // 5. Both registries can take the number. Three answers, not two: 404 is "not published" and the
 //    only one that lets the release on; a record is "already published"; anything else -- a 5xx,
 //    a 429, a timeout, no network -- is "could not tell", and refuses: continuing past a check
@@ -269,19 +353,79 @@ console.log(`Releasing ${tag}${dryRun ? " (dry run: nothing is pushed)" : ""} �
   }
 }
 
-// 6. The cold gate, on exactly this commit: the same checks CI's `checks` job runs before it tags.
-//    The compatibility gate (workspace letter H6): api-surface.txt current, the bump since the last
-//    tag not below the surface floor, and for a patch or minor the last tag's samples PASS here.
-//    Bun only: the JSR upload check needs Deno, which this machine does not have (owner,
-//    2026-10-28), so it runs in CI -- ci.yml on every push, and `checks` before the tag.
-for (const [what, args] of [
-  ["The compatibility gate", ["scripts/compat.ts", "release", version]],
-  ["The type check", ["run", "check"]],
-] as const) {
+// 6. Every gate, LOCALLY, on exactly this commit (workspace review standard § 10: "every gate, the
+//    test suites included, runs locally and is not repeated on GitHub"; letter H37 (e), owner
+//    2026-11-19). CI only checks what belongs to publishing. Per ENGINE (letter H39): Bun (JSC) and
+//    Node (V8; the floor and each LTS line, through fnm) — Deno is V8 too and is not run here
+//    (owner, 2026-10-28: no Deno on this machine); JSR's own checks run in publish.yml's `checks`.
+//    The compatibility gate (letter H6): api-surface.txt current, the bump not below the surface
+//    floor since the last tag, and for a patch or minor the last tag's samples PASS here.
+const NODE_LINES = ["22.18.0", "24", "26"]; // the suite's Node lines (CI's node-suite until H37)
+const lastTag = sh(["git", "describe", "--tags", "--match", "v*", "--abbrev=0", "HEAD^"]).out;
+const gates: [string, string[]][] = [
+  ["The compatibility gate", [...self, "scripts/compat.ts", "release", version]],
+  ["The type check", [...self, "run", "check"]],
+  ["Formatting", [...self, "run", "format:check"]],
+  ["Lint", [...self, "run", "lint"]],
+  [
+    "The privacy gate",
+    [...self, "scripts/check-privacy.ts", ...(lastTag ? ["--commits", `${lastTag}..HEAD`] : [])],
+  ],
+  ["The memory size check", [...self, "scripts/check-cmem.ts", "--summary"]],
+  ["The suite on Bun", [...self, "run", "test"]],
+  ...NODE_LINES.map((v): [string, string[]] => [
+    `The suite on Node ${v}`,
+    [
+      "fnm",
+      "exec",
+      `--using=${v}`,
+      "node",
+      "--test",
+      "--test-concurrency=1",
+      "tests/build.test.ts",
+    ],
+  ]),
+  ["The runtime matrix (Node lines, Bun)", [...self, "scripts/check-runtimes.ts"]],
+  ["The npm package build", [...self, "run", "npm:build"]],
+  ["The npm package is the one bump recorded", [...self, "scripts/npm-digest.ts", "--check"]],
+  ["The npm package proven (Node lines, Bun)", [...self, "scripts/npm-prove.ts"]],
+];
+const testedOn = [`Tested on: ${osName()} (${platformId()})`];
+for (const [what, cmd] of gates) {
   console.log(`\n── ${what}`);
-  const p = spawnSync(self[0], [...self.slice(1), ...args], { stdio: "inherit" });
+  const p = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit" });
   if (p.status !== 0) refuse(`${what} refused ${tag}.`);
 }
+// linux-x64 through the dev machine's WSL (owner, 2026-11-19: "WSL Ubuntu locally"), when it is set
+// up: Bun at ~/.bun/bin and a Chrome on its PATH. Not set up is not a failure (the interim rule,
+// owner 2026-11-19: no release waits for a platform without a test run); it is not claimed either.
+if (process.platform === "win32") {
+  const probe = sh(["wsl.exe", "-e", "bash", "-lc", WSL_PROBE]);
+  if (probe.code === 0 && probe.out.includes("ready")) {
+    console.log("\n── The suite on Bun in WSL (linux-x64)");
+    const wslRoot = sh(["wsl.exe", "-e", "wslpath", "-a", process.cwd()]).out;
+    const p = spawnSync(
+      "wsl.exe",
+      [
+        "-e",
+        "bash",
+        "-lc",
+        `cd '${wslRoot}' && ~/.bun/bin/bun test --timeout 300000 tests/build.test.ts`,
+      ],
+      { stdio: "inherit" },
+    );
+    if (p.status !== 0) refuse(`The suite in WSL refused ${tag}.`);
+    testedOn.push(
+      `Tested on: ${sh(["wsl.exe", "-e", "bash", "-lc", WSL_OS]).out} in WSL (linux-x64)`,
+    );
+  } else {
+    console.log(
+      `\n·  linux-x64: WSL not set up (${probe.out || "no answer"}) — not run, not claimed`,
+    );
+  }
+}
+console.log(`\n${testedOn.join("\n")}\nOther platforms: not yet tested.`);
+console.log("   (Put these lines in the release's cmem/release.md entry and on its Release page.)");
 
 const head = must(["git", "rev-parse", "HEAD"], "git rev-parse HEAD");
 console.log(`\n  pushing main = ${head.slice(0, 12)}  bump to ${tag}`);

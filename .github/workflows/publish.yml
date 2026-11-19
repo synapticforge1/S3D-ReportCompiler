@@ -6,11 +6,15 @@ name: Publish to JSR and npm
 # `bump to vX.Y.Z`; `bun run release` pushes `main` ONLY -- no tag is made on a machine, ever. This
 # workflow runs on every push to main:
 #
-#   checks     {contents, actions: read} U5. Is this a release -- does jsr.json's version have no
-#              tag yet (or one on THIS commit: a re-run)? If not, it stops there. If so: both
-#              registries free, ci.yml green on this commit (every test, every runtime), the JSR
-#              upload check, the compatibility gate in release mode. Every third-party tool runs
-#              here or in npm-build, never beside a write or publishing credential.
+#   checks     {contents: read} U5. Is this a release -- does jsr.json's version have no tag yet (or
+#              one on THIS commit: a re-run)? If not, it stops there. If so: both registries free;
+#              JSR's own pre-publish checks (Deno: types, docs, the JSDoc examples, the dry run, the
+#              upload check); the npm package rebuilt and matched to the digest `bun run bump`
+#              recorded. NO TESTS: 🔒 every gate and test suite runs on the owner's machine, in
+#              `bun run release`, before main is pushed (workspace review standard § 10, letter H37;
+#              owner 2026-11-17: "We want the CI to verify the version, then tag, create the release
+#              page and publish, and skip any version already published"). Every third-party tool
+#              runs here or in npm-build, never beside a write or publishing credential.
 #   tag        {contents: write} U6. scripts/github-api.ts `tag`, fetched alone: the annotated tag
 #              vX.Y.Z on this commit, through the REST API, read back. A tag made with GITHUB_TOKEN
 #              starts no workflow run, so everything after it is in THIS run (`needs:`).
@@ -18,7 +22,9 @@ name: Publish to JSR and npm
 #              registry links of the version about to be published on top.
 #   jsr        {id-token: write} U8. Skips when JSR has the version; deno publish; the Rekor
 #              read-back, FATAL.
-#   npm-build  {contents: read} builds and proves the npm package (no credential); an artifact.
+#   npm-build  {contents: read} builds the npm package (no credential), refuses it unless its digest
+#              is npm-dist.sha256 -- the package proven locally by `bun run release` (owner,
+#              2026-11-19: "Digest match") -- and keeps it as an artifact.
 #   npm        {id-token: write} U8. That artifact; skips when npm has the version (of this
 #              commit); npm publish (trusted publishing); the provenance read-back, FATAL.
 #
@@ -66,13 +72,12 @@ jobs:
     name: Checks (is this a release?)
     runs-on: ubuntu-latest
     permissions:
-      actions: read # ci.yml's run on this commit
       contents: read
     outputs:
       release: ${{ steps.release.outputs.release }}
       tag: ${{ steps.release.outputs.tag }}
     steps:
-      # Token-less, full history and tags (the compatibility gate compares with the last tag).
+      # Token-less, full history and tags (the tag lookups below read them).
       - name: Checkout (no credentials)
         run: |
           git clone -q "https://github.com/${GITHUB_REPOSITORY}" .
@@ -80,8 +85,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       # A release when jsr.json's version has no tag on GitHub yet; a re-run when the tag is on THIS
-      # commit; anything else (the tag on an older commit) is an ordinary push of main, and ci.yml
-      # is what checks it.
+      # commit; anything else (the tag on an older commit) is an ordinary push of main: nothing to
+      # publish, so nothing runs.
       - name: Is this a release?
         id: release
         run: |
@@ -142,36 +147,23 @@ jobs:
           mkdir -p "$HOME/.deno/bin" && unzip -q "$RUNNER_TEMP/deno.zip" -d "$HOME/.deno/bin"
           echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
 
-      # Nothing is released from a commit CI did not pass: ci.yml runs every test on every runtime
-      # for each commit of main. This waits for its PUSH run of this commit (a pull_request run
-      # tests a merge commit, not this one) and requires success. No run, a failed run, a cancelled
-      # one, or one still going after 40 minutes: refused. GitHub's REST API from the Bun script,
-      # never the GitHub CLI (H30).
-      - name: ci.yml passed on this commit
-        if: steps.release.outputs.release == 'true'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          for i in $(seq 1 80); do
-            RUN=$(bun scripts/github-api.ts ci-run "${GITHUB_SHA}" || true)
-            set -- $RUN
-            if [ "${1:-}" = "completed" ]; then
-              if [ "${2:-}" = "success" ]; then
-                echo "✅ CI passed on ${GITHUB_SHA}: ${3}"
-                exit 0
-              fi
-              echo "::error::CI on ${GITHUB_SHA} concluded '${2}', not success -- refusing to release (${3})."
-              exit 1
-            fi
-            echo "  attempt ${i}/80: CI on ${GITHUB_SHA} is '${1:-not started}'"
-            sleep 30
-          done
-          echo "::error::No completed CI run for ${GITHUB_SHA} after 40 minutes -- refusing to release."
-          exit 1
-
+      # jsr.json sets "nodeModulesDir": "manual" -- Deno reads the node_modules Bun creates.
       - name: Install dependencies
         if: steps.release.outputs.release == 'true'
         run: bun install --frozen-lockfile
+
+      # JSR's own pre-publish checks -- validation of the publish, not tests (they ran in ci.yml
+      # until 2026-11-19, the one place Deno runs; owner: no Deno on the owner's machine). The type
+      # check and the docs score are JSR's; the JSDoc examples must compile (`--config jsr.json`:
+      # the examples import the package by its own name, which resolves only from the manifest --
+      # safe in a type check, never in `deno publish`, whose UPLOAD it broke).
+      - name: JSR checks -- types, docs, the JSDoc examples, the dry run
+        if: steps.release.outputs.release == 'true'
+        run: |
+          deno check main.ts src/report_core.ts src/report_runtime.ts
+          deno doc --lint src/*.ts
+          deno check --doc --config jsr.json src/*.ts
+          deno publish --dry-run
 
       # The last gate before an IMMUTABLE version: publish to a fake JSR on 127.0.0.1 (dummy token,
       # no provenance) and read the tarball -- `deno publish` has exited 0 on a corrupted upload.
@@ -179,14 +171,15 @@ jobs:
         if: steps.release.outputs.release == 'true'
         run: bun scripts/jsr-upload-check.ts
 
-      # SemVer is a gate result (letter H6): the surface since the last tag must meet the floor,
-      # and for a patch or minor the last tag's samples must PASS on this code (Chrome renders).
-      # `--unpublished`: a v<version> tag on this commit is a re-run's, not a release.
-      - name: The compatibility gate allows this version
+      # Before the tag, so a mismatch stops the release before JSR has the version: the npm package
+      # built here must be byte-for-byte the one `bun run release` proved on the owner's machine,
+      # whose digest `bun run bump` committed (owner, 2026-11-19: "Digest match"). npm-build checks
+      # it again on the copy it keeps.
+      - name: The npm package is the proven one (digest)
         if: steps.release.outputs.release == 'true'
-        env:
-          TAG: ${{ steps.release.outputs.tag }}
-        run: bun scripts/compat.ts release "${TAG#v}" --unpublished
+        run: |
+          bun run npm:build
+          bun scripts/npm-digest.ts --check
 
   tag:
     name: Tag ${{ needs.checks.outputs.tag }}
@@ -345,7 +338,7 @@ jobs:
   # installed dependencies (2026-11-07 review). After JSR: the proof compares the export list with
   # JSR's own npm build of this version, and npm only ever publishes a version JSR has.
   npm-build:
-    name: Build and prove the npm package
+    name: Build the npm package (the proven bytes)
     needs: [checks, jsr]
     runs-on: ubuntu-latest
     permissions:
@@ -358,29 +351,13 @@ jobs:
           git fetch -q --depth=1 origin "$GITHUB_SHA"
           git checkout -q --detach FETCH_HEAD
 
-      - name: Install Bun ${{ env.BUN_VERSION }}, Node ${{ env.NODE_VERSION }}, Deno ${{ env.DENO_VERSION }} (pinned by sha256)
+      - name: Install Bun ${{ env.BUN_VERSION }} (pinned by sha256)
         run: |
           curl -fsSL --retry 5 --retry-all-errors --max-time 300 -o "$RUNNER_TEMP/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip"
           echo "${BUN_SHA256}  $RUNNER_TEMP/bun.zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/bun.zip" -d "$RUNNER_TEMP"
           mkdir -p "$HOME/.bun/bin" && mv "$RUNNER_TEMP/bun-linux-x64/bun" "$HOME/.bun/bin/bun"
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          curl -fsSL --retry 5 --retry-all-errors --max-time 300 -o "$RUNNER_TEMP/node.tar.xz" "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
-          echo "${NODE_SHA256}  $RUNNER_TEMP/node.tar.xz" | sha256sum -c -
-          mkdir -p "$HOME/node" && tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$HOME/node" --strip-components=1
-          echo "$HOME/node/bin" >> "$GITHUB_PATH"
-          curl -fsSL --retry 5 --retry-all-errors --max-time 300 -o "$RUNNER_TEMP/deno.zip" "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip"
-          echo "${DENO_SHA256}  $RUNNER_TEMP/deno.zip" | sha256sum -c -
-          mkdir -p "$HOME/.deno/bin" && unzip -q "$RUNNER_TEMP/deno.zip" -d "$HOME/.deno/bin"
-          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
-
-      # For the proof's other Node versions (--install-node).
-      - name: Install fnm (v1.39.0, digest-checked)
-        run: |
-          curl -fsSL --max-time 300 -o /tmp/fnm.zip https://github.com/Schniz/fnm/releases/download/v1.39.0/fnm-linux.zip
-          echo "7807664f39d39fc518da1c35ba0181e4b3267603c4b1dedeb4b5fc6ae440a224  /tmp/fnm.zip" | sha256sum -c -
-          mkdir -p "$HOME/.fnm" && unzip -o -q /tmp/fnm.zip -d "$HOME/.fnm" && chmod +x "$HOME/.fnm/fnm"
-          echo "$HOME/.fnm" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -388,10 +365,13 @@ jobs:
       - name: Build the npm package
         run: bun run npm:build
 
-      # The tarball npm will publish, proven HERE, before it is kept: CI proved a separate build, so
-      # nothing checked the one that ships (review 5).
-      - name: Prove the package on every runtime
-        run: bun scripts/npm-prove.ts --deno --install-node
+      # The package that ships must be the one proven: review 5 found CI proving one build and
+      # publishing another. Since 2026-11-19 the proof runs on the owner's machine (`bun run release`,
+      # every Node line and Bun; H37: tests leave CI), and this build is held to its digest, which
+      # `bun run bump` committed. The build is byte-reproducible across machines (measured 2026-11-19:
+      # Windows and Linux clones of one commit, one digest).
+      - name: The package is the proven one (digest)
+        run: bun scripts/npm-digest.ts --check
 
       - name: Keep the package for the publish job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

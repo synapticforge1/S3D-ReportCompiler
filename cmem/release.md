@@ -9,22 +9,25 @@ The workspace process this follows: `../workspace/cmem/release-process.md` §§ 
 U1–U12, the owner's order D1). The owner's words (letter H34): **"release" = "push", then this
 process.** Nothing is bumped, pushed or released unless the owner says so.
 
-## How a release is made (since 2026-11-10)
+## How a release is made (since 2026-11-19, letter H37)
 
 🔒 **The owner's order (2026-11-10): "the CI to check first, then push the tag, and then create the
 release page from the tag, then publish the package to the registry."** No tag is made on a
-machine any more.
+machine. 🔒 **Since 2026-11-17 / 11-19 (letter H37): the tests run on the owner's machine, and CI only
+publishes** — owner: "We want the CI to verify the version, then tag, create the release page and
+publish, and skip any version already published." `ci.yml` was retired on 2026-11-19.
 
-🔒 **Before every release, a security review and a hardening review (owner, 2026-11-12;
-[review-process.md](review-process.md) § 0)**, each run on everything since the last release until
-a round's reviewers find nothing, and recorded in that release's entry below before `bun run bump`.
-A release whose two reviews are not recorded is not ready.
+🔒 **Before every release, the review set (workspace review standard; [review-process.md](review-process.md)):**
+the five required reviews (basic, hardening, licensing, security, privacy), one loop, until a
+re-review is empty and the full suite has passed; the main agent then writes `Review complete:
+<commit>` in the git-ignored `cmem/review-issues.md`. `bun run release` reads it first.
 
 ```bash
 bun run bump patch | minor | major    # the level is required; refuses a dirty tree (untracked
                                       # files count) and a level below the compatibility floor;
-                                      # commits "bump to vX.Y.Z" (the three version files only)
-bun run release -- --dry-run          # every guard and the cold gate; pushes nothing
+                                      # builds the npm package, writes npm-dist.sha256, and
+                                      # commits "bump to vX.Y.Z" (three version files + the digest)
+bun run release -- --dry-run          # every guard and every gate; pushes nothing
 bun run release                       # the same, then pushes main ONLY, reads it back, and
                                       # waits for verify-release --wait --npm --github
 ```
@@ -32,52 +35,81 @@ bun run release                       # the same, then pushes main ONLY, reads i
 `bun run release` ([scripts/publish.ts](../scripts/publish.ts)) refuses, with nothing pushed:
 a tree with any change (untracked counted); HEAD not on `main` tracking `origin/main`; `main` not
 exactly `origin/main` + one commit; that commit not `bump to v<jsr.json version>`, or touching
-anything but the version lines of `jsr.json` / `package.json` / `src/report_core.ts`, or the three
-disagreeing; the tag present locally or on origin; JSR not answering 404 or npm unable to take the
-number (a registry that cannot answer refuses; a test hook refuses outside `--dry-run`); the
-compatibility gate in release mode or the type check failing (the JSR upload check needs Deno, so
-only CI runs it: ci.yml on every push, `checks` before the tag). Then
+anything but the version lines of `jsr.json` / `package.json` / `src/report_core.ts` and the digest
+line of `npm-dist.sha256`, or without the digest, or the three versions disagreeing; the tag present
+locally or on origin; **no review recorded** — no `Review complete: <commit>`, that commit not an
+ancestor of HEAD, or anything but the bump's files and `cmem/` changed since it
+([scripts/review-gate.ts](../scripts/review-gate.ts)); JSR not answering 404 or npm unable to take
+the number (a registry that cannot answer refuses; a test hook refuses outside `--dry-run`). Then
+**every gate, locally**: the compatibility gate in release mode, types, format, lint, the privacy
+gate (the tree and the commit messages since the last tag), the memory size check, the suite on Bun
+and on Node 22.18 / 24 / 26 (fnm), the runtime matrix, the npm package rebuilt, matched to
+`npm-dist.sha256` and proven (`npm-prove`, every Node line and Bun), and the suite in WSL
+(`linux-x64`) when WSL has Bun and Chrome. It prints the release's `Tested on:` lines. Then
 `git push origin main` (never forced) and `git ls-remote` must read the commit back.
 
 [`.github/workflows/publish.yml`](../.github/workflows/publish.yml) runs on every push to `main`:
 
-Columns: job · permission · what.
-
-- `checks` — contents, actions: read — is this a release (jsr.json's version untagged, or tagged on THIS commit = a
-  re-run)? If so: both registries free, ci.yml green on this commit, the JSR upload check, the compatibility gate
-  (`--unpublished`)
-- `tag` — contents: write — `github-api.ts tag`: the annotated `vX.Y.Z` on this commit via REST, read back; one on another commit is refused
+- `checks` — contents: read — is this a release (jsr.json's version untagged, or tagged on THIS commit = a re-run)?
+  If so: both registries free; JSR's own checks (`deno check`, `deno doc --lint`, `deno check --doc`,
+  `deno publish --dry-run`, the upload check); the npm package rebuilt and matched to `npm-dist.sha256`. No tests
+- `tag` — contents: write — `github-api.ts tag`: the annotated `vX.Y.Z` on this commit via REST, read back; one on
+  another commit is refused
 - `release` — contents: write — `github-api.ts release`: the Release page from the tag, H32's recipe
 - `jsr` — id-token: write — skip if JSR has it, else `deno publish`; the Rekor read-back, **fatal**
-- `npm-build` — contents: read — build + prove the npm package; an artifact (7 days)
-- `npm` — id-token: write — that artifact; skip if npm has it from this commit (gitHead); `npm publish` (OIDC); the provenance read-back, **fatal**
+- `npm-build` — contents: read — build the npm package; refuse unless its digest is `npm-dist.sha256`; an artifact
+  (7 days)
+- `npm` — id-token: write — that artifact; skip if npm has it from this commit (gitHead); `npm publish` (OIDC); the
+  provenance read-back, **fatal**
 
-Every tool sha256-pinned (Bun 1.4.4, Deno 2.9.8, Node 24.21.0, fnm 1.39.0); the two actions left
+Every tool sha256-pinned (Bun 1.4.4, Deno 2.9.8, Node 24.21.0); the two actions left
 (`upload-artifact`, `download-artifact`) pinned to commits; `permissions: {}` at the top;
 token-less clones; scripts in the write-token jobs fetched alone at the commit; every request
 limited to 30 s (`github-api.ts`) or `--max-time`. Each commit of main is its own concurrency
 group, never cancelled.
+
+**Why the digest (owner, 2026-11-19: "Digest match"):** review 5 found CI proving one npm build and
+publishing another; CI then proved the tarball it shipped. With the tests off CI, the proof runs in
+`bun run release` and CI publishes only a build whose digest is the proven one. The build is
+byte-reproducible across machines — measured 2026-11-19: clean Windows and Linux clones of one
+commit gave one digest, and a real `bump major` on Windows matched a fresh Linux build. `npm-build`
+refuses a shipped text file with a CR (a CRLF checkout once made `LICENSE` differ).
+
+**Deno (owner, 2026-11-19):** JSR's pre-publish checks run in `checks`, as validation of the publish;
+Deno's test legs (the runtime matrix, the npm proof) are not run — Node covers the V8 engine
+(letter H39), and this machine has no Deno dependency (owner, 2026-10-28).
 
 **Failure (U12):** "Re-run failed jobs" in that run — each job skips what is done. Never a new tag
 for the same code, never a moved tag. If the version cannot be published at all, bump again.
 
 ### The slots, and what this repo records instead (§ 7 of the workspace process)
 
-Columns: slot · here.
-
-- U1–U3 — `bun run bump <level>` — gate `compat.ts gate <level>` (floor from `api-surface.txt` since the last tag; the last tag's samples on a patch / minor)
+- U1 — the review set first (`review-gate.ts`, in `bun run release`), then every gate locally (above)
+- U2–U3 — `bun run bump <level>` — gate `compat.ts gate <level>` (floor from `api-surface.txt` since the last tag;
+  the last tag's samples on a patch / minor); the npm digest
 - U4 — `bun run release` as above; `--dry-run`
-- U5 — `checks` — the full test suite is ci.yml's, required green on the commit rather than re-run
+- U5 — `checks` — publishing checks only (version, tag, registries, JSR's checks, the npm digest); no tests
 - U6–U7 — `tag`, `release`
 - U8 — `jsr`, `npm-build` → `npm`. ⚠️ **Exception, recorded:** the `jsr` job runs `bun install --frozen-lockfile
   --ignore-scripts` beside `id-token`, because jsr.json's `"nodeModulesDir": "manual"` (one `node_modules` for every
   runtime — [architecture.md](architecture.md)) makes `deno publish` need one on disk. Lockfile-exact,
   integrity-checked, nothing installed runs. A Deno-side resolution was ruled out by the owner (2026-11-10: Bun
   solutions only)
-- U9 — as above. ci.yml's own tool pins are outside H33's list and unchanged
-- U10 — `verify-release --wait --npm --github` at the end of `bun run release`, plus an install from npm into a scratch folder (recorded per release below)
-- U11 — this file. **No `CHANGELOG.md`**: the README's "Breaking Changes" table is the user-facing record, this file the release record
+- U9 — as above
+- U10 — `verify-release --wait --npm --github` at the end of `bun run release`, plus an install from npm into a
+  scratch folder (recorded per release below)
+- U11 — this file, with each release's `Tested on:` lines (letter H37, the interim rule). **No `CHANGELOG.md`**: the
+  README's "Breaking Changes" table is the user-facing record, this file the release record
 - U12 — as above
+
+**The H37 change, rehearsed 2026-11-19** (best-practices 7.22; nothing reached GitHub or a registry):
+`publish.yml` parsed (Bun.YAML) to the same job graph and permissions, its 31 `run:` steps pass
+`bash -n`; the JSR checks are ci.yml's commands, unchanged; in a scratch clone `bump major` committed
+the four files and `npm-dist.sha256`, and CI's two digest commands in a fresh WSL (Ubuntu) clone of
+that commit passed, and refused a wrong digest. The review gate's refusals and the bump are in the
+suite (`H33: the release pushes main only …`, `H33: bump takes a level …`, `the review gate …`).
+**Unmeasured on GitHub until the next release's run.**
+
 
 **Measured by 1.4.0 (2026-11-10), the first release under this order:** JSR accepts the OIDC
 publish from a run on `refs/heads/main` whose tag `github-actions[bot]` made, attested (the

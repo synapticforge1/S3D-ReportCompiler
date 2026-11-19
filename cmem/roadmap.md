@@ -185,7 +185,11 @@ fixed, the drive path at HEAD replaced, `maintenance.strategy gc` set, the ★ b
    Was: memory migration first — `check-cmem` (`../workspace/tools/check-cmem.ts --summary
    cmem`): 847 problems (no STATE.md, INDEX > 3 KB, 835 lines > 200 chars, 10 files > 25 KB;
    known-issues 151 KB, roadmap 138 KB, testing 64 KB). ⚠️ STATE.md takes over the status line
-   from this file. (b) **H37** items (a)–(g): `review-process.md` from the final standard;
+   from this file. (b) ✅ **H37 done 2026-11-19** (owner: "proceed with step 3"; Deno: JSR's checks in
+   publish, test legs dropped; Linux: WSL; npm: "Digest match"): slot file, issues file + privacy
+   gate, R1–R9 moved, review gate + local gates in `publish.ts`, `ci.yml` retired, review words,
+   `platforms.md`, README `Tested on:` (release.md § "How a release is made"). Found on the way: #129,
+   #130 (both fixed). Left: Chrome in WSL (owner, `sudo apt`). Was: **H37** items (a)–(g): `review-process.md` from the final standard;
    `cmem/review-issues.md` gitignored + a privacy gate; open known-issues moved there; a review
    step in `publish.ts`; `ci.yml`'s test jobs removed and `publish.yml`'s "ci.yml passed" check
    replaced (a changed release job: rehearse first, never mid-release); the review words in Owner

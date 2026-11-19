@@ -1,6 +1,6 @@
 /**
  * Reads what `deno publish` would UPLOAD to JSR and refuses anything but this package, intact
- * (bun-migration step 7). CI runs it (.github/workflows/ci.yml); it needs Deno, so a developer
+ * (bun-migration step 7). publish.yml's `checks` runs it before the tag (ci.yml did until 2026-11-19); it needs Deno, so a developer
  * machine does not (owner, 2026-10-28: no Deno on this machine).
  *
  *   bun scripts/jsr-upload-check.ts
@@ -147,10 +147,13 @@ for (let pos = 0; pos + 512 <= tar.length;) {
 // 1. The file list.
 const expected = new Set<string>();
 for (const inc of manifest.publish.include) {
-  const m = /^([\w./-]*?)\/?\*(\.\w+)$/.exec(inc);
+  // `dir/*.ext`, or `dir/*` -- every FILE directly in dir (fonts/liberation/*, task 19; the check
+  // refused that form, and nothing ran it between 2026-11-11 and 2026-11-19, H37).
+  const m = /^([\w./-]*?)\/?\*(\.\w+)?$/.exec(inc);
   if (m) {
-    for (const f of readdirSync(join(root, m[1])))
-      if (f.endsWith(m[2])) expected.add(`${m[1]}/${f}`);
+    for (const f of readdirSync(join(root, m[1]), { withFileTypes: true }))
+      if (f.isFile() && (m[2] === undefined || f.name.endsWith(m[2])))
+        expected.add(`${m[1]}/${f.name}`);
   } else if (/\*/.test(inc))
     throw new Error(`publish.include pattern this check cannot read: ${inc}`);
   else expected.add(inc);

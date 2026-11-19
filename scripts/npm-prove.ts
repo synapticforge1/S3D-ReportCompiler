@@ -7,7 +7,7 @@
  *     `npm publish --dry-run` takes the manifest without "auto-correcting" it;
  *  2. install the tarball into a scratch project OUTSIDE the repo, as a user would;
  *  3. on the manifest's Node floor, every current Node LTS line (Node's own schedule), Bun, and Deno
- *     with `--deno` (CI passes it; a developer machine has no Deno, owner 2026-10-28):
+ *     with `--deno` (nothing passes it since 2026-11-19: Node covers V8, letter H39; no Deno here):
  *     import `.` and `./runtime`, and run the INSTALLED CLI on the sample reports — it must PASS and
  *     bake the same document, byte for byte, as the source does — and on a model report with
  *     `S3D_RENDERER=native` (roadmap task 19, T1-2): it must PASS and write the same PDF, byte for
@@ -233,7 +233,10 @@ try {
         ]
       : []),
   ];
-  if (!withDeno) console.log("·  deno: runs in CI (.github/workflows/ci.yml), not on this machine");
+  if (!withDeno)
+    console.log(
+      "·  deno: not run here — Node covers the V8 engine (letter H39); JSR's checks run in publish.yml",
+    );
   const cli = join(consumer, "node_modules", ...NAME.split("/"), "main.js");
   const probes = new Set<string>();
   for (const [label, exec] of runtimes) {

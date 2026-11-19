@@ -13,7 +13,6 @@
  *
  *   bun scripts/github-api.ts commit <ref>           the commit a ref names (exit 2: none)
  *   bun scripts/github-api.ts compare <base> <head>  the compare status ("identical", "behind", ...)
- *   bun scripts/github-api.ts ci-run <sha>           "status conclusion url" of ci.yml's push run, or nothing
  *   bun scripts/github-api.ts tag <tag> <sha>        the annotated release tag, made by CI (U6)
  *   bun scripts/github-api.ts release <tag> <sha>    the Release page, by the recipe above
  *
@@ -96,19 +95,6 @@ export async function compareStatus(env: Env, base: string, head: string): Promi
   if (r.status !== 200 || typeof status !== "string")
     throw new ApiError(`GET compare ${base}...${head}: HTTP ${r.status}`);
   return status;
-}
-
-/** The newest PUSH run of ci.yml on a commit: "status conclusion url", or "" when none yet. */
-export async function ciRun(env: Env, sha: string): Promise<string> {
-  const r = await call(
-    env,
-    "GET",
-    `repos/${env.repo}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&per_page=1`,
-  );
-  if (r.status !== 200) throw new ApiError(`GET ci.yml runs for ${sha}: HTTP ${r.status}`);
-  const run = (field(r.json, "workflow_runs") as unknown[] | undefined)?.[0];
-  if (!run) return "";
-  return `${field(run, "status")} ${field(run, "conclusion") ?? "none"} ${field(run, "html_url")}`;
 }
 
 /** The commit a tag peels to (an annotated tag followed to its commit); null when there is no tag. */
@@ -238,7 +224,7 @@ if (import.meta.main) {
   };
   const usage = () => {
     console.error(
-      "usage: bun scripts/github-api.ts commit <ref> | compare <base> <head> | ci-run <sha> | tag <tag> <sha> | release <tag> <sha>",
+      "usage: bun scripts/github-api.ts commit <ref> | compare <base> <head> | tag <tag> <sha> | release <tag> <sha>",
     );
     process.exit(64);
   };
@@ -253,7 +239,6 @@ if (import.meta.main) {
       console.log(sha);
     } else if (command === "compare" && args.length === 2)
       console.log(await compareStatus(env, args[0], args[1]));
-    else if (command === "ci-run" && args.length === 1) console.log(await ciRun(env, args[0]));
     else if (command === "tag" && args.length === 2) await createTag(env, args[0], args[1]);
     else if (command === "release" && args.length === 2) {
       await release(env, args[0], args[1], args[0].replace(/^v/, ""));

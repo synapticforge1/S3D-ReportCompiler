@@ -1,6 +1,7 @@
 /**
  * Raises the `version` in jsr.json, propagates it to package.json + src/report_core.ts (by
- * importing sync-version.ts), and commits the three as `bump to vX.Y.Z` — the bump is its own
+ * importing sync-version.ts), builds the npm package and records its digest in npm-dist.sha256,
+ * and commits the four as `bump to vX.Y.Z` — the bump is its own
  * commit, made by the tooling and never folded into other work (workspace release-process.md § 5,
  * U1–U3; letter H33, 2026-11-10).
  *
@@ -31,6 +32,7 @@
 
 import { spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
+import { BUMP_FILES } from "./review-gate.ts";
 
 /** UTF-8 text, a leading BOM KEPT — as `Deno.readTextFile` returned it (measured 2026-10-26). */
 const readText = (p: string) => readFile(p, "utf8");
@@ -38,8 +40,12 @@ const readText = (p: string) => readFile(p, "utf8");
 const root = process.cwd();
 const manifestPath = `${root}/jsr.json`;
 
-/** The three files a version bump touches — the only ones its commit holds. */
-const VERSION_FILES = ["jsr.json", "package.json", "src/report_core.ts"];
+/**
+ * What the bump commit holds, and nothing else: the three version files, and `npm-dist.sha256` —
+ * the digest of the npm package built from them. CI publishes to npm only a build with that digest,
+ * so what ships is the package `bun run release` proves here (owner, 2026-11-19, letter H37 (e)).
+ */
+const VERSION_FILES = BUMP_FILES;
 
 const LEVELS = ["patch", "minor", "major"];
 const args = process.argv.slice(2);
@@ -115,10 +121,31 @@ console.log(`✅ jsr.json           → ${to}  (${kind} bump from ${from})`);
 // Propagate the freshly-written version to package.json + src/report_core.ts.
 await import("./sync-version.ts");
 
-// The bump commit: the three version files only (a pathspec commit), under the name the release
-// script and CI look for.
+// The npm package at this version, and its digest (scripts/npm-digest.ts). The build is
+// byte-reproducible across machines (measured 2026-11-19: Windows and Linux, the same digest).
+for (const [what, script, args] of [
+  ["npm package build", "scripts/npm-build.ts", []],
+  ["npm package digest", "scripts/npm-digest.ts", ["--write"]],
+] as const) {
+  const p = spawnSync(process.execPath, [...process.execArgv, script, ...args], {
+    stdio: "inherit",
+  });
+  if (p.status !== 0) {
+    console.error(`❌ bump: the ${what} failed. The version files are written but not committed:`);
+    console.error(
+      `   git checkout -- ${VERSION_FILES.filter((f) => f !== "npm-dist.sha256").join(" ")}`,
+    );
+    process.exit(1);
+  }
+}
+
+// The bump commit: the version files and the digest only (a pathspec commit), under the name the
+// release script and CI look for. Added first: the first bump CREATES npm-dist.sha256, and a
+// pathspec commit refuses a path git does not know yet.
 const subject = `bump to v${to}`;
-const commit = git("commit", "-q", "-m", subject, "--", ...VERSION_FILES);
+const added = git("add", "--", ...VERSION_FILES);
+const commit =
+  added.code !== 0 ? added : git("commit", "-q", "-m", subject, "--", ...VERSION_FILES);
 if (commit.code !== 0) {
   console.error(`❌ bump: the version files are written, but the commit failed:\n${commit.err}`);
   console.error(

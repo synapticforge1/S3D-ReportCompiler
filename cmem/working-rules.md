@@ -104,6 +104,13 @@ The process and every release: [release.md](release.md).
 - ⚠️ **No heredocs; commit messages via `git commit -F <file>`; scripts are Bun TypeScript**
   (workspace Tooling rules; `scripts/` and `tests/controls/` run on Bun since 2026-10-26, roadmap task 12,
   [archive/bun-migration.md](archive/bun-migration.md)).
+- ⚠️ **A workflow run is read after every push, not assumed.** GitHub's public API, no `gh`:
+  `curl -s "https://api.github.com/repos/synapticforge1/S3D-ReportCompiler/actions/runs?head_sha=<sha>"`.
+  Three red runs went unread on 2026-11-19 (ledger #129); since H37 only `publish.yml` runs, and a red
+  `checks` on a bump commit stops the release before the tag.
+- ⚠️ **JSR's own checks run only in `publish.yml`, at release** (no Deno here). A broken JSDoc example
+  or upload pattern is found then, before the tag (#129, #130). Before a bump, a one-off run with
+  any Deno at hand finds it earlier: `deno check --doc --config jsr.json src/*.ts`.
 
 After any change, run the build: it verifies itself and exits non-zero if the PDF no longer
 reproduces its sources. Never add `--no-verify` to a release path.
@@ -139,7 +146,7 @@ Workspace rules recorded here (2026-11-09; full text `../workspace/cmem/tooling-
   repo's files, registry APIs); the release workflow calls GitHub's REST API through
   `scripts/github-api.ts` (Bun, `GITHUB_TOKEN`); a GitHub web-UI task is an owner item.
 - 🔒 **Every Bun-version notation is the latest installed Bun (H31, Tooling rule 10)** — 1.4.4 on
-  Windows and in WSL (measured 2026-11-09): every `bun-version:` pin in `ci.yml` / `publish.yml`.
+  Windows and in WSL (measured 2026-11-09): every Bun pin in `publish.yml` (and in WSL, `~/.bun/bin`).
   When the owner installs a newer Bun, move them at the next session, gate run first; dated test
   results stay until re-run.
 - 🔒 **The release CI makes the GitHub Release page (H32)**, by the recipe: the `release` job runs
@@ -171,6 +178,19 @@ H34). When the owner says:
 
 Each command includes the one before it, and none goes further than its own word (a "commit"
 never pushes, a "push" never releases). This repo's own gate and merge rules apply at each step.
+
+## Owner commands: the review words (owner, 2026-11-17; letter H37)
+
+- **"review"** — the five required classes in order (basic, hardening, licensing, security, privacy),
+  one agent each, through the workspace standard's loop until a re-review is empty, then the full suite
+  once on every platform that can run today. Fixes on a local review branch; findings in the git-ignored
+  `cmem/review-issues.md`; at the end `Review complete: <commit>` there. Nothing is committed, pushed or
+  released by the review itself.
+- **"basic review"**, **"hardening review"**, **"licensing review"**, **"security review"**,
+  **"privacy review"** — that class alone, through the same loop.
+- **"efficiency review"** — optional, never blocks a release; when it runs, it runs before the others.
+
+The standard: `../workspace/cmem/review-process.md`; this repo's slots: [review-process.md](review-process.md).
 
 ## Reading order for a new subject
 

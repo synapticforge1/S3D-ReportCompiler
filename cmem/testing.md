@@ -23,13 +23,16 @@ cd local && bun ../main.ts               # the real 48-report set
 cd local && node ../main.ts              # same, on Node
 ```
 
-**On GitHub, not here: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)**, on every push
-and PR (🔒 owner, 2026-10-28: no Deno on this machine). It repeats the checks above from a bare
-checkout (`bun install --frozen-lockfile`; `npm ci` until 2026-10-28), and runs what needs Deno, installed per run by `setup-deno`: `deno check`,
-`deno doc --lint src/*.ts` (docs coverage, a scored JSR criterion), `deno check --doc src/*.ts` (the
-JSDoc examples compile), `deno publish --dry-run` (JSR validation, slow types included), and the
-Deno legs of `runtimes` and `npm:prove` (`--deno`; `--install-node` installs the Node lines with
-fnm). Locally those two scripts print `· deno: runs in CI`, so the gap is never silent.
+**Every test runs HERE, not on GitHub (🔒 since 2026-11-19, letter H37: "CI only publishes").**
+`bun run release` runs them all before it pushes (release.md § "How a release is made"): the suite on
+Bun and on Node 22.18 / 24 / 26 through fnm (`fnm exec --using=<v> node --test …`), the runtime
+matrix, the npm proof, and the suite in WSL (`linux-x64`) when WSL has Bun and Chrome. `ci.yml`, which
+repeated them on every push, is retired. What needs Deno (🔒 owner, 2026-10-28: no Deno on this
+machine) is JSR's own pre-publish checks — `deno check`, `deno doc --lint src/*.ts` (docs coverage, a
+scored JSR criterion), `deno check --doc --config jsr.json src/*.ts` (the JSDoc examples compile),
+`deno publish --dry-run` — and those run in `publish.yml`'s `checks` job, before the tag. Deno's TEST
+legs are not run: Node covers the V8 engine (letter H39). `runtimes` and `npm:prove` print
+`· deno: not run here`, so that is never silent.
 
 ### ⚠️ A dry run in your working tree is not a rehearsal for CI
 
@@ -43,7 +46,7 @@ deno publish --dry-run          # must fail without deps — that IS the CI cond
 bun install --frozen-lockfile && deno publish --dry-run  # must succeed
 ```
 
-(That needs Deno — on this machine it runs in CI only; the JSR job does exactly this.)
+(That needs Deno — on this machine it runs in CI only; `publish.yml`'s `checks` does exactly this.)
 This is how bug #23 was found, one failed release too late: the workflow had no `npm ci`, so
 `deno publish` could not resolve `mathjax-full` under `"nodeModulesDir": "manual"`.
 

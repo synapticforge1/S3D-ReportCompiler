@@ -8423,6 +8423,9 @@ test("private paths stay ignored by git", () => {
   for (const path of [
     "local/HTMLFilesToBeCompiled/member_0_report.html",
     "cmem/local/environment.md",
+    "cmem/local/transcript/session-transcript.md",
+    // Open review findings never reach GitHub (workspace review standard, H37 (b), 2026-11-19).
+    "cmem/review-issues.md",
     "cmem/transcript/session-transcript.md",
     "CompiledPDF/combined_report.pdf",
     "tests/CompiledPDF/combined_report.html",
@@ -8449,6 +8452,86 @@ test("private paths stay ignored by git", () => {
     { cwd: ROOT },
   );
   assert.equal(s.status, 1, "the committed samples are ignored");
+});
+
+test("the privacy gate refuses real paths, addresses and a tracked issues file (H37 (b))", async () => {
+  const gate = await import(pathToFileURL(join(ROOT, "scripts", "check-privacy.ts")).href);
+  // Built at run time, so this file itself carries no path or address for the gate to find.
+  const bs = "\\";
+  const sl = "/";
+  const real = [
+    `C:${bs}Users${bs}alicesmith${bs}repo`,
+    `D:${bs}${bs}Programs${bs}${bs}clientjob${bs}${bs}x`,
+    `${sl}mnt${sl}c${sl}Users${sl}alicesmith${sl}repo`,
+    `${sl}home${sl}bobjones${sl}work`,
+    `${sl}Users${sl}bobjones${sl}Desktop${sl}x`,
+    `carol.real${"@"}realmail.com`,
+  ];
+  for (const line of real) {
+    // At least once: a WSL home path is both a /mnt path and a /Users path.
+    assert.ok(
+      gate.findLeaks("t", line).length >= 1,
+      `not refused: ${line.replace(/[a-z]{4,}/g, "…")}`,
+    );
+  }
+  // Placeholders and this repo's invented identities name no machine.
+  const fine = [
+    `C:${bs}Users${bs}<user>${bs}x`,
+    `c:${bs}${bs}Users${bs}${bs}...`,
+    `D:${bs}Programs${bs}…`,
+    `C:${bs}Users${bs}me${bs}Downloads${bs}pack.zip`,
+    `/home/runner/work/x`,
+    `kestrel.brumby${"@"}brumby-mail.org`,
+    `noreply${"@"}anthropic.com`,
+  ];
+  for (const line of fine) assert.deepEqual(gate.findLeaks("t", line), [], `refused: ${line}`);
+  assert.deepEqual(
+    gate.privateFilesTracked(["cmem/review-issues.md", "cmem/STATE.md", "local/x.html"]),
+    ["cmem/review-issues.md", "local/x.html"],
+  );
+  // The tree as it stands passes.
+  const r = spawnSync(process.execPath, [join(ROOT, "scripts", "check-privacy.ts")], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("the review gate reads one record, and only bump and memory files may follow it (H37 (d))", async () => {
+  const g = await import(pathToFileURL(join(ROOT, "scripts", "review-gate.ts")).href);
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  assert.deepEqual(g.reviewedCommit(`x\nReview complete: ${sha}\n`), { commit: sha });
+  assert.deepEqual(g.reviewedCommit(`﻿Review complete: ${sha}\r\n`), { commit: sha }, "BOM, CRLF");
+  assert.deepEqual(g.reviewedCommit("Review complete: 0123abc"), { commit: "0123abc" });
+  for (const [text, why] of [
+    ["nothing here", /no "Review complete:" line/],
+    ["Review complete: none", /no review is complete/],
+    ["Review complete:", /no review is complete/],
+    [`Review complete: ${sha}\nReview complete: ${sha}`, /more than one/],
+    ["Review complete: HEAD", /"Review complete: HEAD" is not a commit id/],
+    ["Review complete: 0123ab", /is not a commit id/],
+  ] as const) {
+    const r = g.reviewedCommit(text);
+    assert.ok(
+      "refusal" in r && why.test(r.refusal),
+      `${JSON.stringify(text)}: ${JSON.stringify(r)}`,
+    );
+  }
+  assert.deepEqual(
+    g.unreviewedFiles([
+      "jsr.json",
+      "package.json",
+      "src/report_core.ts",
+      "npm-dist.sha256",
+      "cmem/STATE.md",
+      "cmem/archive/x.md",
+      "cmem/review-issues.md",
+      "src/report_render.ts",
+      "main.ts",
+      ".github/workflows/publish.yml",
+    ]),
+    ["cmem/review-issues.md", "src/report_render.ts", "main.ts", ".github/workflows/publish.yml"],
+  );
 });
 
 // ── the release scripts against a fake JSR ───────────────────────────────────
@@ -8758,22 +8841,33 @@ function releaseClone(
   for (const f of readdirSync(join(ROOT, "scripts")).filter((n) => n.endsWith(".ts"))) {
     writeFileSync(join(dir, "scripts", f), readFileSync(join(ROOT, "scripts", f)));
   }
+  // And this tree's .gitignore: it ignores cmem/review-issues.md, the review record below.
+  writeFileSync(join(dir, ".gitignore"), readFileSync(join(ROOT, ".gitignore")));
   git("add", "-A");
   git("commit", "-q", "--allow-empty", "-m", "release test setup");
   git("push", "-q", "--force", "origin", "main");
   git("branch", "-q", "-u", "origin/main");
   const setup = git("rev-parse", "HEAD");
+  // The review set is complete at the setup (H37 (d)): the release's later guards are reachable.
+  writeFileSync(join(dir, "cmem", "review-issues.md"), `# issues\n\nReview complete: ${setup}\n`);
   if (opts.bump) opts.bump(dir);
   else bumpTo(dir, opts.version ?? "9.9.9");
   return { dir, origin, setup };
 }
 
-/** What `bun run bump` commits: the three version lines, under `bump to v<version>`. */
+/**
+ * What `bun run bump` commits: the three version lines and the npm package's digest (a stand-in:
+ * no test here reaches the gate that rebuilds the package), under `bump to v<version>`.
+ */
 function bumpTo(
   dir: string,
   version: string,
-  files = ["jsr.json", "package.json", "src/report_core.ts"],
+  files = ["jsr.json", "package.json", "src/report_core.ts", "npm-dist.sha256"],
 ) {
+  if (files.includes("npm-dist.sha256")) {
+    writeFileSync(join(dir, "npm-dist.sha256"), `${"0".repeat(64)}\n`);
+    spawnSync("git", ["-C", dir, "add", "npm-dist.sha256"]);
+  }
   const edit = (f: string, re: RegExp, to: string) => {
     const p = join(dir, f);
     const text = readFileSync(p, "utf8");
@@ -8958,6 +9052,46 @@ test(
         },
         /origin already has v9\.9\.9/,
       ],
+      // H37 (d): the review set is the release's first step after these guards.
+      [
+        "a bump without the npm digest",
+        (dir) => {
+          spawnSync("git", ["-C", dir, "rm", "-q", "--cached", "npm-dist.sha256"]);
+          rmSync(join(dir, "npm-dist.sha256"));
+          spawnSync("git", ["-C", dir, "commit", "-q", "--amend", "--no-edit"]);
+        },
+        /does not record the npm package's digest \(npm-dist\.sha256\)/,
+      ],
+      [
+        "no review record",
+        (dir) => rmSync(join(dir, "cmem", "review-issues.md")),
+        /No cmem\/review-issues\.md: no review of this code is recorded/,
+      ],
+      [
+        "a review not complete",
+        (dir) => writeFileSync(join(dir, "cmem", "review-issues.md"), "Review complete: none\n"),
+        /says no review is complete/,
+      ],
+      [
+        "a reviewed commit not here",
+        (dir) =>
+          writeFileSync(
+            join(dir, "cmem", "review-issues.md"),
+            `Review complete: ${"ab".repeat(20)}\n`,
+          ),
+        /The reviewed commit abab\w+ is not in this repository/,
+      ],
+      [
+        "code changed since the review",
+        (dir) => {
+          const first = spawnSync("git", ["-C", dir, "rev-list", "--max-parents=0", "HEAD"], {
+            encoding: "utf8",
+          }).stdout.trim();
+          writeFileSync(join(dir, "cmem", "review-issues.md"), `Review complete: ${first}\n`);
+        },
+        // The first ten files are listed: the repository's first commit predates nearly all of it.
+        /Code changed since the review \(\w+\) — the review did not read:[\s\S]*README\.md/,
+      ],
     ];
     for (const [what, change, why] of cases) {
       const slug = what.replace(/\W+/g, "-");
@@ -8975,7 +9109,7 @@ test(
     }
     // The three version files must agree: a bump that left package.json behind.
     const { dir, origin, setup } = releaseClone("release-guard-disagree", {
-      bump: (d) => bumpTo(d, "9.9.9", ["jsr.json", "src/report_core.ts"]),
+      bump: (d) => bumpTo(d, "9.9.9", ["jsr.json", "src/report_core.ts", "npm-dist.sha256"]),
     });
     const r = await runAsync([join(dir, "scripts", "publish.ts"), "--no-wait"], { cwd: dir });
     assert.equal(r.code, 1, r.out);
@@ -9089,7 +9223,18 @@ test(
     assert.equal(git("rev-parse", "HEAD^"), setup);
     assert.deepEqual(
       git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n").sort(),
-      ["jsr.json", "package.json", "src/report_core.ts"],
+      ["jsr.json", "npm-dist.sha256", "package.json", "src/report_core.ts"],
+    );
+    // The digest is the package bump built at the new version (H37 (e): CI publishes only it).
+    const digest = await import(pathToFileURL(join(dir, "scripts", "npm-digest.ts")).href);
+    assert.equal(
+      readFileSync(join(dir, "npm-dist.sha256"), "utf8").trim(),
+      digest.digestOf(join(dir, "dist")),
+    );
+    assert.equal(
+      JSON.parse(readFileSync(join(dir, "dist", "package.json"), "utf8")).version,
+      next,
+      "the digest is of another version's package",
     );
     assert.equal(git("status", "--porcelain", "--untracked-files=all"), "");
   },
@@ -9200,7 +9345,6 @@ test("H30 / H32: the GitHub API script makes the Release page by the recipe, wit
       }
       if (path.startsWith("commits/"))
         return path === "commits/v9.9.9" ? json(200, { sha: SHA }) : json(404, {});
-      if (path.startsWith("actions/workflows/ci.yml/runs")) return json(200, { workflow_runs: [] });
       return json(500, {});
     };
     const fetchImpl = (url: string | URL, init?: RequestInit) => Promise.resolve(answer(url, init));
@@ -9253,12 +9397,11 @@ test("H30 / H32: the GitHub API script makes the Release page by the recipe, wit
     api.release(github({ moveAfterPost: true }).env, "v9.9.9", SHA, "9.9.9"),
     /moved/,
   );
-  // 4. The reads the release gate makes: a commit (none is null, not an error), CI's push runs.
+  // 4. The read the release gate makes: a commit (none is null, not an error). (CI's push runs
+  //    were read here too until ci.yml was retired, 2026-11-19, letter H37 (e).)
   assert.equal(await api.commitOf(github({}).env, "v9.9.9"), SHA);
   assert.equal(await api.commitOf(github({}).env, "release/v9.9.9"), null);
-  const runs = github({});
-  assert.equal(await api.ciRun(runs.env, SHA), "");
-  assert.match(runs.calls[0], /head_sha=a{40}&event=push/);
+  assert.equal(api.ciRun, undefined, "ci-run is back, with no ci.yml to read");
 
   // 5. H33 (2026-11-10): CI makes the tag after its checks, by the REST API. A new tag: checked
   //    absent, the annotated object on THIS commit, its ref, read back.
@@ -9302,7 +9445,7 @@ test("H30 / H32: the GitHub API script makes the Release page by the recipe, wit
   }
   // 6. Every request has a time limit (workspace best-practices 7.21): 30 s, as a signal.
   assert.equal(api.REQUEST_TIMEOUT_MS, 30_000);
-  for (const g of [fresh, again, made, rerun, raceSame, runs]) {
+  for (const g of [fresh, again, made, rerun, raceSame]) {
     assert.ok(g.calls.length > 0);
     assert.equal(g.unlimited(), 0, "a request without a time limit");
   }
@@ -9423,7 +9566,10 @@ test("review 2, group D: the release path checks what it publishes", () => {
   assert.match(npmBuild, /\n {4}needs: \[checks, jsr\]\n/, "npm built before JSR has the version");
   assert.match(npm, /\n {4}needs: \[checks, jsr, npm-build\]\n/, "npm before JSR");
   //   U5: "is this a release" -- the version untagged, or tagged on THIS commit (a re-run); both
-  //   registries free for a new one; ci.yml green on the commit; the gates.
+  //   registries free for a new one; JSR's own pre-publish checks; the npm package matched to the
+  //   digest bump recorded -- and NO TESTS (H37 (e), owner 2026-11-17: "We want the CI to verify
+  //   the version, then tag, create the release page and publish"; the gates run in `bun run
+  //   release`, scripts/publish.ts step 6).
   assert.match(
     checks,
     /STATE=new; elif \[ "\$AT" = "\$GITHUB_SHA" \]; then STATE=rerun; else STATE=released/,
@@ -9434,15 +9580,25 @@ test("review 2, group D: the release path checks what it publishes", () => {
     "npm not asked",
   );
   assert.match(checks, /api\.jsr\.io[\s\S]*JSR" != "404"/, "JSR not asked");
+  assert.match(checks, /deno publish --dry-run/, "no JSR dry run");
+  assert.match(checks, /deno doc --lint/, "JSR's docs score unchecked");
+  assert.match(checks, /deno check --doc --config jsr\.json/, "the JSDoc examples unchecked");
+  assert.match(checks, /jsr-upload-check/, "no upload check");
   assert.match(
     checks,
-    /github-api\.ts ci-run "\$\{GITHUB_SHA\}"/,
-    "CI not read through the script",
+    /npm:build\s+bun scripts\/npm-digest\.ts --check/,
+    "npm unmatched before the tag",
   );
+  assert.doesNotMatch(checks, /--config jsr\.json[^\n]*\n?[^\n]*deno publish(?! --dry-run)/);
+  //   No workflow job runs a test, a gate or a suite (they run locally) -- and no job waits on one.
+  const TESTS =
+    /\bbun (?:run )?test\b|node --test|npm-prove|npm:prove|check-runtimes|\bruntimes\b|compat\.ts|format:check|run lint|run check\b|check-privacy|ci-run|actions: read/;
+  for (const name of jobs) {
+    const hit = TESTS.exec(job(name));
+    assert.equal(hit?.[0], undefined, `${name} runs a test in CI: ${hit?.[0]}`);
+  }
   const api = readFileSync(join(ROOT, "scripts", "github-api.ts"), "utf8");
-  assert.match(api, /runs\?head_sha=\$\{sha\}&event=push/, "CI read from a run of any event");
-  assert.match(checks, /compat\.ts release "\$\{TAG#v\}" --unpublished/, "no SemVer gate");
-  assert.match(checks, /jsr-upload-check/, "no upload check");
+  assert.doesNotMatch(api, /ci\.yml|ci-run/, "the script still reads ci.yml's runs");
   //   U6, U7: the tag and the page by the script alone, fetched at this commit; no clone, no
   //   install beside the write token (C30).
   assert.match(tagJob, /github-api\.ts" tag "\$\{TAG\}" "\$\{GITHUB_SHA\}"/);
@@ -9525,7 +9681,8 @@ test("review 2, group D: the release path checks what it publishes", () => {
     ) ?? []
   ).length;
   const pins = (yml.match(/sha256sum -c -/g) ?? []).length;
-  assert.ok(downloads >= 10 && pins === downloads, `${downloads} downloads, ${pins} digest checks`);
+  // 9 since 2026-11-19: npm-build installs Bun alone (no proof in CI, no Deno or fnm there).
+  assert.ok(downloads >= 9 && pins === downloads, `${downloads} downloads, ${pins} digest checks`);
   assert.doesNotMatch(yml, /setup-(bun|deno|node)/, "a tool installed by an action, unpinned");
   for (const line of yml.split("\n").filter((l) => /\bcurl\s/.test(l))) {
     assert.match(line, /--max-time \d+/, `a request with no time limit: ${line.trim()}`);
@@ -9540,27 +9697,31 @@ test("review 2, group D: the release path checks what it publishes", () => {
     /"tag"|--force|"-f"/,
     "the release script tags or forces",
   );
-  for (const file of ["publish.yml", "ci.yml"]) {
-    const text = code(readFileSync(join(ROOT, ".github", "workflows", file), "utf8"));
-    // Any spacing, and any form: `docker://` and a local `./action` are not commits either.
-    assert.doesNotMatch(
-      text,
-      /uses:\s+["']?(?!\S+@[0-9a-f]{40}["']?(?:\s|$))\S+/,
-      `${file}: an action not pinned to a commit`,
-    );
-  }
-  assert.match(npmBuild, /npm-prove\.ts[\s\S]*upload-artifact/, "the shipped package unproven");
-  const ci = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
-  for (const [name, text] of [
-    ["publish.yml", yml],
-    ["ci.yml", code(ci)],
-  ] as const) {
-    // The CLI's two-letter name as a command word; `g[h]` keeps this line out of the workspace's
-    // `git grep -w` re-check of the tree.
-    assert.doesNotMatch(text, /(^|[\s$(|;&])g[h]\s/m, `${name} calls the GitHub CLI`);
-  }
-  assert.doesNotMatch(ci, /\|\s*bash/, "an install script piped to bash");
-  assert.match(ci, /sha256sum -c/);
+  // CI only publishes (H37 (e), 2026-11-19): ci.yml, which ran every test on every push, is gone,
+  // and no other workflow may bring the tests back.
+  const workflows = readdirSync(join(ROOT, ".github", "workflows")).filter((f) =>
+    /\.ya?ml$/.test(f),
+  );
+  assert.deepEqual(workflows, ["publish.yml"], "a workflow besides publish.yml");
+  // Any spacing, and any form: `docker://` and a local `./action` are not commits either.
+  assert.doesNotMatch(
+    yml,
+    /uses:\s+["']?(?!\S+@[0-9a-f]{40}["']?(?:\s|$))\S+/,
+    "publish.yml: an action not pinned to a commit",
+  );
+  //   The package that ships is the one proven locally: its digest checked before it is kept
+  //   (review 5's finding, answered by the digest since 2026-11-19 -- owner: "Digest match").
+  assert.match(
+    npmBuild,
+    /npm:build[\s\S]*npm-digest\.ts --check[\s\S]*upload-artifact/,
+    "the shipped package unmatched",
+  );
+  const bumpSrc = readFileSync(join(ROOT, "scripts", "bump.ts"), "utf8");
+  assert.match(bumpSrc, /npm-digest\.ts", \["--write"\]/, "bump records no digest");
+  // The CLI's two-letter name as a command word; `g[h]` keeps this line out of the workspace's
+  // `git grep -w` re-check of the tree.
+  assert.doesNotMatch(yml, /(^|[\s$(|;&])g[h]\s/m, "publish.yml calls the GitHub CLI");
+  assert.doesNotMatch(yml, /\|\s*bash/, "an install script piped to bash");
 });
 
 // ── "a run of nothing is not a pass" ─────────────────────────────────────────

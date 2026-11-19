@@ -16,6 +16,7 @@ Read STATE.md first. Open another file only when the task matches its line.
 - [testing.md](testing.md): the build, the controls and the suite; before running or adding tests
 - [testing-packaging.md](testing-packaging.md): compat gate, runtime matrix, JSR and npm checks
 - [release.md](release.md): only when releasing; the process and every release's record
+- [platforms.md](platforms.md): the support matrix and per-OS notes; before OS-specific code or a release
 - [review-process.md](review-process.md): only during a review
 - [licensing.md](licensing.md): when adding or upgrading a dependency
 - [best-practices-shared.md](best-practices-shared.md): the workspace's ★ rules, a stamped copy; cite, never edit

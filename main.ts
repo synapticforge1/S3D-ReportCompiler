@@ -3283,7 +3283,10 @@ if (!chrome && parts.some((p) => p.renderer === "chrome")) {
   rt.exit(1);
 }
 
-/** Root (uid 0) on a POSIX host: the one case Chrome needs `--no-sandbox` to start. */
+/**
+ * Root (uid 0) on a POSIX host: the one case Chrome needs `--no-sandbox` to start.
+ * Platform: linux-x64, linux-arm64, mac-x64, mac-arm64 (cmem/platforms.md).
+ */
 const runningAsRoot =
   typeof process !== "undefined" && typeof process.getuid === "function" && process.getuid() === 0;
 
@@ -3308,6 +3311,7 @@ const candidatePdf = `${outputPdf.replace(/\.pdf$/i, "")}.unverified.pdf`;
 // output, turning a failed build into a silently stale one. So the old PDF must
 // be GONE, not merely asked to go: removeQuietly swallows a failed delete, and a
 // PDF open in a viewer on Windows cannot be deleted or written -- but can be read.
+// Platform: win-x64, win-arm64 (cmem/platforms.md).
 // From a zip the PDF never takes its final name on disk -- it goes into the zip -- so a file of
 // that name beside the zip is the user's, and is left alone. But `<zip>.verified.pdf` is this
 // tool's, from an earlier run whose zip update failed, and goes now, as the folder build's old PDF
@@ -3393,6 +3397,7 @@ if (typeof process !== "undefined" && typeof process.once === "function") {
   // SIGHUP (the terminal closed, a dropped SSH session) and SIGQUIT too, on POSIX: Chrome runs in
   // a process group of its own there, so a hang-up of the build's group no longer reaches it, and
   // it wrote its PDF after the build had died (review 5). Windows has neither signal.
+  // Platform: win-x64, win-arm64 vs mac-*, linux-* (cmem/platforms.md).
   const signals =
     process.platform === "win32"
       ? (["SIGINT", "SIGTERM"] as const)

@@ -379,6 +379,7 @@ const u16 = (d: Uint8Array, at: number) => (d[at] << 8) | d[at + 1];
  * @example
  * ```ts
  * // An internal module: the CLI's packing step re-codes each JPEG stream of the PDF with it.
+ * declare const jpegBytes: Uint8Array; // a JPEG file's bytes
  * const smaller = optimizeJpeg(jpegBytes) ?? jpegBytes; // the same pixels, fewer bytes
  * ```
  */

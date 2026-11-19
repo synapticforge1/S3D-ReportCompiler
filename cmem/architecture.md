@@ -178,7 +178,7 @@ transfer or a rename on its own** (binaryang measured it, its `cmem/publishing.m
 was re-linked on 2026-10-20 at 23:37:36 UTC, 93 s after binaryang's, so it already names the org.
 binaryang's 1.13.1 proved the same path publishes with provenance from the org. **Measured for
 THIS package:** 1.1.0 → 1.1.7 released from the org, each attested (`verify-release`; Rekor ids in
-[roadmap.md](roadmap.md) § Current state). **Since 2026-11-06** (known-issues #38, #40): only
+[archive/roadmap-state-to-2026-11-19.md](archive/roadmap-state-to-2026-11-19.md)). **Since 2026-11-06** (known-issues #38, #40): only
 `main`, tracking `origin/main`, is released — `publish.ts` refuses anything else before committing,
 and `publish.yml` refuses a tagged commit not on `main` (`ci.yml` runs on every branch, so its
 gate alone did not); and the release ends with `verify-release --wait --npm`, which requires the

@@ -6,8 +6,8 @@
  *     lists as LTS today, and a line that becomes LTS within 30 days. Each runs through
  *     `fnm exec --using=<version>`, so nothing switches globally and no path is machine-specific.
  *   - Bun: whichever `bun` is on PATH.
- *   - Deno, with `--deno` only: whichever `deno` is on PATH. CI passes it (.github/workflows/ci.yml);
- *     a developer machine has no Deno (owner, 2026-10-28), so locally the line says where it runs.
+ *   - Deno, with `--deno` only: whichever `deno` is on PATH. Nothing passes it since 2026-11-19
+ *     (ci.yml retired, letter H37; Node covers the V8 engine, H39; no Deno on this machine).
  *
  * A Node version fnm has not installed FAILS with the `fnm install` that fixes it; it is never
  * skipped. `--install-node` installs every needed version first (CI). `--also=<version>` adds a
@@ -80,7 +80,10 @@ const runs: Run[] = [
   { name: "bun", cmd: ["bun", main] },
   ...(withDeno ? [{ name: "deno", cmd: ["deno", "run", "-A", main] }] : []),
 ];
-if (!withDeno) console.log("·  deno: runs in CI (.github/workflows/ci.yml), not on this machine");
+if (!withDeno)
+  console.log(
+    "·  deno: not run here — Node covers the V8 engine (letter H39); JSR's checks run in publish.yml",
+  );
 
 if (installNode) {
   for (const run of runs.filter((r) => r.cmd[0] === "fnm")) {

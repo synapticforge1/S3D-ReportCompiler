@@ -1,6 +1,6 @@
 # Known Issues, Template Assumptions & Bug Ledger
 
-Live constraints and the issues still open. The closed ledger (#1–#127) and the review rounds:
+Live constraints and the issues still open. The closed ledger (#1–#130) and the review rounds:
 [archive/known-issues-ledger.md](archive/known-issues-ledger.md) (since 2026-11-19, H38).
 
 ## ⚠️ Live constraints
@@ -194,32 +194,13 @@ precisely the condition bug #11 introduced the "no file means failure" check for
 would have reported a successful build.
 
 
-## Open: recorded, not fixed (from the class-by-class review)
+## Open issues
 
-🔁 **Corrected 2026-11-12 (T1-3 round 2): #125 claimed "a value never leaves its label"** — true only where the label
-and the value are in ONE block (a paragraph, a table row). With `<dt>`/`<dd>`, separate `<div>` boxes, or
-`<br>`-separated lines, they are separate blocks, and two values exchanged between them are still found as the report's
-start (and pass the word and number checks): class E of task 18, open, as before #121. What #125 does refuse: values
-swapped inside one block, anagram titles.
+Open review findings (R1–R9, from T1-3 on 2026-11-12) live in the git-ignored `cmem/review-issues.md` since
+2026-11-19 (letter H37 (c); the review standard keeps open issues off GitHub). The text they had here is in git
+history before that date. Their count is in [STATE.md](STATE.md).
 
-**Recorded, not fixed (T1-3 round 2, 2026-11-12):**
-- ~~**In-page links in natively drawn reports go nowhere**~~ ✅ **Built 2026-11-12, #128** (🔒 owner: "The table of contents should have links to the content it is showing").
-- **A float that moves a block from past the opening into it** is not found (its block is not among the opening's): loud.
-- **Every `<pre>` is refused** (the UA sheet gives it `white-space: pre`, refused since #123): correct and safe.
-
-**Recorded, not fixed (T1-3 review, 2026-11-12) — each older than the native renderer, or loud, or cosmetic:**
-- **A value moved to another label passes** (the verification reviewer's top finding, class E of task 18, "values
-  against their cells", open): numbers are paired with what follows them, never with the label before them, so two
-  values traded between labels keep every count. #125 narrowed it back at a report's opening (where #121 had widened
-  it); elsewhere it stands, as before. Before target 2 at the latest (task 18).
-- **A page that repeats a heading-less report's opening counts as a second start** (a table header Chrome repeats): the start count rises and the build FAILS -- loud, a false FAIL.
-- **Order between reports is not compared beyond the starts**: the build order is checked through each start's own heading or opening only.
-- **Native: a trailing space before `<br>` counts in the line's width** -- right-aligned text one space left of Chrome's. Cosmetic.
-- **Every native layout runs before the earlier-PDF and missing-Chrome checks** -- a long set can lay out for minutes, then be refused. Correct, slow.
-- **Under `--no-optimize` a joined PDF keeps each page's `StructParents` with no structure tree, and says nothing.** Tagging is dropped by the packing in an ordinary build anyway.
-- **The `S3D_RENDERER` test** shows each value gets past the setting, not that `Chrome` or `" native "` selects that mode.
-
-### The pattern
+## The pattern across the reviews
 
 Reviews 1–2 found builder bugs; reviews 4–5 found **checker** bugs. As the pipeline hardened, risk moved
 into the verification code. Reviews 3 and 5 found no bugs at all — only undocumented reasoning, which is

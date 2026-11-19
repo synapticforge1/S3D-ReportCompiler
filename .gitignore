@@ -13,6 +13,9 @@
 # in a git-ignored `cmem/local/`. `/local/` above covers the top-level folder only,
 # so without this a session following that rule here would stage them.
 /cmem/local/
+# Open review findings and the "Review complete:" record (workspace review standard, letter H37 (b)):
+# never on GitHub. scripts/check-privacy.ts refuses it tracked.
+/cmem/review-issues.md
 
 # Claude Code project instructions — machine-local, same convention as wasmtk.
 # The durable project rules live in cmem/, which IS tracked.

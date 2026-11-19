@@ -36,6 +36,13 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const dist = join(root, "dist");
 const json = (p: string) => JSON.parse(readFileSync(join(root, p), "utf8"));
 
+/** Every file under `dir`, recursively. */
+function walkFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walkFiles(join(dir, e.name)) : [join(dir, e.name)],
+  );
+}
+
 function fail(msg: string): never {
   console.error(`❌ npm:build: ${msg}`);
   process.exit(1);
@@ -141,6 +148,19 @@ if (!existsSync(join(fontDir, "LICENSE"))) fail("fonts/liberation/LICENSE is mis
 mkdirSync(join(dist, "fonts", "liberation"), { recursive: true });
 for (const f of readdirSync(fontDir)) {
   copyFileSync(join(fontDir, f), join(dist, "fonts", "liberation", f));
+}
+
+// 6. The build is byte-reproducible across machines: CI publishes only if its build has the digest
+// of the one proven locally (scripts/npm-digest.ts; owner, 2026-11-19, H37 (e)). The repo stores
+// text as LF (.gitattributes); a checkout made before that rule kept CRLF (LICENSE on the owner's
+// machine, 2026-11-19), and a CR shipped here would differ from a fresh clone's build.
+for (const f of walkFiles(dist)) {
+  if (/\.(?:ttf|woff2?|otf)$/i.test(f)) continue;
+  if (readFileSync(f).includes(0x0d)) {
+    fail(
+      `${f.slice(root.length)} has a CR: a CRLF checkout. Re-check it out (delete it, then \`git checkout -- <file>\`)`,
+    );
+  }
 }
 
 console.log(

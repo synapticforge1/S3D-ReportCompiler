@@ -353,6 +353,7 @@ export async function runWithTimeout(
     throw new RangeError(`timeoutMs must be 1 to ${MAX_TIMEOUT_MS}, not ${timeoutMs}`);
   }
   const { spawn } = await import("node:child_process");
+  // Platform: win-x64, win-arm64 (no process groups) vs mac-*, linux-* (cmem/platforms.md).
   const windows = typeof process !== "undefined" && process.platform === "win32";
 
   return await new Promise<TimedRunResult>((resolve) => {
@@ -453,15 +454,19 @@ export async function runWithTimeout(
 export async function findChrome(): Promise<string | null> {
   const fromEnv = env("CHROME_PATH");
   const localAppData = env("LOCALAPPDATA");
+  // Platform: each group below is one OS's install locations (cmem/platforms.md).
   const candidates = [
     ...(fromEnv ? [fromEnv] : []),
+    // win-x64, win-arm64
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
     ...(localAppData ? [`${localAppData}\\Google\\Chrome\\Application\\chrome.exe`] : []),
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    // mac-x64, mac-arm64
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    // linux-x64, linux-arm64
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
     "/usr/bin/chromium",
