@@ -7,7 +7,7 @@
 //   bun tests/controls/redact-paths.ts [file] [--check] [--user=NAME]
 //                                              [--folder=NAME]
 //
-// Defaults to cmem/transcript/session-transcript.md, resolved relative to this
+// Defaults to cmem/local/transcript/session-transcript.md, resolved relative to this
 // script. --check reports what would change without writing.
 //
 // Only paths are touched. Report content is left alone -- the report's own
@@ -78,7 +78,7 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // The label is derived here rather than by testing `typeof target` later: args[0]
 // is typed `string`, so control-flow analysis narrows `target` to string at any
 // later use and the URL branch of a ternary becomes `never`.
-const defaultTarget = new URL("../../cmem/transcript/session-transcript.md", import.meta.url);
+const defaultTarget = new URL("../../cmem/local/transcript/session-transcript.md", import.meta.url);
 const target = args[0] ?? defaultTarget;
 const targetLabel = args[0] ?? defaultTarget.href;
 // Read before the rules are built: they learn this file's own folder names ({@link KNOWN_NAME}).

@@ -6,12 +6,14 @@ commercially.
 
 ## Runtime dependencies
 
-| Package | Version | Licence | Notes |
-|---|---|---|---|
-| `mathjax-full` | 3.2.2 | **Apache-2.0** | typesets the maths at build time |
-| `pdf-lib` | 1.17.1 | **MIT** | object-stream repack |
-| `pdfjs-dist` | 6.4.299 | **Apache-2.0** | text/operator extraction for verification (4.6.82 until 2026-10-28) |
-| `@pdf-lib/fontkit` | 1.1.1 | **MIT** | the native renderer's font embedding (task 19; added 2026-11-11, owner: "We need to add the dependency and make any license references for compiance sake"). Declared in `package.json` and its README; **ships no licence file** -- recorded in THIRD-PARTY-NOTICES |
+Columns: Package · Version · Licence · Notes.
+
+- `mathjax-full` — 3.2.2 — **Apache-2.0** — typesets the maths at build time
+- `pdf-lib` — 1.17.1 — **MIT** — object-stream repack
+- `pdfjs-dist` — 6.4.299 — **Apache-2.0** — text/operator extraction for verification (4.6.82 until 2026-10-28)
+- `@pdf-lib/fontkit` — 1.1.1 — **MIT** — the native renderer's font embedding (task 19; added 2026-11-11, owner: "We
+  need to add the dependency and make any license references for compiance sake"). Declared in `package.json` and its
+  README; **ships no licence file** -- recorded in THIRD-PARTY-NOTICES
 
 ## Shipped with the package: the Liberation Fonts 2.1.5 (SIL OFL 1.1)
 

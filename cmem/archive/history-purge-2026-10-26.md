@@ -4,7 +4,7 @@
 example) from `387cbd9` on, so it sat in every later commit, in the trees tagged `v1.0.0`,
 `v1.0.1`, `v1.0.4`, and in the three `release/v*` branches, all public. It was fixed at HEAD in
 `a57cd72` (now `bd2599287`). On 2026-10-26 the owner chose to purge it from history too ("Purge
-now"; workspace letter H19, privacy rule in [INDEX.md](INDEX.md) § Privacy). The published JSR
+now"; workspace letter H19, privacy rule in [INDEX.md](../INDEX.md) § Privacy). The published JSR
 packages never contained it (`deno.json` `publish.include` has no `cmem/`).
 
 ## How it was done
@@ -45,7 +45,7 @@ the workspace rule says why to read the workflow before moving tags (working-rul
   `12e84db8c` for 1.0.4). JSR versions are immutable; translate through the table.
 - **GitHub still serves old commits by hash** until a GitHub Support request purges them (🗓️ OWNER,
   workspace open-work).
-- Commit messages and the quoted outputs in [practices.md](practices.md) / [process-log.md](process-log.md)
+- Commit messages and the quoted outputs in [practices.md](../practices.md) / [process-log.md](process-log.md)
   (`tagging 8ff6093 …`) keep the old ids as history; live `git show` pointers were translated.
 - Every other clone must re-clone or `fetch --force` + `reset --hard origin/main`; this clone was
   realigned, its reflog expired and `gc --prune=now` run (1 pack, fsck clean, `387cbd9` gone).

@@ -320,3 +320,18 @@ native renderer draws whole runs with no browser installed.
 **Measured 2026-11-12:** the 13 samples under `auto` — all to Chrome (13 with maths), baked hash
 `487321f2…` unchanged, 100 pages, PASS; the 36ft report under `auto` (no setting) — native, 7,161
 pages in 37.3 s, 24.68 MB, PASS in 336 s, as on 2026-11-11.
+
+## 11. The memory follows the workspace memory guide (2026-11-19, letter H38)
+
+The memory used to be one INDEX with rules and history, a 138 KB roadmap with the status table at
+its top, and a 151 KB known-issues file holding every ledger row. Since 2026-11-19 a session reads
+`STATE.md` (counts only, rewritten each session) and the router `INDEX.md`; the rules are in
+`working-rules.md`; open work stays in `roadmap.md` and `known-issues.md` (their names kept, as the
+guide allows); tasks 18 and 19 have files of their own; everything closed is in `archive/`, IDs
+kept. The session transcripts moved from `cmem/transcript/` to the ignored `cmem/local/transcript/`.
+
+**How it was checked:** every move was a line-range slice; a one-time script counted every word of
+the 16 old tracked notes and the old `CLAUDE.md` (90,430) and found each again, at least as often,
+except 48 tokens, each a link whose target path changed or a table header that gained a full stop
+when its wide table became a list. `bun scripts/check-cmem.ts`: all limits hold (847 problems before).
+`scripts/check-cmem.ts` is the workspace tool as copied, formatted by `bun fmt` (one trailing comma).

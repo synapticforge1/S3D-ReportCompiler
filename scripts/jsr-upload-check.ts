@@ -5,7 +5,7 @@
  *
  *   bun scripts/jsr-upload-check.ts
  *
- * WHY: an exit code cannot judge a publish. Measured 2026-10-26 on Deno 2.9.8 (cmem/bun-migration.md
+ * WHY: an exit code cannot judge a publish. Measured 2026-10-26 on Deno 2.9.8 (cmem/archive/bun-migration.md
  * § "Step 1, measured"): `deno publish --config jsr.json` beside a `deno.json` printed "Successfully
  * published" while rewriting every prefix import (`mathjax-full/…`, `pdfjs-dist/…`) to `./…` — a
  * package that cannot load. Only the uploaded tarball shows that.
@@ -44,11 +44,11 @@ const ok = (good: boolean, what: string, why = "") => {
 };
 
 // The end state of step 7, pinned: a deno.json beside jsr.json is the layout that corrupted the
-// upload silently (C1, C2 in cmem/bun-migration.md), whatever it holds.
+// upload silently (C1, C2 in cmem/archive/bun-migration.md), whatever it holds.
 ok(
   !existsSync(join(root, "deno.json")),
   "no deno.json beside jsr.json",
-  "delete it — see cmem/bun-migration.md § Step 1, measured",
+  "delete it — see cmem/archive/bun-migration.md § Step 1, measured",
 );
 
 // ── the fake registry ────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ const publish = await new Promise<{ code: number; out: string }>((resolve) => {
   const p = spawn(
     "deno",
     // Extra arguments pass through to `deno publish` — how its negative controls run
-    // `--config jsr.json` beside a deno.json (cmem/testing.md § JSR upload check).
+    // `--config jsr.json` beside a deno.json (cmem/testing-packaging.md § JSR upload check).
     [
       "publish",
       "--token",

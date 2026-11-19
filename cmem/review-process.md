@@ -134,12 +134,14 @@ kind, run:
 
 ### 2.2 Its variants (each run here)
 
-| variant | areas | when | here |
-|---|---|---|---|
-| change review | the change's own areas | after a step | T1-3 round 1 (3 reviewers, #123–#125) |
-| fix review (cold) | the fixes of the round before | every round after the first | 2026-11-06 rounds 2–8 (#44–#60); T1-3 round 2 |
-| full-project review | core; CLI/runtime; release/CI; tests/config/docs | on the owner's word, before a minor | five, 2026-11-06 → 08 (#61–#86) |
-| class-by-class review | ONE class of issue across the repo, re-checked by a fresh reviewer of that class until clean, then the next | when findings cluster by kind | task 18 (🔒 owner, 2026-11-08): classes B, A, C, E, D, F — **[S3D]** A output fidelity, B verification gaps, C privacy, D release integrity, E lifecycle and errors, F tests and docs |
+Columns: variant · areas · when · here.
+
+- change review — the change's own areas — after a step — T1-3 round 1 (3 reviewers, #123–#125)
+- fix review (cold) — the fixes of the round before — every round after the first — 2026-11-06 rounds 2–8 (#44–#60); T1-3 round 2
+- full-project review — core; CLI/runtime; release/CI; tests/config/docs — on the owner's word, before a minor — five, 2026-11-06 → 08 (#61–#86)
+- class-by-class review — ONE class of issue across the repo, re-checked by a fresh reviewer of that class until clean,
+  then the next — when findings cluster by kind — task 18 (🔒 owner, 2026-11-08): classes B, A, C, E, D, F — **[S3D]** A
+  output fidelity, B verification gaps, C privacy, D release integrity, E lifecycle and errors, F tests and docs
 
 ---
 
@@ -256,7 +258,7 @@ correct work > cosmetic), confidence. Say what you checked and found sound. Unde
 | the round: reviewers, scope, counts, what is next | [roadmap.md](roadmap.md), under the task |
 | the release's security and hardening reviews (§ 0): the rounds, the empty round that ended each | [release.md](release.md), in the release's entry, before it is released |
 | the test runs and their numbers | [testing.md](testing.md) |
-| what was believed against what was measured | [process-log.md](process-log.md) |
+| what was believed against what was measured | [process-log.md](archive/process-log.md) |
 | a lesson that changes how work is done | [practices.md](practices.md) |
 
 The commit message names the round and the ledger rows (`Review T1-3, round 1: … (#123–#125)`).

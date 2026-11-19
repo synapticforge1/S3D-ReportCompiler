@@ -37,15 +37,17 @@ report is dropped in beside the samples. Only `scripts/sanitize-report.ts` moves
 
 ## Three modules
 
-| File | Runs on | Contains |
-|---|---|---|
-| `src/report_core.ts` | **everything, browsers included** | every transform; **zero I/O** |
-| `src/report_runtime.ts` | Deno, Node, Bun | filesystem, process, browser discovery |
-| `main.ts` | Deno, Node, Bun | orchestration, reporting, the CLI |
-| `src/report_svg.ts` | everything (pure) | the verification's own reading of a drawing and its comparison with the PDF (task 18 group 8; not in the exports map) |
-| `src/report_filter.ts` | everything (pure) | the verification's own SVG filter primitives (task 18 8i; not in the exports map) |
-| `src/report_webp.ts` | everything (pure) | the verification's own WebP decoder, ported from libwebp (task 18 7b; BSD notice in its header; not in the exports map) |
-| `src/report_style.ts` | everything (pure) | how the report's HTML text is styled (an HTML tree by HTML's nesting, the cascade, each word's weight / slant / colour / size) and the comparison with how the PDF prints it (task 18 group 9b; uses `report_svg.ts`'s selector reader; not in the exports map) |
+Columns: File · Runs on · Contains.
+
+- `src/report_core.ts` — **everything, browsers included** — every transform; **zero I/O**
+- `src/report_runtime.ts` — Deno, Node, Bun — filesystem, process, browser discovery
+- `main.ts` — Deno, Node, Bun — orchestration, reporting, the CLI
+- `src/report_svg.ts` — everything (pure) — the verification's own reading of a drawing and its comparison with the PDF (task 18 group 8; not in the exports map)
+- `src/report_filter.ts` — everything (pure) — the verification's own SVG filter primitives (task 18 8i; not in the exports map)
+- `src/report_webp.ts` — everything (pure) — the verification's own WebP decoder, ported from libwebp (task 18 7b; BSD notice in its header; not in the exports map)
+- `src/report_style.ts` — everything (pure) — how the report's HTML text is styled (an HTML tree by HTML's nesting, the
+  cascade, each word's weight / slant / colour / size) and the comparison with how the PDF prints it (task 18 group 9b;
+  uses `report_svg.ts`'s selector reader; not in the exports map)
 
 (The two verification modules came with class B, 2026-11-08/09; the title stays "three" for the
 three the package exports.)

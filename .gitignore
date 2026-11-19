@@ -26,7 +26,9 @@ CLAUDE.md
 
 # Session transcripts. Untracked by owner decision: they carry absolute paths
 # from the machine they were recorded on and client identifiers from the report
-# excerpts. cmem/*.md is the portable record; the transcripts are not.
+# excerpts. cmem/*.md is the portable record; the transcripts are not. Since
+# 2026-11-19 they live in cmem/local/transcript/ (ignored by /cmem/local/ above);
+# this rule stays for any older checkout.
 /cmem/transcript/
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ CLAUDE.md
 # No exceptions under this rule. Any PDF produced from the real report set is a
 # render of client calculations carrying the same metadata the sample sanitizer
 # exists to remove — that is why the Bluebeam benchmark was deleted rather than
-# re-included. See cmem/roadmap.md task 3b.
+# re-included. See cmem/archive/roadmap-closed.md task 3b.
 CompiledPDF/
 
 # A SkyCiv zip build (2026-11-06) writes BESIDE the zip, in no output folder: the baked HTML

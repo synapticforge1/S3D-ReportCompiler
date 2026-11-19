@@ -3,7 +3,7 @@
 Working rules that this project paid for. Each one is here because ignoring it cost something concrete,
 and the evidence is kept alongside so they read as findings rather than platitudes.
 
-These are general — they outlived the specific bugs. [process-log.md](process-log.md) has the narrative;
+These are general — they outlived the specific bugs. [process-log.md](archive/process-log.md) has the narrative;
 [known-issues.md](known-issues.md) has the full ledger.
 
 ---
@@ -121,7 +121,9 @@ different document.
 
 ## 8. Deprecation is not a vulnerability, and a renderer swap is not a version bump
 
-`mathjax-full@3.2.2` prints a deprecation warning. `npm audit` reported **0 vulnerabilities** (2026-08-08; on 2026-10-26 it reports an `@xmldom/xmldom` advisory under MathJax's `speech-rule-engine` — roadmap task 13 — which is still not a reason for v4). MathJax 4
+`mathjax-full@3.2.2` prints a deprecation warning. `npm audit` reported **0 vulnerabilities** (2026-08-08; on 2026-10-26
+it reports an `@xmldom/xmldom` advisory under MathJax's `speech-rule-engine` — roadmap task 13 — which is still not a
+reason for v4). MathJax 4
 replaced the font system, so adopting it changes glyph metrics, line breaking and page count — a
 material change to a document whose 380-page output is verified.
 
@@ -328,7 +330,7 @@ files for it.
 are not covered: `main.ts`, `src/`, tests and everything else that is part of the program keep
 running on Deno, Node and Bun as before. 🔁 *Superseded 2026-10-26:* this paragraph exempted the
 Deno tooling in [`scripts/`](../scripts/) ("Deno scripts by design … they stay that way"). The owner
-then ordered the toolchain off Deno ([bun-migration.md](bun-migration.md)), and on 2026-10-26 all of
+then ordered the toolchain off Deno ([bun-migration.md](archive/bun-migration.md)), and on 2026-10-26 all of
 `scripts/` and `tests/controls/` moved to `node:` builtins run by Bun — each proved equivalent to its
 Deno original first (bun-migration step 4). The scoped `--allow-net` permissions went with Deno.
 

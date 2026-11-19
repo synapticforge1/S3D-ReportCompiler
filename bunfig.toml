@@ -1,4 +1,4 @@
-# `bun fmt` replaces `deno fmt` (cmem/bun-migration.md step 3). The width matches the old
+# `bun fmt` replaces `deno fmt` (cmem/archive/bun-migration.md step 3). The width matches the old
 # deno.json `fmt.lineWidth`; everything else is Bun's default style.
 #
 # ⚠️ Run it through `bun run format` / `bun run format:check`, which name the paths. Bare

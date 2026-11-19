@@ -11,7 +11,7 @@ remove: the compat gate's `deno doc --json` (→ the `.d.ts` tsc emits); `deno d
 `bun run runtimes` and `npm:prove` (→ the CI matrix — Deno USERS stay supported and tested there);
 `deno.json` (→ step 7). Order: CI first, then the local copies come out.
 **Done 2026-10-28: the compat gate** reads tsc's emitted `.d.ts` instead of `deno doc --json`
-(proof and inversion in [testing.md](testing.md) § Compatibility gate).
+(proof and inversion in [testing.md](../testing.md) § Compatibility gate).
 **Done 2026-10-28: CI** — `.github/workflows/ci.yml` (step 6, first part; owner: "build the CI
 workflow and push it") runs the Bun checks, compat, the sample build, JSR's Deno checks, and the
 runtime matrix and npm proof WITH their Deno legs (`--deno`, `--install-node`). Locally those legs

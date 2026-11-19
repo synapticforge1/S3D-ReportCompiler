@@ -1,6 +1,6 @@
 // export-transcript.ts
 //
-// Export a Claude Code session log to readable Markdown, into cmem/transcript/ --
+// Export a Claude Code session log to readable Markdown, into cmem/local/transcript/ --
 // which is git-ignored (owner, 2026-08-08): the record stays on this machine, and
 // tests/controls/redact-paths.ts is the gate before it is ever shared.
 //
@@ -103,18 +103,18 @@ for (const line of lines) {
 const header = `# Session Transcript
 
 Verbatim record of the session that produced this project, exported from the Claude Code session log.
-⚠️ Not committed: \`cmem/transcript/\` is git-ignored (it holds machine paths and client
+⚠️ Not committed: \`cmem/local/transcript/\` is git-ignored (it holds machine paths and client
 identifiers). Run the path redactor before sharing it anywhere.
 
 **${turns} turns.** Internal reasoning is not included. Base64 image data — page renders inspected
 during development — is replaced by placeholders. Tool results are truncated to ${RESULT_CAP}
 characters, which preserves the measurements while cutting bulk.
 
-For the distilled version, read [../process-log.md](../process-log.md) first. This file is the primary
+For the distilled version, read [../../archive/process-log.md](../../archive/process-log.md) first. This file is the primary
 source behind it.
 
-Regenerate with [export-transcript.ts](../../tests/controls/export-transcript.ts); redact with
-[redact-paths.ts](../../tests/controls/redact-paths.ts).
+Regenerate with [export-transcript.ts](../../../tests/controls/export-transcript.ts); redact with
+[redact-paths.ts](../../../tests/controls/redact-paths.ts).
 
 `;
 

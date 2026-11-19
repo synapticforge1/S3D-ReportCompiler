@@ -3,7 +3,7 @@ name: CI
 # Every check a developer machine runs, plus the ones that need Deno. 🔒 Owner, 2026-10-28: "the goal
 # is to be deno free on this machine" — so JSR's own checks and the Deno legs of the runtime matrix
 # and the npm proof run HERE, with Deno installed per run by setup-deno, and nowhere else.
-# cmem/bun-migration.md (step 6) and cmem/testing.md say what each job proves.
+# cmem/archive/bun-migration.md (step 6) and cmem/testing.md and testing-packaging.md say what each job proves.
 
 on:
   push:
@@ -141,7 +141,7 @@ jobs:
         run: deno publish --dry-run
 
       # A dry run never shows the rewritten files, and `deno publish` has reported success on a
-      # corrupted upload (cmem/bun-migration.md § "Step 1, measured"). This publishes to a FAKE JSR
+      # corrupted upload (cmem/archive/bun-migration.md § "Step 1, measured"). This publishes to a FAKE JSR
       # on 127.0.0.1 and reads the tarball: the files, every rewritten import, no deno.json.
       - name: The upload is this package, intact
         run: bun scripts/jsr-upload-check.ts

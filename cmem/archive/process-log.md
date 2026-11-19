@@ -1,10 +1,10 @@
 # Process Log
 
 How this project actually got here — the order things were tried, what the measurements said, and what
-turned out to be wrong. Distilled from [transcript/session-transcript.md](transcript/session-transcript.md),
+turned out to be wrong. Distilled from [transcript/session-transcript.md](../local/transcript/session-transcript.md),
 which is the primary source.
 
-Read this for *why the code looks like it does*. [design-decisions.md](design-decisions.md) has the
+Read this for *why the code looks like it does*. [design-decisions.md](../design-decisions.md) has the
 conclusions without the route taken to reach them.
 
 ---
@@ -98,7 +98,7 @@ finding drove Phase 6.
 
 ## Phase 5 — five review passes
 
-Twenty-one bugs. The full ledger is in [known-issues.md](known-issues.md); the pattern matters more:
+Twenty-one bugs. The full ledger is in [known-issues.md](../known-issues.md); the pattern matters more:
 
 | Pass | Found |
 |---|---|
@@ -162,7 +162,7 @@ JSR restructure showed *two consecutive Deno builds of the same input* hash diff
 Chrome stamps `/CreationDate` and `/ModDate` with the render time. The runtime was never the
 variable. What is byte-identical — verified by sha256 on all three — is the **baked intermediate
 HTML**, which is also the only artifact where the runtime could have made a difference, since Chrome
-is the same binary in every case. See [testing.md](testing.md).
+is the same binary in every case. See [testing.md](../testing.md).
 
 Two gotchas worth keeping: **`package.json` must not carry a UTF-8 BOM** (Deno rejects it with a
 misleading parse error), and **Bun must be detected before Node** because Bun also sets
@@ -211,7 +211,7 @@ guard's own JSR check could not run — the task lacked `--allow-net`, and the `
 exact act the guard existed to prevent. Practice §2 — *a check that cannot fail proves nothing* —
 violated inside the check written to enforce it.
 
-Practices [§11](practices.md) through [§14](practices.md) all come from this phase.
+Practices [§11](../practices.md) through [§14](../practices.md) all come from this phase.
 
 ## Phase 9 — the workspace floor and the move off Deno (2026-10-26)
 
@@ -357,7 +357,7 @@ API-surface re-baseline `f2ec880` in its own commit, `0155e62`, `1b1e498`, CI re
   source was green), the sanitizer guard blind without the spacer, attribute qualifiers dropped or
   misjudged (including HTML's caseless `lang`), a test that stopped at the REAL JSR and so could not
   fail. Plus an empty path argument read as "here", the redactor ignoring emails, an unguarded
-  control generator. → [practices.md](practices.md) §16.
+  control generator. → [practices.md](../practices.md) §16.
 - **Review 5, what no pass had opened (3):** the core's counters carried one batch into the next
   (the browser example refused every bake after a failed one), `cmem/local/` was not git-ignored,
   and the reference guard ran only in the CLI. Two of the fixes are exports — `resetBakeState()`,
@@ -477,4 +477,4 @@ ready for release 1.2.0 then we can delete the branches", "All merged branches",
    measurement (the browser, a planted input, the old code) is what found the bugs fixes introduced.
 5. **The strongest version of this work is upstream.** SkyCiv holds this content as structured data;
    HTML → PDF is a lossy round-trip through a format that was never the source of truth. See
-   [known-issues.md](known-issues.md).
+   [known-issues.md](../known-issues.md).

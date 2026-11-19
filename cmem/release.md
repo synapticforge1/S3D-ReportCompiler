@@ -41,14 +41,16 @@ only CI runs it: ci.yml on every push, `checks` before the tag). Then
 
 [`.github/workflows/publish.yml`](../.github/workflows/publish.yml) runs on every push to `main`:
 
-| job | permission | what |
-|---|---|---|
-| `checks` | contents, actions: read | is this a release (jsr.json's version untagged, or tagged on THIS commit = a re-run)? If so: both registries free, ci.yml green on this commit, the JSR upload check, the compatibility gate (`--unpublished`) |
-| `tag` | contents: write | `github-api.ts tag`: the annotated `vX.Y.Z` on this commit via REST, read back; one on another commit is refused |
-| `release` | contents: write | `github-api.ts release`: the Release page from the tag, H32's recipe |
-| `jsr` | id-token: write | skip if JSR has it, else `deno publish`; the Rekor read-back, **fatal** |
-| `npm-build` | contents: read | build + prove the npm package; an artifact (7 days) |
-| `npm` | id-token: write | that artifact; skip if npm has it from this commit (gitHead); `npm publish` (OIDC); the provenance read-back, **fatal** |
+Columns: job · permission · what.
+
+- `checks` — contents, actions: read — is this a release (jsr.json's version untagged, or tagged on THIS commit = a
+  re-run)? If so: both registries free, ci.yml green on this commit, the JSR upload check, the compatibility gate
+  (`--unpublished`)
+- `tag` — contents: write — `github-api.ts tag`: the annotated `vX.Y.Z` on this commit via REST, read back; one on another commit is refused
+- `release` — contents: write — `github-api.ts release`: the Release page from the tag, H32's recipe
+- `jsr` — id-token: write — skip if JSR has it, else `deno publish`; the Rekor read-back, **fatal**
+- `npm-build` — contents: read — build + prove the npm package; an artifact (7 days)
+- `npm` — id-token: write — that artifact; skip if npm has it from this commit (gitHead); `npm publish` (OIDC); the provenance read-back, **fatal**
 
 Every tool sha256-pinned (Bun 1.4.4, Deno 2.9.8, Node 24.21.0, fnm 1.39.0); the two actions left
 (`upload-artifact`, `download-artifact`) pinned to commits; `permissions: {}` at the top;
@@ -61,17 +63,21 @@ for the same code, never a moved tag. If the version cannot be published at all,
 
 ### The slots, and what this repo records instead (§ 7 of the workspace process)
 
-| slot | here |
-|---|---|
-| U1–U3 | `bun run bump <level>` — gate `compat.ts gate <level>` (floor from `api-surface.txt` since the last tag; the last tag's samples on a patch / minor) |
-| U4 | `bun run release` as above; `--dry-run` |
-| U5 | `checks` — the full test suite is ci.yml's, required green on the commit rather than re-run |
-| U6–U7 | `tag`, `release` |
-| U8 | `jsr`, `npm-build` → `npm`. ⚠️ **Exception, recorded:** the `jsr` job runs `bun install --frozen-lockfile --ignore-scripts` beside `id-token`, because jsr.json's `"nodeModulesDir": "manual"` (one `node_modules` for every runtime — [architecture.md](architecture.md)) makes `deno publish` need one on disk. Lockfile-exact, integrity-checked, nothing installed runs. A Deno-side resolution was ruled out by the owner (2026-11-10: Bun solutions only) |
-| U9 | as above. ci.yml's own tool pins are outside H33's list and unchanged |
-| U10 | `verify-release --wait --npm --github` at the end of `bun run release`, plus an install from npm into a scratch folder (recorded per release below) |
-| U11 | this file. **No `CHANGELOG.md`**: the README's "Breaking Changes" table is the user-facing record, this file the release record |
-| U12 | as above |
+Columns: slot · here.
+
+- U1–U3 — `bun run bump <level>` — gate `compat.ts gate <level>` (floor from `api-surface.txt` since the last tag; the last tag's samples on a patch / minor)
+- U4 — `bun run release` as above; `--dry-run`
+- U5 — `checks` — the full test suite is ci.yml's, required green on the commit rather than re-run
+- U6–U7 — `tag`, `release`
+- U8 — `jsr`, `npm-build` → `npm`. ⚠️ **Exception, recorded:** the `jsr` job runs `bun install --frozen-lockfile
+  --ignore-scripts` beside `id-token`, because jsr.json's `"nodeModulesDir": "manual"` (one `node_modules` for every
+  runtime — [architecture.md](architecture.md)) makes `deno publish` need one on disk. Lockfile-exact,
+  integrity-checked, nothing installed runs. A Deno-side resolution was ruled out by the owner (2026-11-10: Bun
+  solutions only)
+- U9 — as above. ci.yml's own tool pins are outside H33's list and unchanged
+- U10 — `verify-release --wait --npm --github` at the end of `bun run release`, plus an install from npm into a scratch folder (recorded per release below)
+- U11 — this file. **No `CHANGELOG.md`**: the README's "Breaking Changes" table is the user-facing record, this file the release record
+- U12 — as above
 
 **Measured by 1.4.0 (2026-11-10), the first release under this order:** JSR accepts the OIDC
 publish from a run on `refs/heads/main` whose tag `github-actions[bot]` made, attested (the
@@ -288,7 +294,7 @@ meant to ship (#25) — why the release prints the commit it releases. **Read ba
 The first release: JSR `@jrmarcum/s3d-reportcompiler`, score 100, four runtimes declared.
 **Read back:** attested.
 
-Tags `v1.0.0`, `v1.0.1`, `v1.0.4` were moved by the [2026-10-26 history purge](history-purge-2026-10-26.md);
+Tags `v1.0.0`, `v1.0.1`, `v1.0.4` were moved by the [2026-10-26 history purge](archive/history-purge-2026-10-26.md);
 JSR's provenance names the pre-purge commit ids. The `release/v*` branches up to 1.1.7 were
 deleted 2026-11-06 (known-issues #70); `release/v1.2.0` and `release/v1.3.0` remain, and
 `verify-release --github` still compares them where they exist.
