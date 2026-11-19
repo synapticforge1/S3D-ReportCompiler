@@ -1447,8 +1447,25 @@ Estimates are in working sessions like 2026-11-11's (a full day each), and are c
 
 1. ✅ **The merge is committed** (2026-11-12, owner: "lets proceed with Target 1"): `80fb480`.
 2. ✅ **T1-1 is done** (2026-11-12, below); the false FAIL it found fixed (#121). 🟡 **T1-2:
-   done locally (below); CI's half runs on the next push (owner's word).** ✅ **T1-3 round 1
-   done (#123–#125, below). Next: a second review round on its fixes, then the push.**
+   done locally (below); CI's half runs on the next push (owner's word).** ✅ **T1-3 rounds 1
+   and 2 done and committed (#123–#127, `5fe3b56`, `1f4876a`).**
+   ⏸️ **PAUSED 2026-11-12 (owner: "i need to pause here for the day") with #128 UNCOMMITTED:**
+   native in-page links (the owner chose them for target 1), the colour precision, and the style
+   check's print scale (`src/report_render.ts`, `src/report_style.ts`, `tests/build.test.ts`,
+   README, design-decisions §10, known-issues #128, this file). Done before the pause: types,
+   lint and format clean; the link, scale and mixed tests pass, each inverted (the renderer and
+   the style check at `1f4876a`, and three mutants). **Not yet seen:** the run started at the
+   pause -- the 36ft report natively (it must PASS, and its 261 links must ALL have a
+   destination: the first cut gave 21, the inline-box fix is meant to give 261), the samples
+   (`487321f2…`), the full suite. **Next session, in order:** (a) re-run those three (the 36ft
+   report from the owner's Downloads copy, into a scratch folder; `links36.ts` /
+   `deadtargets.ts` were scratch scripts -- re-create: count annotations with and without a
+   destination, and the tag of each dead target, printing counts only); (b) if all hold,
+   commit #128; (c) T1-3 round 3 on rounds 2's and #128's fixes (the review stops when a round
+   finds nothing); (d) the push (CI's half of T1-2); (e) before T1-4's release, the security
+   review and the hardening review (review-process.md § 0).
+   **Also open:** C46 (the review process, filed with the workspace 2026-11-12) -- closed by this
+   repo once the workspace's adoption is readable.
 3. The stash (`git stash list`: "trial: table rewrite in progress", `src/report_render.ts` of the
    trial branch) is **target 2's** phase 1 -- leave it until target 1 ships.
 
@@ -1559,8 +1576,10 @@ packages carry the fonts and their licence (npm:prove). (e) A fresh review finds
   findings, every one re-run first. Fixed: **#126** (round 1's refusals bypassed -- case, escapes,
   clipping, `&nbsp;`, row-group alignment, templates, `not all`, a font deny-list -- and its
   over-refusals) and **#127** (#125's false FAIL on a repeated table header, its factorial
-  search, dead links named); #125's claim corrected. Recorded: B4 (native links inert) ⏸️ the
-  owner's choice, asked; B6; `<pre>`.
+  search, dead links named); #125's claim corrected. Recorded: B6; `<pre>`. **B4 decided and
+  built (owner: "The table of contents should have links to the content it is showing"): native
+  in-page links, #128** — with a false FAIL found while showing them (colours a step off; the
+  style check's scale silently assumed), fixed in the same commit.
   ⏳ **Next:** round 3 on round 2's fixes (🔒 owner, 2026-11-12: the review stops when a round's
   reviewers find nothing -- review-process.md § 1.4), the owner's choice on native links, then
   the push (CI's half of T1-2), the release's security and hardening reviews (§ 0), then T1-4.

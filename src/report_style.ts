@@ -350,10 +350,13 @@ export function styleKey(s: TextStyle): string {
  * is a size changed. `null` when no word gives a ratio.
  */
 export function printScale(source: StyledWord[], printed: StyledWord[]): number | null {
+  // Words paired by weight and slant, not colour: a colour within the comparison's tolerance but
+  // not EQUAL (a renderer writing #1c2633 for #1c2533) left no word to measure from, and the scale
+  // fell back to 1, failing every size of a correct PDF (2026-11-12). Colour is compared below.
   const sizes = (ws: StyledWord[]) => {
     const m = new Map<string, Set<number>>();
     for (const w of ws) {
-      const k = `${w.word}\u0000${styleKey(w.style)}`;
+      const k = `${w.word}\u0000${w.style.bold ? "b" : "r"}${w.style.italic ? "i" : "u"}`;
       const s = m.get(k) ?? new Set<number>();
       s.add(Math.round(w.style.size * 100) / 100);
       m.set(k, s);
@@ -390,7 +393,19 @@ export function compareStyles(
   /** Source occurrences judged: paired, or set against one the PDF printed otherwise. */
   judged: number;
 } {
-  const scale = printScale(source, printed) ?? 1;
+  const measured = printScale(source, printed);
+  // No silent scale: assuming 1 failed every size of a correct PDF -- or could pass a print at
+  // the wrong scale. Unmeasurable is said (2026-11-12).
+  if (measured === null && source.length > 0 && printed.length > 0) {
+    return {
+      problems: [
+        "the print's scale could not be measured (no word printed in one size on each side)",
+      ],
+      scale: null,
+      judged: 0,
+    };
+  }
+  const scale = measured ?? 1;
   let judged = 0;
   // Each word's occurrences as its distinct styles, counted, in the order each first occurs:
   // paired occurrence by occurrence, a word printed tens of thousands of times (the 36ft report's

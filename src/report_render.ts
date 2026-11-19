@@ -1732,12 +1732,18 @@ interface Sink {
   rect(layer: number, x: number, y: number, w: number, h: number, c: RGBA): void;
   text(x: number, baseline: number, face: Face, size: number, c: RGBA, s: string): void;
   image(x: number, y: number, w: number, h: number, img: Img): void;
+  /** Where the element with this `id` begins (its top left): a link's target. */
+  anchor(name: string, x: number, y: number): void;
+  /** A clickable area of a link to the element `name` (`<a href="#name">`). */
+  link(name: string, x: number, y: number, w: number, h: number): void;
 }
 
 type Cmd =
   | { k: 0; layer: number; x: number; y: number; w: number; h: number; c: RGBA }
   | { k: 1; x: number; y: number; face: Face; size: number; c: RGBA; s: string }
-  | { k: 2; x: number; y: number; w: number; h: number; img: Img };
+  | { k: 2; x: number; y: number; w: number; h: number; img: Img }
+  | { k: 3; name: string; x: number; y: number }
+  | { k: 4; name: string; x: number; y: number; w: number; h: number };
 
 class Recorder implements Sink {
   readonly cmds: Cmd[] = [];
@@ -1750,22 +1756,33 @@ class Recorder implements Sink {
   image(x: number, y: number, w: number, h: number, img: Img): void {
     this.cmds.push({ k: 2, x, y, w, h, img });
   }
+  anchor(name: string, x: number, y: number): void {
+    this.cmds.push({ k: 3, name, x, y });
+  }
+  link(name: string, x: number, y: number, w: number, h: number): void {
+    this.cmds.push({ k: 4, name, x, y, w, h });
+  }
   replay(to: Sink, dx: number, dy: number): void {
     for (const c of this.cmds) {
       if (c.k === 0) to.rect(c.layer, c.x + dx, c.y + dy, c.w, c.h, c.c);
       else if (c.k === 1) to.text(c.x + dx, c.y + dy, c.face, c.size, c.c, c.s);
-      else to.image(c.x + dx, c.y + dy, c.w, c.h, c.img);
+      else if (c.k === 2) to.image(c.x + dx, c.y + dy, c.w, c.h, c.img);
+      else if (c.k === 3) to.anchor(c.name, c.x + dx, c.y + dy);
+      else to.link(c.name, c.x + dx, c.y + dy, c.w, c.h);
     }
   }
 }
 
-const NULL_SINK: Sink = { rect() {}, text() {}, image() {} };
+const NULL_SINK: Sink = { rect() {}, text() {}, image() {}, anchor() {}, link() {} };
 
 /** A coordinate or size in points, to 0.01 pt (3.5 µm: below any printer's dot). */
 const num = (n: number) => {
   const r = Math.round(n * 100) / 100;
   return Object.is(r, -0) ? "0" : String(r);
 };
+
+/** A colour channel (0–255) as a PDF fraction, exact to well within one step of 255. */
+const channel = (c: number) => String(Math.round((c / 255) * 10000) / 10000);
 
 /** A drawing operation on a page, in points from the page's lower left. */
 type PageOp =
@@ -1819,6 +1836,33 @@ class PageSink implements Sink {
     const Y = PAGE_H_PT - MARGIN_PT - (y + h) * this.pt;
     this.push(FG_LAYER, { k: 2, x: X, y: Y, w: w * this.pt, h: h * this.pt, img });
   }
+  /** Each `id`'s top left on this page, in points; the first wins. */
+  readonly anchors = new Map<string, { x: number; y: number }>();
+  /** Each link's clickable areas on this page, in points from the lower left. */
+  readonly links: { name: string; x0: number; y0: number; x1: number; y1: number }[] = [];
+  anchor(name: string, x: number, y: number): void {
+    if (this.anchors.has(name)) return;
+    this.anchors.set(name, { x: MARGIN_PT + x * this.pt, y: PAGE_H_PT - MARGIN_PT - y * this.pt });
+  }
+  link(name: string, x: number, y: number, w: number, h: number): void {
+    if (w <= 0 || h <= 0) return;
+    const x0 = MARGIN_PT + x * this.pt;
+    const y1 = PAGE_H_PT - MARGIN_PT - y * this.pt;
+    const area = { name, x0, y0: y1 - h * this.pt, x1: x0 + w * this.pt, y1 };
+    // A link's pieces along one line are one area: the next piece starts where the last ended.
+    const last = this.links.at(-1);
+    if (
+      last &&
+      last.name === name &&
+      Math.abs(last.y1 - area.y1) < 0.01 &&
+      Math.abs(last.y0 - area.y0) < 0.01 &&
+      Math.abs(last.x1 - area.x0) < 0.5
+    ) {
+      last.x1 = area.x1;
+      return;
+    }
+    this.links.push(area);
+  }
   content(): string {
     const out: string[] = [];
     let inText = false;
@@ -1829,7 +1873,9 @@ class PageSink implements Sink {
     /** A line's text, held while its next piece may follow on in the same style. */
     let run: { op: Extract<PageOp, { k: 1 }>; hex: string; end: number } | null = null;
     const setFill = (c: RGBA) => {
-      const f = `${num(c[0] / 255)} ${num(c[1] / 255)} ${num(c[2] / 255)} rg`;
+      // A colour channel needs more than `num`'s 0.01 (2.5 of 255): #1c2533 printed #1c2633, and
+      // the style check's scale, read from words of matching style, found none (2026-11-12).
+      const f = `${channel(c[0])} ${channel(c[1])} ${channel(c[2])} rg`;
       if (f !== fill) {
         out.push(f);
         fill = f;
@@ -2013,7 +2059,14 @@ type Grid = { rows: Elem[]; cells: Elem[][]; cols: number; min: number[]; max: n
 
 /** One piece of an inline formatting context. */
 type Piece =
-  | { kind: "text"; text: string; style: Style; boxes: Elem[] }
+  | {
+      kind: "text";
+      text: string;
+      style: Style;
+      boxes: Elem[];
+      /** Its inline ancestors that are link targets (an `id`) or in-page links. */
+      marks: Elem[];
+    }
   | {
       kind: "atomic";
       w: number;
@@ -2265,12 +2318,28 @@ class Layout {
     flow.open.pop();
     const end = flow.here();
     const start = entry.start ?? end;
+    // A link's target: the box's top on the page it starts on (2026-11-12: the table of contents
+    // links to its sections, owner: "The table of contents should have links to the content it
+    // is showing").
+    const id = e.attrs?.get("id");
+    if (id && s.visible) sink(start.page).anchor(id, boxX, start.y);
     if (s.height !== "auto") {
       const want = px(s.height, cbWidth) + top + bottom;
       if (start.page === end.page && end.y - start.y < want) flow.place(want - (end.y - start.y));
       else if (start.page !== end.page) this.refuse.add("a set height on a box across pages");
     }
     const fin = flow.here();
+    // A link laid out as a block (`a { display: block }`): its box is the clickable area, on each
+    // page it spans -- its text pieces have it as their owner, not as an inline box around them.
+    const href = e.tag === "a" ? e.attrs?.get("href") : undefined;
+    if (href?.startsWith("#") && href.length > 1 && s.visible) {
+      const bw2 = width + pad[1] + pad[3] + bw[1] + bw[3];
+      for (let p = start.page; p <= fin.page; p++) {
+        const y0 = p === start.page ? start.y : 0;
+        const y1 = p === fin.page ? fin.y : flow.height;
+        if (y1 > y0) sink(p).link(href.slice(1), boxX, y0, bw2, y1 - y0);
+      }
+    }
     this.decorate(e, s, boxX, width + pad[1] + pad[3] + bw[1] + bw[3], start, fin, flow, sink);
     flow.margin(px(mb, cbWidth));
     if (s.breakAfter === "page") flow.forceBreak();
@@ -2427,7 +2496,7 @@ class Layout {
   /** The pieces of an inline run, its whitespace collapsed as `white-space: normal` does. */
   pieces(owner: Elem, run: (Elem | string)[], cbWidth: number): Piece[] {
     const out: Piece[] = [];
-    const walk = (nodes: (Elem | string)[], parent: Elem, boxes: Elem[]) => {
+    const walk = (nodes: (Elem | string)[], parent: Elem, boxes: Elem[], marks: Elem[]) => {
       const ps = this.styled(parent);
       for (const n of nodes) {
         if (typeof n === "string") {
@@ -2438,7 +2507,7 @@ class Layout {
           const text = ps.whiteSpace === "pre" ? n : n.replace(/[ \t\n\r\f]+/g, " ");
           if (ps.whiteSpace === "pre" && /\n/.test(text))
             this.refuse.add("preformatted line breaks");
-          out.push({ kind: "text", text, style: ps, boxes });
+          out.push({ kind: "text", text, style: ps, boxes, marks });
           continue;
         }
         const s = this.styled(n);
@@ -2456,19 +2525,27 @@ class Layout {
           const mt = px(s.margin[0], cbWidth);
           const mb = px(s.margin[2], cbWidth);
           const H = h + this.boxV(s, cbWidth);
-          out.push({
-            kind: "atomic",
-            w: ml + w + this.boxH(s, cbWidth) + mr,
-            above: mt + H + mb,
-            below: 0,
-            style: s,
-            draw: (sink, x, baseline) =>
-              this.drawImageBox(n, sink, x + ml, baseline - mb - H, w, h, cbWidth, img),
-          });
+          const iid = n.attrs?.get("id");
+          out.push(
+            withMarks(
+              {
+                kind: "atomic",
+                w: ml + w + this.boxH(s, cbWidth) + mr,
+                above: mt + H + mb,
+                below: 0,
+                style: s,
+                draw: (sink, x, baseline) => {
+                  if (iid && s.visible) sink.anchor(iid, x + ml, baseline - mb - H);
+                  this.drawImageBox(n, sink, x + ml, baseline - mb - H, w, h, cbWidth, img);
+                },
+              },
+              marks,
+            ),
+          );
           continue;
         }
         if (s.display === "inline-block") {
-          out.push(this.inlineBlock(n, cbWidth));
+          out.push(withMarks(this.inlineBlock(n, cbWidth), marks));
           continue;
         }
         if (s.display !== "inline") {
@@ -2481,10 +2558,17 @@ class Layout {
           s.margin.some((m) => m !== "auto" && px(m, cbWidth) !== 0)
         )
           this.refuse.add(`an inline box with borders, padding or margins (<${n.tag}>)`);
-        walk(n.kids, n, s.background && s.exact ? [...boxes, n] : boxes);
+        const marked =
+          n.attrs?.has("id") || (n.tag === "a" && /^#./.test(n.attrs?.get("href") ?? ""));
+        walk(
+          n.kids,
+          n,
+          s.background && s.exact ? [...boxes, n] : boxes,
+          marked ? [...marks, n] : marks,
+        );
       }
     };
-    walk(run, owner, []);
+    walk(run, owner, [], []);
     return out;
   }
 
@@ -2492,7 +2576,7 @@ class Layout {
   /** How many inline boxes the layout is inside now. */
   private inlineBoxDepth = 0;
 
-  inlineBlock(e: Elem, cbWidth: number): Piece {
+  inlineBlock(e: Elem, cbWidth: number): Extract<Piece, { kind: "atomic" }> {
     // One inside another lost the outer box's baseline, sitting ~4 pt high (T1-3 review).
     if (this.inlineBoxDepth > 0) this.refuse.add(`an inline box inside another (<${e.tag}>)`);
     const s = this.styled(e);
@@ -2544,6 +2628,13 @@ class Layout {
       style: s,
       draw: (sink, x, baseline) => {
         const y0 = baseline - base;
+        // Its own id is a link target, and an inline-box link is clickable over its box: SkyCiv's
+        // section subheadings are inline boxes (`span.subheading`, `.lc-subheading`), and 240 of
+        // the 36ft report's 261 table-of-contents links went nowhere without this (2026-11-12).
+        const id = e.attrs?.get("id");
+        if (id && s.visible) sink.anchor(id, x + ml, y0);
+        const href = e.tag === "a" ? e.attrs?.get("href") : undefined;
+        if (href?.startsWith("#") && href.length > 1) sink.link(href.slice(1), x + ml, y0, W, H);
         this.decorateBox(e, s, sink, x + ml, y0, W, H);
         rec.replay(sink, x + ml, y0);
       },
@@ -2727,6 +2818,22 @@ class Layout {
       baseline - this.shift(s, s.verticalAlign === "baseline" ? s.fontSize : s.fontSize * 1.2);
     const face = this.fonts.face(s);
     const m = METRICS[s.font];
+    for (const box of p.marks) {
+      // An inline element's id: its first piece's top left is the link target. A link: each piece
+      // inside `<a href="#name">` is clickable, its line's height (joined along the line, PageSink).
+      const bid = box.attrs?.get("id");
+      if (bid) out.anchor(bid, x, y - m.ascent * s.fontSize);
+      const href = box.tag === "a" ? box.attrs?.get("href") : undefined;
+      if (href?.startsWith("#") && href.length > 1) {
+        out.link(
+          href.slice(1),
+          x,
+          y - m.ascent * s.fontSize,
+          b.w,
+          (m.ascent + m.descent) * s.fontSize,
+        );
+      }
+    }
     for (const box of p.boxes) {
       const bs = this.styled(box);
       if (bs.background)
@@ -3174,6 +3281,15 @@ class Layout {
       const rs = this.styled(row);
       const x0 = colX[0];
       const x1 = colX[colX.length - 1] + widths[widths.length - 1];
+      // Link targets: the table at its first row, each row, each cell.
+      const tid = e.attrs?.get("id");
+      if (ri === 0 && tid) out.anchor(tid, left, at.y);
+      const rid = row.attrs?.get("id");
+      if (rid) out.anchor(rid, x0, at.y);
+      for (const b of boxes) {
+        const cid = b.el.attrs?.get("id");
+        if (cid) out.anchor(cid, b.x, at.y);
+      }
       if (rs.background && rs.exact) out.rect(row.depth, x0, at.y, x1 - x0, h, rs.background);
       const tops: HSeg[] = [];
       const bottoms: HSeg[] = [];
@@ -3265,6 +3381,31 @@ const INVISIBLE_RANGES: [number, number][] = [
   [0xffa0, 0xffa0],
 ];
 const isInvisible = (cp: number): boolean => INVISIBLE_RANGES.some(([a, b]) => cp >= a && cp <= b);
+
+/**
+ * An atomic piece (an inline image, an inline box) inside marked inline elements: when drawn, each
+ * ancestor's `id` is a link target at the piece's top left, and each ancestor link makes the piece
+ * clickable -- as a text piece does for its marks (drawBit).
+ */
+function withMarks(piece: Extract<Piece, { kind: "atomic" }>, marks: Elem[]): Piece {
+  if (marks.length === 0) return piece;
+  const draw = piece.draw;
+  return {
+    ...piece,
+    draw: (sink, x, baseline) => {
+      const top = baseline - piece.above;
+      for (const m of marks) {
+        const id = m.attrs?.get("id");
+        if (id) sink.anchor(id, x, top);
+        const href = m.tag === "a" ? m.attrs?.get("href") : undefined;
+        if (href?.startsWith("#") && href.length > 1) {
+          sink.link(href.slice(1), x, top, piece.w, piece.above + piece.below);
+        }
+      }
+      draw(sink, x, baseline);
+    },
+  };
+}
 
 /** The edge that wins a collapsed border: a hidden one over all, then the widest. */
 function winEdge(...es: Edge[]): Edge {
@@ -3499,6 +3640,50 @@ export async function renderDocument(html: string, fonts: RenderFonts): Promise<
     const stream = pdf.context.flateStream(content);
     p.node.set(PDFName.of("Contents"), pdf.context.register(stream));
   }
+
+  // In-page links, as Chrome writes them (🔒 owner, 2026-11-12: "The table of contents should
+  // have links to the content it is showing"): each link a /Link annotation naming its target, and
+  // the catalog's /Dests sending each linked name to the top of its element -- the form the join
+  // carries across parts. A target not drawn (display:none) keeps its link with no destination,
+  // as Chrome's does, and the join names it.
+  const pages = pdf.getPages();
+  const targets = new Map<string, { page: number; y: number }>();
+  sinks.forEach((s, i) => {
+    for (const [name, a] of s.anchors)
+      if (!targets.has(name)) targets.set(name, { page: i, y: a.y });
+  });
+  const linked = new Set<string>();
+  sinks.forEach((s, i) => {
+    if (s.links.length === 0) return;
+    const annots = s.links.map((l) => {
+      linked.add(l.name);
+      const r = (n: number) => Math.round(n * 100) / 100;
+      return pdf.context.register(
+        pdf.context.obj({
+          Type: "Annot",
+          Subtype: "Link",
+          F: 4,
+          Rect: [r(l.x0), r(l.y0), r(l.x1), r(l.y1)],
+          Border: [0, 0, 0],
+          Dest: PDFName.of(l.name),
+        }),
+      );
+    });
+    pages[i].node.set(PDFName.of("Annots"), pdf.context.obj(annots));
+  });
+  const named = [...linked].filter((n) => targets.has(n)).sort();
+  if (named.length > 0) {
+    const dests = pdf.context.obj({});
+    for (const name of named) {
+      const t = targets.get(name) as { page: number; y: number };
+      dests.set(
+        PDFName.of(name),
+        pdf.context.obj([pages[t.page].ref, PDFName.of("XYZ"), 0, Math.round(t.y * 100) / 100, 0]),
+      );
+    }
+    pdf.catalog.set(PDFName.of("Dests"), pdf.context.register(dests));
+  }
+
   const bytes = await pdf.save({ useObjectStreams: true });
   return { pdf: bytes, pages: sinks.length, scale, refused: [] };
 }

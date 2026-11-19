@@ -304,6 +304,11 @@ and stops, named, on any form it cannot carry. The packing and the whole verific
 run on the joined file unchanged; each report's checks already run on its own pages, so parts
 with different fonts and print scales are judged each by its own.
 
+**In-page links, natively too (owner, 2026-11-12: "The table of contents should have links to the
+content it is showing"; known-issues #128):** the native renderer writes them in Chrome's form --
+a `/Link` annotation per clickable area naming its target, the catalog's `/Dests` sending the name
+to its element's top -- so the join carries native and Chrome parts alike.
+
 **What it draws and refuses** is listed for users in the README ("What the native renderer
 draws, and what it refuses", 2026-11-12, read from `src/report_render.ts`'s refusals). Change the
 list with the code: a new refusal, or a construct newly drawn, updates it in the same commit.

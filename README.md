@@ -343,8 +343,9 @@ draw; no browser needed). Any other value stops the build.
 #### What the native renderer draws, and what it refuses
 
 It draws block and inline text, tables (collapsed or separate borders, zebra rows, header rows
-kept with the first row), embedded JPEG and PNG images, links (styled as links; in a natively
-drawn report they do not yet take the reader anywhere), superscripts and subscripts,
+kept with the first row), embedded JPEG and PNG images, in-page links (`<a href="#…">`, inline
+or as a block — a table of contents takes the reader to each section, as Chrome's PDFs do),
+superscripts and subscripts,
 borders and backgrounds in solid colours, and page breaks as the report asks for them (a box that
 avoids breaks moves on when it does not fit; no heading is left alone at a page's foot). Text is
 set in Arial, Helvetica or `sans-serif` → Liberation Sans; Courier, Courier New or `monospace` →

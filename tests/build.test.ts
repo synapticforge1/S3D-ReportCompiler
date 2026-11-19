@@ -3402,6 +3402,97 @@ test("native renderer: what the T1-3 review found drawn wrong is refused, by nam
   }
 });
 
+test("the style check measures the print scale whatever the colours (2026-11-12)", async () => {
+  // A report coloured throughout (#1c2533), printed one step off (#1c2633, within the colour
+  // tolerance): the scale was measured only from words of EQUAL style, found none, fell back to 1,
+  // and every size of a correct PDF failed. And an unmeasurable scale is said, never assumed.
+  const style = await import(pathToFileURL(join(ROOT, "src", "report_style.ts")).href);
+  const c = (r: number, g: number, b: number) => [r / 255, g / 255, b / 255];
+  const w = (word: string, size: number, colour: number[]) => ({
+    word,
+    style: { bold: false, italic: false, colour, alpha: 1, size },
+  });
+  const source = ["Load", "Shear", "Moment"].map((x) => w(x, 13, c(0x1c, 0x25, 0x33)));
+  const printed = ["Load", "Shear", "Moment"].map((x) => w(x, 9.75, c(0x1c, 0x26, 0x33)));
+  assert.equal(style.printScale(source, printed), 0.75);
+  assert.deepEqual(style.compareStyles(source, printed).problems, []);
+  const unmeasured = style.compareStyles(
+    [w("Load", 13, c(0, 0, 0)), w("Load", 20, c(0, 0, 0))],
+    [w("Load", 9.75, c(0, 0, 0))],
+  );
+  assert.match(unmeasured.problems.join(" "), /scale could not be measured/);
+});
+
+test("native renderer: in-page links land on their targets (2026-11-12)", async () => {
+  // 🔒 Owner, 2026-11-12: "The table of contents should have links to the content it is
+  // showing." Inline links (SkyCiv's `.toc-row a`) and block ones (`a { display: block }`), each a
+  // /Link annotation whose named destination is its target's page; a link to an element not drawn
+  // keeps its annotation with no destination, as Chrome writes it.
+  const core = await import(pathToFileURL(join(ROOT, "src", "report_core.ts")).href);
+  const { renderDocument } = await import(
+    pathToFileURL(join(ROOT, "src", "report_render.ts")).href
+  );
+  const { readRenderFonts } = await import(
+    pathToFileURL(join(ROOT, "src", "report_runtime.ts")).href
+  );
+  core.resetBakeState();
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_v, i) => `<tr><td>N${i + 1}</td><td>${i * 0.5}</td></tr>`).join("");
+  const src =
+    "<html lang=en><head><style>body{font-family:Arial;color:#1c2533} h1{page-break-before:always}" +
+    " .blk{display:block} .ib{display:inline-block;font-weight:bold}</style></head><body><p>Contents</p>" +
+    '<div><a href="#nodes">Nodal Results</a></div><a class=blk href="#reactions">Support Reactions</a>' +
+    '<div><a href="#gone">Superseded</a><span id="gone" style="display:none"></span></div>' +
+    // SkyCiv's section subheadings are inline boxes (`span.subheading`): 240 of the 36ft
+    // report's 261 links went nowhere until an inline box recorded its own target. And an inline
+    // box inside a link is clickable too.
+    '<div><a href="#loadcase">Load Case D</a></div><a href="#loadcase"><span class=ib>Go</span></a>' +
+    `<h1 id="nodes">Nodal Results</h1><table>${rows(120)}</table>` +
+    '<div><span id="loadcase" class=ib>Load Case D results</span></div>' +
+    `<h1 id="reactions">Support Reactions</h1><table>${rows(20)}</table></body></html>`;
+  const html = core.assembleDocument(
+    [core.bakeBody(src, "r0-")],
+    [core.bakeStyle(src, ".rs0", "r0-")],
+    "",
+  );
+  const out = await renderDocument(html, await readRenderFonts());
+  assert.deepEqual(out.refused, []);
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const d = await pdfjs.getDocument({ data: out.pdf as Uint8Array, verbosity: 0 }).promise;
+  const landed = new Map<string, string>();
+  const count = new Map<string, number>();
+  for (let p = 1; p <= d.numPages; p++) {
+    for (const a of await (await d.getPage(p)).getAnnotations()) {
+      count.set(String(a.dest), (count.get(String(a.dest)) ?? 0) + 1);
+      const dest = typeof a.dest === "string" ? await d.getDestination(a.dest) : null;
+      if (!dest) {
+        landed.set(String(a.dest), "(none)");
+        continue;
+      }
+      const page = await d.getPage((await d.getPageIndex(dest[0])) + 1);
+      const items = (await page.getTextContent()).items as { str: string; transform: number[] }[];
+      const near = items
+        .filter((i) => i.str?.trim() && Math.abs(i.transform[5] - dest[3]) < 30)
+        .map((i) => i.str)
+        .join(" ");
+      landed.set(String(a.dest), near);
+    }
+  }
+  assert.match(landed.get("r0-nodes") ?? "", /Nodal Results/, "the inline link");
+  assert.match(landed.get("r0-reactions") ?? "", /Support Reactions/, "the block link");
+  assert.equal(landed.get("r0-gone"), "(none)", "a link to an element not drawn");
+  assert.match(landed.get("r0-loadcase") ?? "", /Load Case D results/, "an inline box's target");
+  assert.equal(count.get("r0-loadcase"), 2, "the inline box inside a link is not clickable");
+  // The text's colour, exactly the source's: written to 0.01 a channel came out a step off
+  // (#1c2533 printed #1c2633), and the style check found no word of equal style to measure from.
+  const ops = await (await d.getPage(1)).getOperatorList();
+  const fills = new Set<string>();
+  for (let i = 0; i < ops.fnArray.length; i++) {
+    if (ops.fnArray[i] === pdfjs.OPS.setFillRGBColor) fills.add(String(ops.argsArray[i][0]));
+  }
+  assert.ok(fills.has("#1c2533"), `fills: ${[...fills].join(", ")}`);
+});
+
 test("S3D_RENDERER takes auto, chrome or native, nothing else (task 19)", () => {
   const r = run([MAIN, join(work, "nowhere")], {
     env: { ...process.env, S3D_RENDERER: "browserless" },
@@ -3508,6 +3599,11 @@ test(
       .flatMap((a) => (a instanceof PDFDict ? [a.get(PDFName.of("Dest"))] : []))
       .filter((d): d is typeof PDFName.prototype => d instanceof PDFName);
     assert.ok(linked.length > 0, "the link annotation is missing");
+    // The native part's table-of-contents link (the model report, rs2) is carried too.
+    assert.ok(
+      linked.some((n) => n.decodeText() === "r2-nodes"),
+      "the native report's table-of-contents link is missing",
+    );
     for (const name of linked.filter((n) => n.decodeText() !== "r3-wind-gone")) {
       const target = dests.lookup(name);
       assert.ok(target instanceof PDFArray, `link ${name} has no target`);
